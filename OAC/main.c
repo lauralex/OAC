@@ -438,11 +438,11 @@ VOID TriggerCr3Thrash(void)
     DbgPrint("[+] Thread affinity restored. Test complete.\n");
 
     // Step 2: Clean up the memory we allocated
-    /*if (page_table_pool)
+    if (page_table_pool)
     {
         MmFreeContiguousMemory(page_table_pool);
         DbgPrint("[+] Freed page table memory.\n");
-    }*/
+    }
 
     DbgPrint("[+] Test complete.\n");
 }
