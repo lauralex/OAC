@@ -56,8 +56,8 @@ extern void PageFaultIsr(void);
 void        _sgdt(void*);
 extern void _str(PVOID);
 
-//Global variable to share the original CR3 with our assembly ISR.
-// This MUST be global or static.
+// Global variable to share the original CR3 with our assembly ISR.
+// This MUST be global.
 UINT64 G_OriginalCr3 = 0;
 
 // =================================================================================================
