@@ -12,7 +12,7 @@ It creates its own page tables to map these critical pages:
 
 Everything else is **NOT** mapped; that's done purposefully to make incorrectly implemented hypervisors triple-fault.
 
-The CR3 thrashing routine will then rewrite the **#PF** IDT entry to our own **#PF** handler (_WP bit in CR0 is temporarily disabled_), rewrite the CR3 DTB entry to our own PML4 (after saving the original CR3 value) and triggering a Page Fault deliberately.
+The CR3 thrashing routine will then rewrite the **#PF** IDT entry to our own **#PF** handler (_WP bit in CR0 is temporarily disabled_), rewrite the CR3 DTB entry to our own PML4 (after saving the original CR3 value) and trigger a Page Fault deliberately.
 
 After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **#PF** IDT entry.
 
