@@ -330,15 +330,17 @@ VOID TriggerCr3Thrash(void)
 
     // Create a new IDT entry for our custom ISR
     SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 newPfDescriptor = {0};
-    newPfDescriptor.OffsetLow = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
-    newPfDescriptor.SegmentSelector = pageFaultDescriptor->SegmentSelector; // Kernel code segment
-    newPfDescriptor.Type = pageFaultDescriptor->Type; // 64-bit interrupt gate
+
+    newPfDescriptor.OffsetLow                = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
+    newPfDescriptor.SegmentSelector          = pageFaultDescriptor->SegmentSelector;          // Kernel code segment
+    newPfDescriptor.Type                     = pageFaultDescriptor->Type;                     // 64-bit interrupt gate
     newPfDescriptor.DescriptorPrivilegeLevel = pageFaultDescriptor->DescriptorPrivilegeLevel; // Kernel level
-    newPfDescriptor.Present = pageFaultDescriptor->Present;
-    newPfDescriptor.OffsetMiddle = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
-    newPfDescriptor.OffsetHigh = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
-    newPfDescriptor.InterruptStackTable = pageFaultDescriptor->InterruptStackTable;
-    newPfDescriptor.Reserved = pageFaultDescriptor->Reserved;
+    newPfDescriptor.Present                  = pageFaultDescriptor->Present;
+    newPfDescriptor.OffsetMiddle             = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
+    newPfDescriptor.OffsetHigh               = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
+    newPfDescriptor.InterruptStackTable      = pageFaultDescriptor->InterruptStackTable; // Use same IST as original
+    newPfDescriptor.Reserved                 = pageFaultDescriptor->Reserved;
+
 
     // Discover the existing IST stack used by the default PF handler
     UINT32 ist_index = pageFaultDescriptor->InterruptStackTable;
