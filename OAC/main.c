@@ -53,7 +53,7 @@ const wchar_t* G_SYMLINK_NAME = L"\\DosDevices\\OAC6";
 // Our assembly ISR. Tells the C compiler it exists elsewhere.
 extern void PageFaultIsr(void);
 
-void        _sgdt(void*);
+extern void _sgdt(void*);
 extern void _str(void*);
 
 // Global variable to share the original CR3 with our assembly ISR.
