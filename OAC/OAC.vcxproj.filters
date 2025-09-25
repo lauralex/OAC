@@ -22,12 +22,30 @@
     <ClCompile Include="main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="mm.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="cr3_thrasher.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ia32.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="cr3_thrasher.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="arch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="mm.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="isr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,7 +1,6 @@
 #pragma once
 #include <ntddk.h>
-#include <intrin.h>
-#include "ia32.h"
+
 #pragma warning(push)
 #pragma warning(disable : 4201) // nameless struct/union
 typedef union _VIRTUAL_ADDRESS
@@ -18,7 +17,6 @@ typedef union _VIRTUAL_ADDRESS
 
     UINT64 vaddr;
 } VIRTUAL_ADDRESS, *PVIRTUAL_ADDRESS;
-
 #pragma warning(pop)
 
 //
