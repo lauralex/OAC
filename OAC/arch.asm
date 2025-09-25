@@ -5,4 +5,9 @@ _str PROC
 	ret
 _str ENDP
 
+_invd PROC
+	invd
+	ret
+_invd ENDP
+
 END

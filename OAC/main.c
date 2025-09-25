@@ -59,6 +59,7 @@ extern void PageFaultIsr(void); // Defined in isr.asm
 
 extern void _sgdt(void*); // MSVC-provided intrinsic
 extern void _str(void*);  // Defined in arch.asm
+extern void _invd();      // Defined in arch.asm
 
 // Global variable to share the original CR3 with our assembly ISR.
 // This MUST be global.
@@ -412,6 +413,9 @@ VOID TriggerCr3Thrash(void)
     cr3.AddressOfPageDirectory = (new_pml4_pa.QuadPart >> 12);
 
     __writecr3(cr3.AsUInt);
+
+    // Cause an unconditional VM-exit on some hypervisors.
+    _invd();
 
     // Deliberately cause a page fault. This MUST fail.
     // The write is volatile to prevent compiler optimization.

@@ -114,7 +114,6 @@ int main()
                 break;
             case 2:
                 SendUnloadRequest(hDevice);
-                Sleep(2000);
                 _FALLTHROUGH;
             case 0:
                 running = false;
@@ -132,6 +131,8 @@ int main()
 
     CloseHandle(hDevice);
     std::cout << "[+] Handle to driver closed. Exiting." << std::endl;
+
+    Sleep(2000); // Sleep for a moment to let the user read the exit message.
 
     return 0;
 }
