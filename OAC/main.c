@@ -54,7 +54,7 @@ const wchar_t* G_SYMLINK_NAME = L"\\DosDevices\\OAC6";
 extern void PageFaultIsr(void);
 
 void        _sgdt(void*);
-extern void _str(PVOID);
+extern void _str(void*);
 
 // Global variable to share the original CR3 with our assembly ISR.
 // This MUST be global.
