@@ -8,7 +8,7 @@
 #define IOCTL_UNLOAD_DRIVER         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // We'll allocate a pool of pages. 1 for PML4, and worst-case many others for each subsequent level
-// for our 3 distinct VAs. We'll allocate 50 pages for now, which is overkill but simple.
+// for our distinct VAs. We'll allocate 50 pages for now, which is overkill but simple.
 #define PAGE_TABLE_POOL_PAGES 50
 
 // =================================================================================================
