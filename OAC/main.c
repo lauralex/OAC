@@ -402,7 +402,10 @@ VOID TriggerCr3Thrash(void)
     // ============================================
 
     // Thrash CR3 to trigger page faults
-    __writecr3(new_pml4_pa.QuadPart);
+    CR3 cr3                    = {.AsUInt = G_OriginalCr3};
+    cr3.AddressOfPageDirectory = (new_pml4_pa.QuadPart >> 12);
+
+    __writecr3(cr3.AsUInt);
 
     // Deliberately cause a page fault. This MUST fail.
     // The write is volatile to prevent compiler optimization.
