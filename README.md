@@ -28,7 +28,7 @@ After the **#PF** ISR is completed and the old CR3 value is restored, our driver
 - Visual Studio (2022 preferably)
 - Windows Software Development Kit ([SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/))
 - Windows Driver Kit ([WDK](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk))
-### External dependencies
+### External tools (optional, but suggested)
 - KDMapper (from here: https://github.com/TheCruZ/kdmapper)
 
 ## Run
