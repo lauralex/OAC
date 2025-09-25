@@ -1,12 +1,14 @@
 #include "cr3_thrasher.h"
 #include "internals.h"
+#include "stackwalk.h"
 
 // =================================================================================================
 // == IOCTL Definitions
 // =================================================================================================
-#define IOCTL_TEST_COMMUNICATION    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_TRIGGER_CR3_THRASH    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_UNLOAD_DRIVER         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TEST_COMMUNICATION        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TRIGGER_CR3_THRASH        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_UNLOAD_DRIVER             CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TRIGGER_NMI_STACKWALK     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 
 // =================================================================================================
@@ -154,6 +156,10 @@ VOID DriverUnload(
     UNICODE_STRING symbolicLinkName = {0};
     RtlInitUnicodeString(&symbolicLinkName, G_SYMLINK_NAME);
     DbgPrint("[+] DriverUnload called\n");
+
+    // Deinitialize the NMI handler if it was initialized.
+    DeinitializeNmiHandler();
+
     // Delete the symbolic link.
     IoDeleteSymbolicLink(&symbolicLinkName);
     DbgPrint("[+] Symbolic link deleted\n");
@@ -211,7 +217,13 @@ NTSTATUS IrpDeviceIoCtlHandler(
             break;
         case IOCTL_TRIGGER_CR3_THRASH:
             DbgPrint("[+] IOCTL_TRIGGER_CR3_THRASH received\n");
+
             TriggerCr3Thrash();
+            break;
+        case IOCTL_TRIGGER_NMI_STACKWALK:
+            DbgPrint("[+] IOCTL_TRIGGER_NMI_STACKWALK received\n");
+
+            TriggerNmiStackwalk();
             break;
         case IOCTL_UNLOAD_DRIVER:
             DbgPrint("[+] IOCTL_UNLOAD_DRIVER received\n");

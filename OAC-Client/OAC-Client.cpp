@@ -8,6 +8,7 @@
 #define IOCTL_TEST_COMMUNICATION    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_TRIGGER_CR3_THRASH    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_UNLOAD_DRIVER         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_TRIGGER_NMI_STACKWALK CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 // The symbolic link name for the driver.
 const wchar_t* G_SYMLINK_NAME = L"\\\\.\\OAC6";
@@ -62,6 +63,28 @@ void SendUnloadRequest(HANDLE hDevice)
     }
 }
 
+void TriggerNmiStackwalk(HANDLE hDevice)
+{
+    std::cout << "[!] Sending IOCTL to trigger an NMI stack walk." << std::endl;
+    DWORD bytesReturned = 0;
+    BOOL  success       = DeviceIoControl(
+        hDevice,
+        IOCTL_TRIGGER_NMI_STACKWALK,
+        nullptr, 0,
+        nullptr, 0,
+        &bytesReturned,
+        nullptr);
+    if (!success)
+    {
+        std::cerr << "[-] DeviceIoControl failed: " << GetLastError() << std::endl;
+    }
+    else
+    {
+        std::cout << "[+] NMI stack walk request sent successfully. Check your kernel debugger for the output." <<
+            std::endl;
+    }
+}
+
 
 int main()
 {
@@ -97,7 +120,8 @@ int main()
         std::cout << "------------------------------------------" << std::endl;
         std::cout << "Select an option:" << std::endl;
         std::cout << "  1. Trigger CR3 Thrash Routine" << std::endl;
-        std::cout << "  2. Unload Driver" << std::endl;
+        std::cout << "  2. Trigger NMI Stack Walk" << std::endl;
+        std::cout << "  3. Unload Driver" << std::endl;
         std::cout << "  0. Exit" << std::endl;
         std::cout << "Your choice: ";
 
@@ -113,6 +137,9 @@ int main()
                 SendCr3ThrashRequest(hDevice);
                 break;
             case 2:
+                TriggerNmiStackwalk(hDevice);
+                break;
+            case 3:
                 SendUnloadRequest(hDevice);
                 _FALLTHROUGH;
             case 0:

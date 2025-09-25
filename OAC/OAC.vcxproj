@@ -109,6 +109,7 @@
     <ClCompile Include="cr3_thrasher.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="mm.c" />
+    <ClCompile Include="stackwalk.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="arch.h" />
@@ -117,6 +118,7 @@
     <ClInclude Include="internals.h" />
     <ClInclude Include="isr.h" />
     <ClInclude Include="mm.h" />
+    <ClInclude Include="stackwalk.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="arch.asm" />

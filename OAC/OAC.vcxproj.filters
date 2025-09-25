@@ -28,6 +28,9 @@
     <ClCompile Include="cr3_thrasher.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="stackwalk.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
@@ -46,6 +49,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="isr.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stackwalk.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
