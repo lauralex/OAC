@@ -35,3 +35,6 @@ After the **#PF** ISR is completed and the old CR3 value is restored, our driver
 1. Disable VDBL (Vulnerable Driver BlockList): [Instructions](https://www.elevenforum.com/t/enable-or-disable-microsoft-vulnerable-driver-blocklist-in-windows-11.10031/)
 2. Open cmd, type: `kdmapper_Release.exe OAC.sys`
 3. Open `OAC-Client.exe`
+
+## Credits
+- ia32-doc (from here: https://github.com/ia32-doc/ia32-doc)
