@@ -2,6 +2,7 @@
 Open Anti-Cheat. A kernel-mode anticheat just for fun.
 
 ## Description
+### CR3 Thrashing Routine
 For now, only a simple CR3 thrashing routine has been implemented.
 It creates its own page tables to map these critical pages:
 - A portion of the driver code
@@ -16,11 +17,22 @@ The CR3 thrashing routine will then rewrite the **#PF** IDT entry to our own **#
 
 After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **#PF** IDT entry.
 
+### NMI Stackwalking Routine
+Here, we implemented a simple stackwalking routine that is triggered during a NMI.
+
+The *NMI callback* is initialized by calling `KeRegisterNmiCallback`, an undocumented kernel function.
+
+The *NMI* is triggered by calling `HalSendNMI`, another undocumented kernel function.
+
+When the NMI is received by the current logical processor, the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
+
+We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then we invoke some kernel functions that help us unwind each function.
 
 ### IOCTLs
 - **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
 - **IOCTL_TRIGGER_CR3_THRASH** (0x801): the main CR3 thrashing routine
 - **IOCTL_UNLOAD_DRIVER** (0x802): the driver unloading routine
+- **IOCTL_TRIGGER_NMI_STACKWALK** (0x803): the NMI stackwalking routine
 
 
 ## Build
