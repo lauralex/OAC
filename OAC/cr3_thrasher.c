@@ -1,5 +1,6 @@
 #include <ntddk.h>
 #include <intrin.h>
+
 #include "mm.h"
 #include "isr.h"
 #include "arch.h"
@@ -16,119 +17,119 @@ UINT64 G_OriginalCr3 = 0;
 
 VOID TriggerCr3Thrash(void)
 {
-    PHYSICAL_ADDRESS new_pml4_pa     = {0};
-    PVOID            page_table_pool = NULL;
+    PHYSICAL_ADDRESS NewPml4Pa     = {0};
+    PVOID            PageTablePool = NULL;
 
     // Allocate our pool of pages for the new page table hierarchy.
-    page_table_pool = MmAllocateContiguousMemory(PAGE_SIZE * PAGE_TABLE_POOL_PAGES, (PHYSICAL_ADDRESS){.QuadPart = -1});
-    if (!page_table_pool)
+    PageTablePool = MmAllocateContiguousMemory(PAGE_SIZE * PAGE_TABLE_POOL_PAGES, (PHYSICAL_ADDRESS){.QuadPart = -1});
+    if (!PageTablePool)
     {
         DbgPrint("[-] MmAllocateContiguousMemory failed\n");
         return;
     }
 
     // Print page table pool address
-    DbgPrint("[*] Page table pool VA: 0x%p\n", page_table_pool);
+    DbgPrint("[*] Page table pool VA: 0x%p\n", PageTablePool);
 
-    RtlZeroMemory(page_table_pool, PAGE_SIZE * PAGE_TABLE_POOL_PAGES);
-    new_pml4_pa = MmGetPhysicalAddress(page_table_pool);
+    RtlZeroMemory(PageTablePool, PAGE_SIZE * PAGE_TABLE_POOL_PAGES);
+    NewPml4Pa = MmGetPhysicalAddress(PageTablePool);
 
     // Print physical address of the pool
-    DbgPrint("[*] Page table pool PA: 0x%llX\n", new_pml4_pa.QuadPart);
+    DbgPrint("[*] Page table pool PA: 0x%llX\n", NewPml4Pa.QuadPart);
 
     // The first page of the pool is the PML4. Subsequent pages are allocated as needed.
-    ULONG next_free_page_idx = 1;
+    ULONG NextFreePageIdx = 1;
 
     // Get the IDT
-    SEGMENT_DESCRIPTOR_REGISTER_64 idtr;
-    __sidt(&idtr);
+    SEGMENT_DESCRIPTOR_REGISTER_64 Idtr;
+    __sidt(&Idtr);
 
     // Step 1: Set up our minimal page tables
     DbgPrint("[+] Dynamically mapping all the required pages...\n");
 
     // Map all the required VAs. Our dynamic mapper will handle any index collisions.
 #pragma warning(suppress: 4152) // Suppress "function/data pointer conversion" warning
-    MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx, &PageFaultIsr);
-    MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx, &G_OriginalCr3);
-    MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx, (PVOID)idtr.BaseAddress);
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, &PageFaultIsr);
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, &G_OriginalCr3);
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, (PVOID)Idtr.BaseAddress);
 
-    PVOID currentRip = GetRIP();
-    DbgPrint("[*] Current RIP: 0x%p\n", currentRip);
-    MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx, currentRip);
+    PVOID CurrentRip = GetRip();
+    DbgPrint("[*] Current RIP: 0x%p\n", CurrentRip);
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, CurrentRip);
 
     // Handle IDT spanning a page boundary
-    if (((ULONG_PTR)idtr.BaseAddress & ~0xFFF) != (((ULONG_PTR)idtr.BaseAddress + idtr.Limit) & ~0xFFF))
+    if (((ULONG_PTR)Idtr.BaseAddress & ~0xFFF) != (((ULONG_PTR)Idtr.BaseAddress + Idtr.Limit) & ~0xFFF))
     {
-        MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx,
-                                     (PVOID)((PUCHAR)idtr.BaseAddress + idtr.Limit));
+        MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx,
+                                     (PVOID)((PUCHAR)Idtr.BaseAddress + Idtr.Limit));
     }
 
     DbgPrint("[+] Pinning thread to current processor.\n");
 
     // Pin execution to the current processor.
-    KAFFINITY oldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
+    KAFFINITY OldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
 
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* pageFaultDescriptor = (SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64*)(idtr.BaseAddress
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* PageFaultDescriptor = (SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64*)(Idtr.BaseAddress
         + (14 * sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64)));
 
 
     // Print the address of the IDT entry
-    DbgPrint("[*] IDT pageFaultDescriptor: 0x%p\n", pageFaultDescriptor);
+    DbgPrint("[*] IDT pageFaultDescriptor: 0x%p\n", PageFaultDescriptor);
 
     // Save the original CR3
     G_OriginalCr3 = __readcr3();
     DbgPrint("[*] Original CR3: 0x%llX\n", G_OriginalCr3);
 
     // Create a new IDT entry for our custom ISR
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 newPfDescriptor = {0};
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 NewPfDescriptor = {0};
 
-    newPfDescriptor.OffsetLow                = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
-    newPfDescriptor.SegmentSelector          = pageFaultDescriptor->SegmentSelector;          // Kernel code segment
-    newPfDescriptor.Type                     = pageFaultDescriptor->Type;                     // 64-bit interrupt gate
-    newPfDescriptor.DescriptorPrivilegeLevel = pageFaultDescriptor->DescriptorPrivilegeLevel; // Kernel level
-    newPfDescriptor.Present                  = pageFaultDescriptor->Present;
-    newPfDescriptor.OffsetMiddle             = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
-    newPfDescriptor.OffsetHigh               = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
-    newPfDescriptor.InterruptStackTable      = pageFaultDescriptor->InterruptStackTable; // Use same IST as original
-    newPfDescriptor.Reserved                 = pageFaultDescriptor->Reserved;
+    NewPfDescriptor.OffsetLow                = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
+    NewPfDescriptor.SegmentSelector          = PageFaultDescriptor->SegmentSelector;          // Kernel code segment
+    NewPfDescriptor.Type                     = PageFaultDescriptor->Type;                     // 64-bit interrupt gate
+    NewPfDescriptor.DescriptorPrivilegeLevel = PageFaultDescriptor->DescriptorPrivilegeLevel; // Kernel level
+    NewPfDescriptor.Present                  = PageFaultDescriptor->Present;
+    NewPfDescriptor.OffsetMiddle             = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
+    NewPfDescriptor.OffsetHigh               = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
+    NewPfDescriptor.InterruptStackTable      = PageFaultDescriptor->InterruptStackTable; // Use same IST as original
+    NewPfDescriptor.Reserved                 = PageFaultDescriptor->Reserved;
 
 
     // Discover the existing IST stack used by the default PF handler
-    UINT32 ist_index = pageFaultDescriptor->InterruptStackTable;
-    if (ist_index == 0)
+    UINT32 IstIndex = PageFaultDescriptor->InterruptStackTable;
+    if (IstIndex == 0)
     {
         DbgPrint("[-] Original Page Fault handler does not use IST. Aborting.\n");
-        KeRevertToUserAffinityThreadEx(oldAffinity);
-        MmFreeContiguousMemory(page_table_pool);
+        KeRevertToUserAffinityThreadEx(OldAffinity);
+        MmFreeContiguousMemory(PageTablePool);
         return;
     }
 
-    DbgPrint("[*] Original Page Fault handler IST index: %u\n", ist_index);
+    DbgPrint("[*] Original Page Fault handler IST index: %u\n", IstIndex);
 
-    SEGMENT_DESCRIPTOR_REGISTER_64 gdtr         = {0};
-    SEGMENT_SELECTOR               tss_selector = {0};
-    _sgdt(&gdtr);
-    _str(&tss_selector);
-    SEGMENT_DESCRIPTOR_64* tss_descriptor = (SEGMENT_DESCRIPTOR_64*)(gdtr.BaseAddress + tss_selector.Index * sizeof(
+    SEGMENT_DESCRIPTOR_REGISTER_64 Gdtr        = {0};
+    SEGMENT_SELECTOR               TssSelector = {0};
+    _sgdt(&Gdtr);
+    _str(&TssSelector);
+    SEGMENT_DESCRIPTOR_64* TssDescriptor = (SEGMENT_DESCRIPTOR_64*)(Gdtr.BaseAddress + TssSelector.Index * sizeof(
         UINT64));
 
-    UINT64 tss_base = ((UINT64)(tss_descriptor->BaseAddressLow)) |
-        ((UINT64)(tss_descriptor->BaseAddressMiddle) << 16) |
-        ((UINT64)(tss_descriptor->BaseAddressHigh) << 24) |
-        ((UINT64)(tss_descriptor->BaseAddressUpper) << 32);
+    UINT64 TssBase = ((UINT64)(TssDescriptor->BaseAddressLow)) |
+        ((UINT64)(TssDescriptor->BaseAddressMiddle) << 16) |
+        ((UINT64)(TssDescriptor->BaseAddressHigh) << 24) |
+        ((UINT64)(TssDescriptor->BaseAddressUpper) << 32);
 
-    TASK_STATE_SEGMENT_64* tss = (TASK_STATE_SEGMENT_64*)tss_base;
+    TASK_STATE_SEGMENT_64* Tss = (TASK_STATE_SEGMENT_64*)TssBase;
 
     // Get the stack top from the correct IST entry.
     // The TSS struct has Ist1..7, which corresponds to indices 1..7.
-    UINT64 ist_stack_top  = *(&tss->Ist1 + (ist_index - 1));
-    UINT64 ist_stack_base = ist_stack_top - 0x6000; // Assume 24KB stack size
-    DbgPrint("[*] IST stack for PF handler: 0x%llX - 0x%llX\n", ist_stack_base, ist_stack_top);
+    UINT64 IstStackTop  = *(&Tss->Ist1 + (IstIndex - 1));
+    UINT64 IstStackBase = IstStackTop - 0x6000; // Assume 24KB stack size
+    DbgPrint("[*] IST stack for PF handler: 0x%llX - 0x%llX\n", IstStackBase, IstStackTop);
 
     // Map all pages of the discovered IST stack
-    for (UINT64 addr = ist_stack_base; addr < ist_stack_top; addr += PAGE_SIZE)
+    for (UINT64 Addr = IstStackBase; Addr < IstStackTop; Addr += PAGE_SIZE)
     {
-        MapVirtualAddressDynamically(page_table_pool, &next_free_page_idx, (PVOID)addr);
+        MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, (PVOID)Addr);
     }
 
     DbgPrint("[!!} Entering CRITICAL section. Disabling interrupts.\n");
@@ -138,27 +139,27 @@ VOID TriggerCr3Thrash(void)
     _disable(); // Disable Interrupts
 
     // == BYPASS WRITE PROTECTION TO MODIFY IDT ==
-    UINT64 originalCr0 = __readcr0();
-    UINT64 newCr0      = originalCr0 & (~0x10000); // Clear WP bit (bit 16)
-    __writecr0(newCr0);
+    UINT64 OriginalCr0 = __readcr0();
+    UINT64 NewCr0      = OriginalCr0 & (~0x10000); // Clear WP bit (bit 16)
+    __writecr0(NewCr0);
     // ===========================================
 
     // Save the original Page Fault handler entry struct
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 originalPfDescriptor = {0};
-    RtlCopyMemory(&originalPfDescriptor, pageFaultDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 OriginalPfDescriptor = {0};
+    RtlCopyMemory(&OriginalPfDescriptor, PageFaultDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
 
     // Overwrite the IDT entry for the Page Fault handler
-    RtlCopyMemory(pageFaultDescriptor, &newPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
+    RtlCopyMemory(PageFaultDescriptor, &NewPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
 
     // == RE-ENABLE WRITE PROTECTION IMMEDIATELY ==
-    __writecr0(originalCr0);
+    __writecr0(OriginalCr0);
     // ============================================
 
     // Thrash CR3 to trigger page faults
-    CR3 cr3                    = {.AsUInt = G_OriginalCr3};
-    cr3.AddressOfPageDirectory = (new_pml4_pa.QuadPart >> 12);
+    CR3 Cr3                    = {.AsUInt = G_OriginalCr3};
+    Cr3.AddressOfPageDirectory = (NewPml4Pa.QuadPart >> 12);
 
-    __writecr3(cr3.AsUInt);
+    __writecr3(Cr3.AsUInt);
 
     // Cause an unconditional VM-exit on some hypervisors.
     _invd();
@@ -171,16 +172,16 @@ VOID TriggerCr3Thrash(void)
     // The CPU state is now back to normal, but interrupts are still off.
 
     // == BYPASS WRITE PROTECTION TO MODIFY IDT ==
-    originalCr0 = __readcr0();
-    newCr0      = originalCr0 & (~0x10000); // Clear WP bit (bit 16)
-    __writecr0(newCr0);
+    OriginalCr0 = __readcr0();
+    NewCr0      = OriginalCr0 & (~0x10000); // Clear WP bit (bit 16)
+    __writecr0(NewCr0);
     // ===========================================
 
     // Restore the original IDT entry
-    RtlCopyMemory(pageFaultDescriptor, &originalPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
+    RtlCopyMemory(PageFaultDescriptor, &OriginalPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
 
     // == RE-ENABLE WRITE PROTECTION IMMEDIATELY ==
-    __writecr0(originalCr0);
+    __writecr0(OriginalCr0);
     // ============================================
 
     // Restore original CR3 (should already be restored by the ISR, but just in case)
@@ -192,14 +193,14 @@ VOID TriggerCr3Thrash(void)
     DbgPrint("[!!] CRITICAL section finished. System stable.\n");
 
     // Restore the original thread affinity.
-    KeRevertToUserAffinityThreadEx(oldAffinity);
+    KeRevertToUserAffinityThreadEx(OldAffinity);
 
     DbgPrint("[+] Thread affinity restored. Test complete.\n");
 
     // Step 2: Clean up the memory we allocated
-    if (page_table_pool)
+    if (PageTablePool)
     {
-        MmFreeContiguousMemory(page_table_pool);
+        MmFreeContiguousMemory(PageTablePool);
         DbgPrint("[+] Freed page table memory.\n");
     }
 

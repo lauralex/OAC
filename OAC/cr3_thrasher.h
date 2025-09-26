@@ -1,5 +1,5 @@
 #pragma once
-#include <ntdef.h>
+#include <ntddk.h>
 
 // Global variable to share the original CR3 with our assembly ISR.
 // This MUST be global.

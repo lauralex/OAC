@@ -1,7 +1,17 @@
 #pragma once
-#include <ntdef.h>
+#include <ntddk.h>
 
-inline __declspec(noinline) PVOID GetRIP(void)
+struct _MACHINE_FRAME
+{
+    UINT64 ErrorCode;
+    UINT64 Rip;
+    UINT64 Cs;
+    UINT64 Rflags;
+    UINT64 Rsp;
+    UINT64 Ss;
+} MACHINE_FRAME, *PMACHINE_FRAME;
+
+inline __declspec(noinline) PVOID GetRip(void)
 {
     return _ReturnAddress();
 }

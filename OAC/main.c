@@ -59,24 +59,24 @@ NTSTATUS DriverEntry(
     DbgPrint("[+] kdmapper has called DriverEntry\n");
 
     // We can provide a driver name, or NULL for stealth
-    UNICODE_STRING driverName;
-    RtlInitUnicodeString(&driverName, G_DRIVER_NAME);
+    UNICODE_STRING DriverName;
+    RtlInitUnicodeString(&DriverName, G_DRIVER_NAME);
 
     // Call the undocumented function IoCreateDriver.
     // This will create our DRIVER_OBJECT and call our DriverInitialize function.
-    NTSTATUS status = IoCreateDriver(&driverName, &DriverInitialize);
+    NTSTATUS Status = IoCreateDriver(&DriverName, &DriverInitialize);
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateDriver failed: 0x%X\n", status);
-        return status;
+        DbgPrint("[-] IoCreateDriver failed: 0x%X\n", Status);
+        return Status;
     }
     else
     {
         DbgPrint("[+] IoCreateDriver succeeded\n");
     }
 
-    return status;
+    return Status;
 }
 
 // This function is called by IoCreateDriver to perform driver initialization.
@@ -88,43 +88,43 @@ NTSTATUS NTAPI DriverInitialize(
 {
     UNREFERENCED_PARAMETER(RegistryPath);
 
-    NTSTATUS       status           = STATUS_SUCCESS;
-    PDEVICE_OBJECT deviceObject     = NULL;
-    UNICODE_STRING deviceName       = {0};
-    UNICODE_STRING symbolicLinkName = {0};
+    NTSTATUS       Status           = STATUS_SUCCESS;
+    PDEVICE_OBJECT DeviceObject     = NULL;
+    UNICODE_STRING DeviceName       = {0};
+    UNICODE_STRING SymbolicLinkName = {0};
 
-    RtlInitUnicodeString(&deviceName, G_DEVICE_NAME);
-    RtlInitUnicodeString(&symbolicLinkName, G_SYMLINK_NAME);
+    RtlInitUnicodeString(&DeviceName, G_DEVICE_NAME);
+    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
 
     DbgPrint("[+] DriverInitialize called by IoCreateDriver\n");
 
     // Create the device object.
-    status = IoCreateDevice(
+    Status = IoCreateDevice(
         DriverObject,
         0,
-        &deviceName,
+        &DeviceName,
         FILE_DEVICE_UNKNOWN,
         FILE_DEVICE_SECURE_OPEN,
         FALSE,
-        &deviceObject
+        &DeviceObject
     );
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateDevice failed: 0x%X\n", status);
-        return status;
+        DbgPrint("[-] IoCreateDevice failed: 0x%X\n", Status);
+        return Status;
     }
 
     DbgPrint("[+] Device object created successfully\n");
 
     // Create a symbolic link so user-mode applications can find the device.
-    status = IoCreateSymbolicLink(&symbolicLinkName, &deviceName);
+    Status = IoCreateSymbolicLink(&SymbolicLinkName, &DeviceName);
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateSymbolicLink failed: 0x%X\n", status);
-        IoDeleteDevice(deviceObject);
-        return status;
+        DbgPrint("[-] IoCreateSymbolicLink failed: 0x%X\n", Status);
+        IoDeleteDevice(DeviceObject);
+        return Status;
     }
 
     DbgPrint("[+] Symbolic link created successfully\n");
@@ -137,10 +137,10 @@ NTSTATUS NTAPI DriverInitialize(
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IrpDeviceIoCtlHandler;
 
     // Clear the initialization flag to allow I/O.
-    deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     DbgPrint("[+] Driver initialized successfully\n");
-    return status;
+    return Status;
 }
 
 //
@@ -153,15 +153,15 @@ VOID DriverUnload(
     IN PDRIVER_OBJECT DriverObject
 )
 {
-    UNICODE_STRING symbolicLinkName = {0};
-    RtlInitUnicodeString(&symbolicLinkName, G_SYMLINK_NAME);
+    UNICODE_STRING SymbolicLinkName = {0};
+    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
     DbgPrint("[+] DriverUnload called\n");
 
     // Deinitialize the NMI handler if it was initialized.
     DeinitializeNmiHandler();
 
     // Delete the symbolic link.
-    IoDeleteSymbolicLink(&symbolicLinkName);
+    IoDeleteSymbolicLink(&SymbolicLinkName);
     DbgPrint("[+] Symbolic link deleted\n");
 
     // Delete the device object.
@@ -199,17 +199,17 @@ NTSTATUS IrpDeviceIoCtlHandler(
 {
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    PIO_STACK_LOCATION irpStack    = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS           status      = STATUS_SUCCESS;
-    ULONG_PTR          information = 0;
+    PIO_STACK_LOCATION IrpStack    = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS           Status      = STATUS_SUCCESS;
+    ULONG_PTR          Information = 0;
 
-    if (!irpStack)
+    if (!IrpStack)
     {
-        status = STATUS_UNSUCCESSFUL;
+        Status = STATUS_UNSUCCESSFUL;
     }
     else
     {
-        switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
+        switch (IrpStack->Parameters.DeviceIoControl.IoControlCode)
         {
         case IOCTL_TEST_COMMUNICATION:
             DbgPrint("[+] IOCTL_TEST_COMMUNICATION received\n");
@@ -231,7 +231,7 @@ NTSTATUS IrpDeviceIoCtlHandler(
             // CRITICAL: We must complete the request back to user-mode BEFORE we
             // delete the device, otherwise the I/O manager will crash trying
             // to complete a request for a non-existent device.
-            Irp->IoStatus.Status      = status;
+            Irp->IoStatus.Status      = Status;
             Irp->IoStatus.Information = 0;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
@@ -239,16 +239,16 @@ NTSTATUS IrpDeviceIoCtlHandler(
             DriverUnload(DeviceObject->DriverObject);
 
             // Note: The driver code is still in memory, but it is now disconnected.
-            return status;
+            return Status;
         default:
-            status = STATUS_INVALID_DEVICE_REQUEST;
+            Status = STATUS_INVALID_DEVICE_REQUEST;
             break;
         }
     }
 
-    Irp->IoStatus.Status      = status;
-    Irp->IoStatus.Information = information;
+    Irp->IoStatus.Status      = Status;
+    Irp->IoStatus.Information = Information;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    return status;
+    return Status;
 }

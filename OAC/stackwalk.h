@@ -45,3 +45,11 @@ VOID DeinitializeNmiHandler(void);
  * @brief Triggers an NMI on the current processor to perform a stack walk.
  */
 VOID TriggerNmiStackwalk(void);
+
+/**
+ * @brief Locates the KTRAP_FRAME saved on the NMI stack.
+ * This is an advanced technique that inspects core system structures.
+ *
+ * @return A pointer to the KTRAP_FRAME, or NULL on failure.
+ */
+PKTRAP_FRAME FindNmiTrapFrame(void);

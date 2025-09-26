@@ -1,5 +1,8 @@
-#include <ntifs.h>
+#include <intrin.h>
+
 #include "stackwalk.h"
+#include "arch.h"
+#include "ia32.h"
 #include "internals.h"
 
 //
@@ -40,8 +43,8 @@ BOOLEAN NmiCallback(
     // If the context is missing or the signature is invalid, this NMI is not for us,
     // or something is seriously wrong (e.g., memory corruption, tampering).
     //
-    PNMI_CONTEXT nmiContext = (PNMI_CONTEXT)Context;
-    if (!nmiContext || nmiContext->MagicSignature != NMI_CONTEXT_SIGNATURE)
+    PNMI_CONTEXT NmiContext = (PNMI_CONTEXT)Context;
+    if (!NmiContext || NmiContext->MagicSignature != NMI_CONTEXT_SIGNATURE)
     {
         // Invalid context, not our NMI.
         return FALSE;
@@ -50,7 +53,7 @@ BOOLEAN NmiCallback(
     // Step 3: Check if this NMI was triggered by our driver.
     // If the pending count is 0, it's an unexpected NMI (e.g., hardware error).
     //
-    if (nmiContext->PendingCount == 0)
+    if (NmiContext->PendingCount == 0)
     {
         return FALSE;
     }
@@ -58,35 +61,129 @@ BOOLEAN NmiCallback(
     //
     // This NMI is confirmed to be for us. Atomically decrement the pending count.
     //
-    InterlockedDecrement(&nmiContext->PendingCount);
+    InterlockedDecrement(&NmiContext->PendingCount);
 
     DbgPrint("[+] NMI callback triggered on CPU %d\n", KeGetCurrentProcessorNumberEx(NULL));
 
     //
-    // Perform the stack walk.
+    // --- Unwind-Data-Based Stack Walk Logic ---
     //
-#define MAX_STACK_FRAMES 32
-    PVOID stackFrames[MAX_STACK_FRAMES] = {0};
-    ULONG framesCaptured                = RtlCaptureStackBackTrace(0, MAX_STACK_FRAMES, stackFrames, NULL);
-
-    if (framesCaptured > 0)
+    PKTRAP_FRAME TrapFrame = FindNmiTrapFrame();
+    if (!TrapFrame)
     {
-        DbgPrint("[+] Stack trace:\n");
-        for (ULONG i = 0; i < framesCaptured; i++)
+        DbgPrint("[-] Failed to locate KTRAP_FRAME on NMI stack.\n");
+        return TRUE; // We handled our NMI, but failed the walk.
+    }
+
+    DbgPrint("[+] Found KTRAP_FRAME at 0x%p\n", TrapFrame);
+    DbgPrint("    RIP: 0x%llX\n", TrapFrame->Rip);
+    DbgPrint("    RSP: 0x%llX\n", TrapFrame->Rsp);
+    DbgPrint("    RBP: 0x%llX\n", TrapFrame->Rbp);
+
+    // Step 1. Initialize a CONTEXT record from the KTRAP_FRAME.
+    // This CONTEXT record is the starting point for our unwind operation.
+    CONTEXT ContextRecord      = {0};
+    ContextRecord.ContextFlags = CONTEXT_FULL;
+
+    // Copy all general-purpose and control registers.
+    ContextRecord.Rax    = TrapFrame->Rax;
+    ContextRecord.Rcx    = TrapFrame->Rcx;
+    ContextRecord.Rdx    = TrapFrame->Rdx;
+    ContextRecord.Rbx    = TrapFrame->Rbx;
+    ContextRecord.Rsp    = TrapFrame->Rsp;
+    ContextRecord.Rbp    = TrapFrame->Rbp;
+    ContextRecord.Rsi    = TrapFrame->Rsi;
+    ContextRecord.Rdi    = TrapFrame->Rdi;
+    ContextRecord.R8     = TrapFrame->R8;
+    ContextRecord.R9     = TrapFrame->R9;
+    ContextRecord.R10    = TrapFrame->R10;
+    ContextRecord.R11    = TrapFrame->R11;
+    ContextRecord.Rip    = TrapFrame->Rip;
+    ContextRecord.EFlags = TrapFrame->EFlags;
+    ContextRecord.SegCs  = TrapFrame->SegCs;
+    ContextRecord.SegDs  = TrapFrame->SegDs;
+    ContextRecord.SegEs  = TrapFrame->SegEs;
+    ContextRecord.SegFs  = TrapFrame->SegFs;
+    ContextRecord.SegGs  = TrapFrame->SegGs;
+    ContextRecord.SegSs  = TrapFrame->SegSs;
+
+    // Print the initial frame (the interrupted context).
+    DbgPrint("[+] --- Trap Frame Info:\n");
+    DbgPrint("  RAX -> 0x%llX\n", ContextRecord.Rax);
+    DbgPrint("  RCX -> 0x%llX\n", ContextRecord.Rcx);
+    DbgPrint("  RDX -> 0x%llX\n", ContextRecord.Rdx);
+    DbgPrint("  RBX -> 0x%llX\n", ContextRecord.Rbx);
+    DbgPrint("  RSP -> 0x%llX\n", ContextRecord.Rsp);
+    DbgPrint("  RBP -> 0x%llX\n", ContextRecord.Rbp);
+    DbgPrint("  RSI -> 0x%llX\n", ContextRecord.Rsi);
+    DbgPrint("  RDI -> 0x%llX\n", ContextRecord.Rdi);
+    DbgPrint("  R8  -> 0x%llX\n", ContextRecord.R8);
+    DbgPrint("  R9  -> 0x%llX\n", ContextRecord.R9);
+    DbgPrint("  R10 -> 0x%llX\n", ContextRecord.R10);
+    DbgPrint("  R11 -> 0x%llX\n", ContextRecord.R11);
+    DbgPrint("  RIP -> 0x%llX\n", ContextRecord.Rip);
+    DbgPrint("  EFL -> 0x%lX\n", ContextRecord.EFlags);
+    DbgPrint("  CS  -> 0x%X\n", ContextRecord.SegCs);
+    DbgPrint("  DS  -> 0x%X\n", ContextRecord.SegDs);
+    DbgPrint("  ES  -> 0x%X\n", ContextRecord.SegEs);
+    DbgPrint("  FS  -> 0x%X\n", ContextRecord.SegFs);
+    DbgPrint("  GS  -> 0x%X\n", ContextRecord.SegGs);
+    DbgPrint("  SS  -> 0x%X\n", ContextRecord.SegSs);
+
+    DbgPrint("[+] --- Begin Unwind-Data Stack Walk ---\n");
+    DbgPrint("  [00] 0x%p (Interrupted RIP)\n", (PVOID)ContextRecord.Rip);
+
+#define MAX_UNWIND_FRAMES 32
+    for (int i = 1; i < MAX_UNWIND_FRAMES; i++)
+    {
+        ULONG64 ImageBase   = 0;
+        PVOID   HandlerData = NULL;
+
+        __try
         {
-            DbgPrint("  [%lu] 0x%p\n", i, stackFrames[i]);
+            // Step 2: Find the runtime function entry for the current instruction pointer.
+            // This reads the .pdata section of the PE file in memory.
+            PRUNTIME_FUNCTION RuntimeFunction = RtlLookupFunctionEntry(ContextRecord.Rip, &ImageBase, NULL);
+
+            if (!RuntimeFunction)
+            {
+                // We've likely reached the end of the call stack for which we have unwind data.
+                break;
+            }
+
+            // Step 3: Call RtlVirtualUnwind to "go back in time" to the caller's context.
+            // This function will read the current context, and using the unwind data,
+            // it will modify the context record to reflect the state of the calling function.
+
+            ULONG64 EstablisherFrame = {0};
+
+            RtlVirtualUnwind(
+                UNW_FLAG_NHANDLER,
+                ImageBase,
+                ContextRecord.Rip,
+                RuntimeFunction,
+                &ContextRecord,
+                &HandlerData,
+                &EstablisherFrame,
+                NULL);
+
+            // The Rip in the now-modified context record is our return address.
+            if (!ContextRecord.Rip)
+            {
+                break;
+            }
+
+            DbgPrint("  [%02d] 0x%p\n", i, (PVOID)ContextRecord.Rip);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            DbgPrint("  [!!] Exception during virtual unwind. Stack may be corrupt.\n");
+            break;
         }
     }
-    else
-    {
-        DbgPrint("[-] Failed to capture stack trace in NMI callback.\n");
-    }
 
+    DbgPrint("[+] --- End Unwind-Data Stack Walk ---\n");
 
-    //
-    // Step 4: We have successfully handled our self-initiated NMI.
-    // Return TRUE to inform the system and other drivers.
-    //
     return TRUE;
 }
 
@@ -130,6 +227,75 @@ VOID DeinitializeNmiHandler(void)
 }
 
 /**
+ * @brief Locates the KTRAP_FRAME saved on the NMI stack.
+ * This is an advanced technique that inspects core system structures.
+ *
+ * @return A pointer to the KTRAP_FRAME, or NULL on failure.
+ */
+PKTRAP_FRAME FindNmiTrapFrame(void)
+{
+    // Step 1: Get the IDT to find the NMI descriptor.
+    SEGMENT_DESCRIPTOR_REGISTER_64 Idtr = {0};
+    __sidt(&Idtr);
+    if (Idtr.Limit == 0 || Idtr.BaseAddress == 0)
+    {
+        DbgPrint("[-] Invalid IDT.\n");
+        return NULL;
+    }
+
+    // NMI is always vector 2.
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* NmiDescriptor = (SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64*)(Idtr.BaseAddress + 2 *
+        sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
+
+    // Step 2: Get the IST index from the NMI descriptor.
+    UINT32 IstIndex = NmiDescriptor->InterruptStackTable;
+    if (IstIndex == 0 || IstIndex > 7)
+    {
+        DbgPrint("[-] Invalid IST index in NMI descriptor: %u\n", IstIndex);
+        return NULL;
+    }
+
+    // Step 3: Get the GDT and TSS to find the IST stack pointer.
+    SEGMENT_DESCRIPTOR_REGISTER_64 Gdtr        = {0};
+    SEGMENT_SELECTOR               TssSelector = {0};
+    _sgdt(&Gdtr);
+    _str(&TssSelector);
+
+    if (Gdtr.Limit == 0 || Gdtr.BaseAddress == 0 || TssSelector.Index == 0)
+    {
+        DbgPrint("[-] Invalid GDT or TSS selector.\n");
+        return NULL;
+    }
+
+    SEGMENT_DESCRIPTOR_64* TssDescriptor = (SEGMENT_DESCRIPTOR_64*)(Gdtr.BaseAddress + TssSelector.Index * sizeof(
+        UINT64));
+
+    // The TSS base address is split across multiple fields in its descriptor.
+    UINT64 TssBase = ((UINT64)(TssDescriptor->BaseAddressLow)) |
+        ((UINT64)(TssDescriptor->BaseAddressMiddle) << 16) |
+        ((UINT64)(TssDescriptor->BaseAddressHigh) << 24) |
+        ((UINT64)(TssDescriptor->BaseAddressUpper) << 32);
+
+    TASK_STATE_SEGMENT_64* Tss = (TASK_STATE_SEGMENT_64*)TssBase;
+
+    // Step 4: Get the top of the NMI stack from the TSS.
+    // The TSS struct has Ist1..7, which corresponds to indices 1..7.
+    // The IST index in the descriptor is 1-based.
+    UINT64 IstStackTop = *(&Tss->Ist1 + (IstIndex - 1));
+    if (!IstStackTop)
+    {
+        DbgPrint("[-] Failed to find a valid IST stack top for NMI.\n");
+        return NULL;
+    }
+
+    // Step 5: The KTRAP_FRAME is placed at the top of the stack by the kernel.
+    // The stack grows downwards, so the frame is located at the top address minus its size.
+    PKTRAP_FRAME TrapFrame = (PKTRAP_FRAME)(IstStackTop - sizeof(KTRAP_FRAME));
+
+    return TrapFrame;
+}
+
+/**
  * @brief Triggers an NMI on the current processor to perform a stack walk.
  */
 VOID TriggerNmiStackwalk(void)
@@ -137,23 +303,23 @@ VOID TriggerNmiStackwalk(void)
     // Initialize NMI handler if it not already initialized.
     if (!G_NmiCallbackHandle)
     {
-        NTSTATUS status = InitializeNmiHandler();
-        if (!NT_SUCCESS(status))
+        NTSTATUS Status = InitializeNmiHandler();
+        if (!NT_SUCCESS(Status))
         {
-            DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", status);
+            DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", Status);
             return;
         }
     }
 
     DbgPrint("[+] Triggering NMI on the current processor.\n");
 
-    KAFFINITY_EX affinity = {0};
+    KAFFINITY_EX Affinity = {0};
 
-    KeInitializeAffinityEx(&affinity);
-    KeAddProcessorAffinityEx(&affinity, KeGetCurrentProcessorNumberEx(NULL));
+    KeInitializeAffinityEx(&Affinity);
+    KeAddProcessorAffinityEx(&Affinity, KeGetCurrentProcessorNumberEx(NULL));
 
     // Print target affinity
-    DbgPrint("[+] Target CPU Affinity Bitmap: 0x%p\n", (PVOID)affinity.Bitmap);
+    DbgPrint("[+] Target CPU Affinity Bitmap: 0x%p\n", (PVOID)Affinity.Bitmap);
 
     //
     // Increment our pending counter BEFORE sending the NMI.
@@ -165,7 +331,7 @@ VOID TriggerNmiStackwalk(void)
     // This is an undocumented function, but it is the standard way to
     // programmatically trigger an NMI on a specific processor.
     //
-    HalSendNMI(&affinity);
+    HalSendNMI(&Affinity);
 
     DbgPrint("[+] NMI sent.\n");
 }

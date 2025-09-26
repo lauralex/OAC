@@ -2,96 +2,96 @@
 #include "ia32.h"
 #include "internals.h"
 
-NTSTATUS MapVirtualAddressDynamically(PVOID pool_base, ULONG* next_free_page_index, PVOID target_va)
+NTSTATUS MapVirtualAddressDynamically(PVOID PoolBase, ULONG* NextFreePageIndex, PVOID TargetVa)
 {
-    PHYSICAL_ADDRESS pool_pa   = MmGetPhysicalAddress(pool_base);
-    PHYSICAL_ADDRESS target_pa = MmGetPhysicalAddress(target_va);
-    if (target_pa.QuadPart == 0)
+    PHYSICAL_ADDRESS PoolPa   = MmGetPhysicalAddress(PoolBase);
+    PHYSICAL_ADDRESS TargetPa = MmGetPhysicalAddress(TargetVa);
+    if (TargetPa.QuadPart == 0)
     {
-        DbgPrint("[-] Target VA 0x%p is not mapped in current page tables.\n", target_va);
+        DbgPrint("[-] Target VA 0x%p is not mapped in current page tables.\n", TargetVa);
         return STATUS_NOT_FOUND;
     }
 
     // The PML4 is always the first page in our pool.
-    PML4E_64* pml4 = (PML4E_64*)pool_base;
+    PML4E_64* Pml4 = (PML4E_64*)PoolBase;
 
-    VIRTUAL_ADDRESS va = {.vaddr = (UINT64)target_va};
+    VIRTUAL_ADDRESS Va = {.Vaddr = (UINT64)TargetVa};
 
     // --- Level 1: PML4 -> PDPT ---
-    PDPTE_64* pdpt;
-    if (pml4[va.pml4_index].Present)
+    PDPTE_64* Pdpt;
+    if (Pml4[Va.Pml4Index].Present)
     {
         // Entry exists, follow it. Convert the PFN back to a VA within our pool.
-        pdpt = (PDPTE_64*)((PUCHAR)pool_base + ((pml4[va.pml4_index].PageFrameNumber - (pool_pa.QuadPart >> 12)) <<
+        Pdpt = (PDPTE_64*)((PUCHAR)PoolBase + ((Pml4[Va.Pml4Index].PageFrameNumber - (PoolPa.QuadPart >> 12)) <<
             12));
     }
     else
     {
         // No entry, allocate a new PDPT from our pool.
-        if (*next_free_page_index >= PAGE_TABLE_POOL_PAGES)
+        if (*NextFreePageIndex >= PAGE_TABLE_POOL_PAGES)
         {
             DbgPrint("[-] Out of page table memory in pool.\n");
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        pdpt = (PDPTE_64*)((PUCHAR)pool_base + (*next_free_page_index) * PAGE_SIZE);
-        RtlZeroMemory(pdpt, PAGE_SIZE);
+        Pdpt = (PDPTE_64*)((PUCHAR)PoolBase + (*NextFreePageIndex) * PAGE_SIZE);
+        RtlZeroMemory(Pdpt, PAGE_SIZE);
 
-        PHYSICAL_ADDRESS pdpt_pa            = {.QuadPart = pool_pa.QuadPart + (*next_free_page_index) * PAGE_SIZE};
-        pml4[va.pml4_index].Present         = 1;
-        pml4[va.pml4_index].Write           = 1;
-        pml4[va.pml4_index].PageFrameNumber = pdpt_pa.QuadPart >> 12;
-        (*next_free_page_index)++;
+        PHYSICAL_ADDRESS PdptPa            = {.QuadPart = PoolPa.QuadPart + (*NextFreePageIndex) * PAGE_SIZE};
+        Pml4[Va.Pml4Index].Present         = 1;
+        Pml4[Va.Pml4Index].Write           = 1;
+        Pml4[Va.Pml4Index].PageFrameNumber = PdptPa.QuadPart >> 12;
+        (*NextFreePageIndex)++;
     }
 
     // --- Level 2: PDPT -> PD ---
-    PDE_64* pd;
-    if (pdpt[va.pdpt_index].Present)
+    PDE_64* Pd;
+    if (Pdpt[Va.PdptIndex].Present)
     {
-        pd = (PDE_64*)((PUCHAR)pool_base + ((pdpt[va.pdpt_index].PageFrameNumber - (pool_pa.QuadPart >> 12)) << 12));
+        Pd = (PDE_64*)((PUCHAR)PoolBase + ((Pdpt[Va.PdptIndex].PageFrameNumber - (PoolPa.QuadPart >> 12)) << 12));
     }
     else
     {
-        if (*next_free_page_index >= PAGE_TABLE_POOL_PAGES)
+        if (*NextFreePageIndex >= PAGE_TABLE_POOL_PAGES)
         {
             DbgPrint("[-] Out of page table memory in pool.\n");
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        pd = (PDE_64*)((PUCHAR)pool_base + (*next_free_page_index) * PAGE_SIZE);
-        RtlZeroMemory(pd, PAGE_SIZE);
+        Pd = (PDE_64*)((PUCHAR)PoolBase + (*NextFreePageIndex) * PAGE_SIZE);
+        RtlZeroMemory(Pd, PAGE_SIZE);
 
-        PHYSICAL_ADDRESS pd_pa              = {.QuadPart = pool_pa.QuadPart + (*next_free_page_index) * PAGE_SIZE};
-        pdpt[va.pdpt_index].Present         = 1;
-        pdpt[va.pdpt_index].Write           = 1;
-        pdpt[va.pdpt_index].PageFrameNumber = pd_pa.QuadPart >> 12;
-        (*next_free_page_index)++;
+        PHYSICAL_ADDRESS PdPa              = {.QuadPart = PoolPa.QuadPart + (*NextFreePageIndex) * PAGE_SIZE};
+        Pdpt[Va.PdptIndex].Present         = 1;
+        Pdpt[Va.PdptIndex].Write           = 1;
+        Pdpt[Va.PdptIndex].PageFrameNumber = PdPa.QuadPart >> 12;
+        (*NextFreePageIndex)++;
     }
 
     // --- Level 3: PD -> PT ---
-    PTE_64* pt;
-    if (pd[va.pd_index].Present)
+    PTE_64* Pt;
+    if (Pd[Va.PdIndex].Present)
     {
-        pt = (PTE_64*)((PUCHAR)pool_base + ((pd[va.pd_index].PageFrameNumber - (pool_pa.QuadPart >> 12)) << 12));
+        Pt = (PTE_64*)((PUCHAR)PoolBase + ((Pd[Va.PdIndex].PageFrameNumber - (PoolPa.QuadPart >> 12)) << 12));
     }
     else
     {
-        if (*next_free_page_index >= PAGE_TABLE_POOL_PAGES)
+        if (*NextFreePageIndex >= PAGE_TABLE_POOL_PAGES)
         {
             DbgPrint("[-] Out of page table memory in pool.\n");
             return STATUS_INSUFFICIENT_RESOURCES;
         }
-        pt = (PTE_64*)((PUCHAR)pool_base + (*next_free_page_index) * PAGE_SIZE);
-        RtlZeroMemory(pt, PAGE_SIZE);
-        PHYSICAL_ADDRESS pt_pa          = {.QuadPart = pool_pa.QuadPart + (*next_free_page_index) * PAGE_SIZE};
-        pd[va.pd_index].Present         = 1;
-        pd[va.pd_index].Write           = 1;
-        pd[va.pd_index].PageFrameNumber = pt_pa.QuadPart >> 12;
-        (*next_free_page_index)++;
+        Pt = (PTE_64*)((PUCHAR)PoolBase + (*NextFreePageIndex) * PAGE_SIZE);
+        RtlZeroMemory(Pt, PAGE_SIZE);
+        PHYSICAL_ADDRESS PtPa          = {.QuadPart = PoolPa.QuadPart + (*NextFreePageIndex) * PAGE_SIZE};
+        Pd[Va.PdIndex].Present         = 1;
+        Pd[Va.PdIndex].Write           = 1;
+        Pd[Va.PdIndex].PageFrameNumber = PtPa.QuadPart >> 12;
+        (*NextFreePageIndex)++;
     }
 
     // --- Level 4: PT -> Page ---
-    pt[va.pt_index].Present         = 1;
-    pt[va.pt_index].Write           = 1;
-    pt[va.pt_index].PageFrameNumber = target_pa.QuadPart >> 12;
+    Pt[Va.PtIndex].Present         = 1;
+    Pt[Va.PtIndex].Write           = 1;
+    Pt[Va.PtIndex].PageFrameNumber = TargetPa.QuadPart >> 12;
 
     return STATUS_SUCCESS;
 }
