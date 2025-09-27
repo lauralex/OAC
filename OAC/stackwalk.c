@@ -194,6 +194,12 @@ BOOLEAN NmiCallback(
  */
 NTSTATUS InitializeNmiHandler(void)
 {
+    // Check if already initialized.
+    if (G_NmiCallbackHandle)
+    {
+        return STATUS_SUCCESS;
+    }
+
     // Initialize our context structure.
     RtlZeroMemory(&G_NmiContext, sizeof(NMI_CONTEXT));
     G_NmiContext.MagicSignature = NMI_CONTEXT_SIGNATURE;
@@ -301,14 +307,11 @@ PKTRAP_FRAME FindNmiTrapFrame(void)
 VOID TriggerNmiStackwalk(void)
 {
     // Initialize NMI handler if it not already initialized.
-    if (!G_NmiCallbackHandle)
+    NTSTATUS Status = InitializeNmiHandler();
+    if (!NT_SUCCESS(Status))
     {
-        NTSTATUS Status = InitializeNmiHandler();
-        if (!NT_SUCCESS(Status))
-        {
-            DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", Status);
-            return;
-        }
+        DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", Status);
+        return;
     }
 
     DbgPrint("[+] Triggering NMI on the current processor.\n");
