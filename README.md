@@ -17,16 +17,18 @@ The CR3 thrashing routine will then rewrite the **#PF** IDT entry to our own **#
 
 After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **#PF** IDT entry.
 
-### NMI Stackwalking Routine
+### NMI Stackwalking Routine & Blocking Check
 Here, we implemented a simple stackwalking routine that is triggered during a NMI.
 
 The *NMI callback* is initialized by calling `KeRegisterNmiCallback`, an undocumented kernel function.
 
 The *NMI* is triggered by calling `HalSendNMI`, another undocumented kernel function.
 
-When the NMI is received by the current logical processor, the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
+When the NMI is sent to all the logical processors (*except the sender one*), the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
 
 We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then we invoke some kernel functions that help us unwind each function.
+
+After a small period of time, we check if there was an *NMI blocking* (i.e., some NMIs were not processed by the callback). If yes, this would indicate a problem or malicious activity in the kernel.
 
 ### IOCTLs
 - **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
