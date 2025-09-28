@@ -1,0 +1,67 @@
+name: Build Windows Kernel Driver
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  SOLUTION_FILE_PATH: ./OAC.sln
+  BUILD_CONFIGURATION: Release
+  PLATFORM: x64
+  SDK_VERSION: 10.0.26100
+  WDK_VERSION: 10.0.26100
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # Install MSBuild
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.0.2
+
+    # Cache Windows SDK + WDK installation folders
+    - name: Cache Windows Kits
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:\Program Files (x86)\Windows Kits\10
+          C:\Program Files (x86)\Windows Kits\WDK
+        key: windows-kits-${{ runner.os }}-${{ env.SDK_VERSION }}-${{ env.WDK_VERSION }}
+
+    # Install SDK if cache miss
+    - name: Install Windows SDK
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        winget install --id Microsoft.WindowsSDK.${{ env.SDK_VERSION }} `
+          --accept-package-agreements --accept-source-agreements --silent
+
+    # Install WDK if cache miss
+    - name: Install Windows Driver Kit
+      if: steps.cache.outputs.cache-hit != 'true'
+      run: |
+        winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} `
+          --accept-package-agreements --accept-source-agreements --silent
+
+    # Restore NuGet packages if needed
+    - name: Restore NuGet packages
+      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
+
+    # Build the driver
+    - name: Build Driver
+      run: msbuild ${{ env.SOLUTION_FILE_PATH }} /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.PLATFORM }}
+
+    # Optionally, upload the .sys/.exe/.pdb as artifacts
+    - name: Upload Driver Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: driver-binaries
+        path: |
+          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.sys
+          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.exe
+          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
