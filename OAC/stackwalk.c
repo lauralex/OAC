@@ -63,7 +63,16 @@ BOOLEAN NmiCallback(
     //
     InterlockedDecrement(&NmiContext->PendingCount);
 
-    DbgPrint("[+] NMI callback triggered on CPU %d\n", KeGetCurrentProcessorNumberEx(NULL));
+    // --- Acquire Spinlock for Transactional Logging ---
+    // Since we are at HIGH_LEVEL IRQL, we use the "AtDpcLevel" variant.
+    KeAcquireSpinLockAtDpcLevel(&NmiContext->Lock);
+
+    PROCESSOR_NUMBER CurrentProcNum = {0};
+    KeGetCurrentProcessorNumberEx(&CurrentProcNum);
+
+    DbgPrint("===============================================================================\n");
+    DbgPrint(" NMI STACK TRACE FOR CPU %u (Group: %u)\n", CurrentProcNum.Number, CurrentProcNum.Group);
+    DbgPrint("===============================================================================\n");
 
     //
     // --- Unwind-Data-Based Stack Walk Logic ---
@@ -72,6 +81,8 @@ BOOLEAN NmiCallback(
     if (!TrapFrame)
     {
         DbgPrint("[-] Failed to locate KTRAP_FRAME on NMI stack.\n");
+        // Release the lock before returning.
+        KeReleaseSpinLockFromDpcLevel(&NmiContext->Lock);
         return TRUE; // We handled our NMI, but failed the walk.
     }
 
@@ -139,50 +150,50 @@ BOOLEAN NmiCallback(
         ULONG64 ImageBase   = 0;
         PVOID   HandlerData = NULL;
 
-        __try
+
+        // Step 2: Find the runtime function entry for the current instruction pointer.
+        // This reads the .pdata section of the PE file in memory.
+        PRUNTIME_FUNCTION RuntimeFunction = RtlLookupFunctionEntry(ContextRecord.Rip, &ImageBase, NULL);
+
+        if (!RuntimeFunction)
         {
-            // Step 2: Find the runtime function entry for the current instruction pointer.
-            // This reads the .pdata section of the PE file in memory.
-            PRUNTIME_FUNCTION RuntimeFunction = RtlLookupFunctionEntry(ContextRecord.Rip, &ImageBase, NULL);
-
-            if (!RuntimeFunction)
-            {
-                // We've likely reached the end of the call stack for which we have unwind data.
-                break;
-            }
-
-            // Step 3: Call RtlVirtualUnwind to "go back in time" to the caller's context.
-            // This function will read the current context, and using the unwind data,
-            // it will modify the context record to reflect the state of the calling function.
-
-            ULONG64 EstablisherFrame = {0};
-
-            RtlVirtualUnwind(
-                UNW_FLAG_NHANDLER,
-                ImageBase,
-                ContextRecord.Rip,
-                RuntimeFunction,
-                &ContextRecord,
-                &HandlerData,
-                &EstablisherFrame,
-                NULL);
-
-            // The Rip in the now-modified context record is our return address.
-            if (!ContextRecord.Rip)
-            {
-                break;
-            }
-
-            DbgPrint("  [%02d] 0x%p\n", i, (PVOID)ContextRecord.Rip);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            DbgPrint("  [!!] Exception during virtual unwind. Stack may be corrupt.\n");
+            // We've likely reached the end of the call stack for which we have unwind data.
             break;
         }
+
+        // Step 3: Call RtlVirtualUnwind to "go back in time" to the caller's context.
+        // This function will read the current context, and using the unwind data,
+        // it will modify the context record to reflect the state of the calling function.
+
+        // We must pass a valid pointer, but we don't use it, otherwise a page-fault may occur (and a BSOD :().
+        ULONG64 EstablisherFrame = {0};
+
+        RtlVirtualUnwind(
+            UNW_FLAG_NHANDLER,
+            ImageBase,
+            ContextRecord.Rip,
+            RuntimeFunction,
+            &ContextRecord,
+            &HandlerData,
+            &EstablisherFrame,
+            NULL);
+
+        // The Rip in the now-modified context record is our return address.
+        if (!ContextRecord.Rip)
+        {
+            break;
+        }
+
+        DbgPrint("  [%02d] 0x%p\n", i, (PVOID)ContextRecord.Rip);
     }
 
     DbgPrint("[+] --- End Unwind-Data Stack Walk ---\n");
+
+    // Add a newline for clarity.
+    DbgPrint("\n");
+
+    // Release the spinlock.
+    KeReleaseSpinLockFromDpcLevel(&NmiContext->Lock);
 
     return TRUE;
 }
@@ -306,35 +317,110 @@ PKTRAP_FRAME FindNmiTrapFrame(void)
  */
 VOID TriggerNmiStackwalk(void)
 {
-    // Initialize NMI handler if it not already initialized.
-    NTSTATUS Status = InitializeNmiHandler();
-    if (!NT_SUCCESS(Status))
+    // Assert that the IRQL is at PASSIVE_LEVEL using a macro (just to be sure that affinity changes are immediate).
+    PAGED_CODE()
+
+    // Pin execution to one CPU to avoid complications with thread migration.
+    KAFFINITY OldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
+
+    // Step 1: Initialize NMI handler if it not already initialized.
+    NTSTATUS InitializationStatus = InitializeNmiHandler();
+    if (!NT_SUCCESS(InitializationStatus))
     {
-        DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", Status);
+        DbgPrint("[-] Failed to initialize NMI handler: 0x%X\n", InitializationStatus);
         return;
     }
 
-    DbgPrint("[+] Triggering NMI on the current processor.\n");
+    // Step 2: Get the processor number of the core executing this request.
+    // We will skip sending an NMI to ourselves.
+    PROCESSOR_NUMBER CurrentProcNum = {0};
+    KeGetCurrentProcessorNumberEx(&CurrentProcNum);
 
-    KAFFINITY_EX Affinity = {0};
+    // Step 3: Get the total number of active processors across all processor groups.
+    ULONG TotalProcs = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
 
-    KeInitializeAffinityEx(&Affinity);
-    KeAddProcessorAffinityEx(&Affinity, KeGetCurrentProcessorNumberEx(NULL));
+    DbgPrint("[+] Request received on CPU %d (Group %d). Broadcasting NMIs to %d other processors...\n",
+             CurrentProcNum.Number, CurrentProcNum.Group, TotalProcs - 1);
 
-    // Print target affinity
-    DbgPrint("[+] Target CPU Affinity Bitmap: 0x%p\n", (PVOID)Affinity.Bitmap);
+    if (TotalProcs <= 1)
+    {
+        DbgPrint("[-] Only one processor detected. Cannot broadcast NMI.\n");
+        return;
+    }
 
-    //
-    // Increment our pending counter BEFORE sending the NMI.
-    // This creates the "pending" state that the NMI callback will check for.
-    //
-    InterlockedIncrement(&G_NmiContext.PendingCount);
+    // Step 4: Iterate through all active processors by their system-wide index.
 
-    //
-    // This is an undocumented function, but it is the standard way to
-    // programmatically trigger an NMI on a specific processor.
-    //
-    HalSendNMI(&Affinity);
+    for (ULONG ProcessorIndex = 0; ProcessorIndex < TotalProcs; ProcessorIndex++)
+    {
+        PROCESSOR_NUMBER TargetProcNum = {0};
+        NTSTATUS         Status        = KeGetProcessorNumberFromIndex(ProcessorIndex, &TargetProcNum);
 
-    DbgPrint("[+] NMI sent.\n");
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("[-] Failed to get processor number for index %d: 0x%X\n", ProcessorIndex, Status);
+            continue;
+        }
+
+        // Step 5: Check if the target processor is the same as the current one.
+        if (TargetProcNum.Group == CurrentProcNum.Group && TargetProcNum.Number == CurrentProcNum.Number)
+        {
+            // Skip sending NMI to ourselves.
+            continue;
+        }
+
+        // Step 6: Send the NMI to the target processor.
+
+        KAFFINITY_EX Affinity = {0};
+        KeInitializeAffinityEx(&Affinity);
+
+        // Set the affinity to our single target processor.
+        KeAddProcessorAffinityEx(&Affinity, ProcessorIndex);
+
+        //
+        // Increment our pending counter BEFORE sending the NMI.
+        // This creates the "pending" state that the NMI callback will check for.
+        //
+        InterlockedIncrement(&G_NmiContext.PendingCount);
+
+        //
+        // This is an undocumented function, but it is the standard way to
+        // programmatically trigger an NMI on a specific processor.
+        //
+        HalSendNMI(&Affinity);
+
+        DbgPrint("[+] NMI sent.\n");
+
+        // Add a small delay between each NMI.
+        LARGE_INTEGER Delay = {0};
+        Delay.QuadPart      = -10ll * 1000 * 50; // Delay for 50 milliseconds in 100-nanosecond intervals
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+
+    // Step 7: Wait for all NMIs to be handled. Wait up to 5 seconds.
+    LARGE_INTEGER Timeout      = {0};
+    Timeout.QuadPart           = -10ll * 1000 * 5000; // 5 seconds in 100-nanosecond intervals
+    LARGE_INTEGER WaitInterval = {0};
+    WaitInterval.QuadPart      = -10ll * 1000 * 100; // 100 milliseconds in 100-nanosecond intervals
+    while (G_NmiContext.PendingCount > 0 && Timeout.QuadPart < 0)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &WaitInterval);
+        Timeout.QuadPart -= WaitInterval.QuadPart;
+    }
+
+    // Step 8: Check if there was an NMI blocking issue.
+    if (G_NmiContext.PendingCount > 0)
+    {
+        DbgPrint("[-] Warning: Some NMIs were not handled within the timeout period. Pending count: %ld\n",
+                 G_NmiContext.PendingCount);
+        // Reset the pending count to avoid stale state.
+        G_NmiContext.PendingCount = 0;
+    }
+    else
+    {
+        DbgPrint("[+] All NMIs handled successfully.\n");
+    }
+
+
+    // Restore the original thread affinity.
+    KeRevertToUserAffinityThreadEx(OldAffinity);
 }

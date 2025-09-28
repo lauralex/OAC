@@ -13,6 +13,7 @@ typedef struct _NMI_CONTEXT
 {
     volatile LONG PendingCount;
     UINT64        MagicSignature; // A unique value to verify the context integrity.
+    KSPIN_LOCK    Lock;           // A spin lock for synchronizing access to the context.
 } NMI_CONTEXT, *PNMI_CONTEXT;
 
 // The global instance of our context structure.
