@@ -1,5 +1,6 @@
 #pragma once
 #include <ntddk.h>
+#include <intrin.h>
 
 struct _MACHINE_FRAME
 {
@@ -14,6 +15,20 @@ struct _MACHINE_FRAME
 inline __declspec(noinline) PVOID GetRip(void)
 {
     return _ReturnAddress();
+}
+
+inline LONG InterlockedMultiply(volatile LONG* Target, LONG Factor)
+{
+    LONG OldVal, NewVal;
+    do
+    {
+        OldVal = *Target;         // read current value
+        NewVal = OldVal * Factor; // compute new value
+        // try to swap in newVal if *Target is still oldVal
+    }
+    while (InterlockedCompareExchange(Target, NewVal, OldVal) != OldVal);
+
+    return NewVal; // returns the updated value
 }
 
 extern void _sgdt(void*); // MSVC-provided intrinsic

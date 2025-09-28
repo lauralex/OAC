@@ -144,8 +144,8 @@ BOOLEAN NmiCallback(
     DbgPrint("[+] --- Begin Unwind-Data Stack Walk ---\n");
     DbgPrint("  [00] 0x%p (Interrupted RIP)\n", (PVOID)ContextRecord.Rip);
 
-#define MAX_UNWIND_FRAMES 32
-    for (int i = 1; i < MAX_UNWIND_FRAMES; i++)
+
+    for (int i = 1; i < MAX_STACK_FRAMES; i++)
     {
         ULONG64 ImageBase   = 0;
         PVOID   HandlerData = NULL;
@@ -348,8 +348,11 @@ VOID TriggerNmiStackwalk(void)
         return;
     }
 
-    // Step 4: Iterate through all active processors by their system-wide index.
+    // Initialize an empty affinity mask.
+    KAFFINITY_EX Affinity = {0};
+    KeInitializeAffinityEx(&Affinity);
 
+    // Step 4: Iterate through all active processors by their system-wide index.
     for (ULONG ProcessorIndex = 0; ProcessorIndex < TotalProcs; ProcessorIndex++)
     {
         PROCESSOR_NUMBER TargetProcNum = {0};
@@ -368,12 +371,7 @@ VOID TriggerNmiStackwalk(void)
             continue;
         }
 
-        // Step 6: Send the NMI to the target processor.
-
-        KAFFINITY_EX Affinity = {0};
-        KeInitializeAffinityEx(&Affinity);
-
-        // Set the affinity to our single target processor.
+        // Add the target processor to the affinity mask.
         KeAddProcessorAffinityEx(&Affinity, ProcessorIndex);
 
         //
@@ -381,20 +379,24 @@ VOID TriggerNmiStackwalk(void)
         // This creates the "pending" state that the NMI callback will check for.
         //
         InterlockedIncrement(&G_NmiContext.PendingCount);
+    }
 
-        //
-        // This is an undocumented function, but it is the standard way to
-        // programmatically trigger an NMI on a specific processor.
-        //
+    // Multiply the G_NmiContext.PendingCount by the number of broadcasts we will do.
+    InterlockedMultiply(&G_NmiContext.PendingCount, NMI_MAX_BROADCAST_COUNT);
+
+    for (int NmiBroadcastCount = 0; NmiBroadcastCount < NMI_MAX_BROADCAST_COUNT; NmiBroadcastCount++)
+    {
+        DbgPrint("[*] Broadcasting NMI attempt %d...\n", NmiBroadcastCount + 1);
+        // Step 6: Send the NMI to the target processors.
         HalSendNMI(&Affinity);
 
-        DbgPrint("[+] NMI sent.\n");
-
-        // Add a small delay between each NMI.
-        LARGE_INTEGER Delay = {0};
-        Delay.QuadPart      = -10ll * 1000 * 50; // Delay for 50 milliseconds in 100-nanosecond intervals
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        // Wait a short moment to allow NMIs to be processed.
+        LARGE_INTEGER WaitInterval = {0};
+        WaitInterval.QuadPart      = -10ll * 1000 * 50; // 50 milliseconds in 100-nanosecond intervals
+        KeDelayExecutionThread(KernelMode, FALSE, &WaitInterval);
     }
+
+    DbgPrint("[+] NMIs sent.\n");
 
     // Step 7: Wait for all NMIs to be handled. Wait up to 5 seconds.
     LARGE_INTEGER Timeout      = {0};
@@ -408,7 +410,7 @@ VOID TriggerNmiStackwalk(void)
     }
 
     // Step 8: Check if there was an NMI blocking issue.
-    if (G_NmiContext.PendingCount > 0)
+    if (G_NmiContext.PendingCount != 0)
     {
         DbgPrint("[-] Warning: Some NMIs were not handled within the timeout period. Pending count: %ld\n",
                  G_NmiContext.PendingCount);

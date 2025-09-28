@@ -22,6 +22,12 @@ extern NMI_CONTEXT G_NmiContext;
 // The unique signature we will use to identify our NMI context.
 #define NMI_CONTEXT_SIGNATURE 0x494D4E43414F // "OACNMI" in ASCII
 
+// The number of times to broadcast NMIs to ensure delivery.
+#define NMI_MAX_BROADCAST_COUNT 30
+
+// The maximum number of stack frames to unwind during the stack walk.
+#define MAX_STACK_FRAMES 8
+
 // Global handle for the NMI callback registration.
 extern PVOID G_NmiCallbackHandle;
 
