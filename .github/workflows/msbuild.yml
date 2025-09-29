@@ -22,7 +22,7 @@ jobs:
 
     # Install MSBuild
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v1.0.2
+      uses: microsoft/setup-msbuild@v2.0.0
 
     # Cache Windows SDK + WDK installation folders
     - name: Cache Windows Kits
