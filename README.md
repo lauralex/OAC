@@ -41,7 +41,7 @@ During the NMI stackwalking, we gather all the Program Counters for each level o
 - **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
 - **IOCTL_TRIGGER_CR3_THRASH** (0x801): the main CR3 thrashing routine
 - **IOCTL_UNLOAD_DRIVER** (0x802): the driver unloading routine
-- **IOCTL_TRIGGER_NMI_STACKWALK** (0x803): the NMI stackwalking routine
+- **IOCTL_TRIGGER_NMI_STACKWALK** (0x803): the NMI stackwalking routine (including NMI blocking check and digital signature verification)
 
 
 ## Build [![Build Windows Kernel Driver](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
