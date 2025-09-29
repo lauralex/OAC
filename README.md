@@ -30,6 +30,13 @@ We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then w
 
 After a small period of time, we check if there was an *NMI blocking* (i.e., some NMIs were not processed by the callback). If yes, this would indicate a problem or malicious activity in the kernel.
 
+### Kernel Module Digital Signature Verification Routine
+During the NMI stackwalking, we gather all the Program Counters for each level of the call stack for each logical core. After that, we initiate a digital signature check routine, which works in the following way:
+1. Enqueue all the collected *Program Counters* (for the current logical core) to a synchronized linked list inside the **NMI Context** structure.
+2. Start a DPC routine (Deferred Procedure Call) which will process all the elements in this synchronized linked list.
+3. Check if each Program Counter in the list is in a *valid region* (i.e., a signed kernel module). An undocumented kernel function (`CiValidateFileObject`) is called for this purpose.
+4. Print the verification state as a debug message: *CORRECT* or **INCORRECT** signature.
+
 ### IOCTLs
 - **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
 - **IOCTL_TRIGGER_CR3_THRASH** (0x801): the main CR3 thrashing routine
