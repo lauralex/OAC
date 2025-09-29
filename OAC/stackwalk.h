@@ -1,62 +1,93 @@
+/**
+ * @file stackwalk.h
+ * @brief Defines structures and interfaces for NMI-based stack walking and deferred analysis.
+ */
 #pragma once
 #include <ntddk.h>
 
 // =================================================================================================
-// == NMI Context and Globals
+// == Constants and Definitions
+// =================================================================================================
+
+// Unique signature to validate our NMI context structure.
+#define NMI_CONTEXT_SIGNATURE   0x494D4E43414F // "OACNMI" in ASCII
+
+// Maximum number of times to broadcast NMIs to other processors.
+#define NMI_MAX_BROADCAST_COUNT 30
+
+// Maximum stack frames to capture during a stack walk.
+#define MAX_STACK_FRAMES        8
+
+/**
+ * @def MAX_PENDING_CHECKS
+ * @brief The maximum number of RIPs we can queue from NMIs before they are processed.
+ *
+ * This avoids dynamic allocation in the NMI handler by using a pre-allocated pool.
+ * If more NMIs arrive than this limit before the worker thread can process them,
+ * subsequent RIPs will be dropped until the pool is cleared.
+ */
+#define MAX_PENDING_CHECKS      128
+
+
+// =================================================================================================
+// == Structures
 // =================================================================================================
 
 /**
- * @brief A context structure to be passed to the NMI callback.
- * This provides a verifiable link between our registration and the callback invocation.
+ * @struct _SIGNATURE_CHECK_ITEM
+ * @brief Represents a single piece of work to be processed by the deferred worker thread.
+ */
+typedef struct _SIGNATURE_CHECK_ITEM
+{
+    LIST_ENTRY ListEntry; //!< Linked list entry for the queue.
+    PVOID      Rip;       //!< The instruction pointer captured during the NMI.
+} SIGNATURE_CHECK_ITEM, *PSIGNATURE_CHECK_ITEM;
+
+/**
+ * @struct _NMI_CONTEXT
+ * @brief A context structure passed to the NMI callback and used for deferred work.
  */
 typedef struct _NMI_CONTEXT
 {
-    volatile LONG PendingCount;
-    UINT64        MagicSignature; // A unique value to verify the context integrity.
-    KSPIN_LOCK    Lock;           // A spin lock for synchronizing access to the context.
+    volatile LONG PendingCount;   //!< Tracks pending NMIs to be handled.
+    UINT64        MagicSignature; //!< A unique value to verify context integrity.
+    KSPIN_LOCK    Lock;           //!< General spinlock for context data (not for the list).
+
+    // --- Deferred Checking Resources ---
+    LIST_ENTRY      PendingCheckList;  //!< Lock-free list of RIPs to check.
+    KSPIN_LOCK      CheckListLock;     //!< Spinlock for the pending check list.
+    KDPC            SignatureDpc;      //!< DPC to schedule the worker thread.
+    WORK_QUEUE_ITEM SignatureWorkItem; //!< The work item for the deferred check.
+    volatile LONG   IsWorkerActive;    //!< A flag to prevent re-queuing an already active worker thread.
+
+    // --- NMI-Safe Pre-allocated Pool ---
+    SIGNATURE_CHECK_ITEM CheckItemPool[MAX_PENDING_CHECKS]; //!< Pool of items to avoid allocation at HIGH_LEVEL IRQL.
+    volatile LONG        PoolIndex;                         //!< Atomic index for the next free item in the pool.
 } NMI_CONTEXT, *PNMI_CONTEXT;
-
-// The global instance of our context structure.
-extern NMI_CONTEXT G_NmiContext;
-
-// The unique signature we will use to identify our NMI context.
-#define NMI_CONTEXT_SIGNATURE 0x494D4E43414F // "OACNMI" in ASCII
-
-// The number of times to broadcast NMIs to ensure delivery.
-#define NMI_MAX_BROADCAST_COUNT 30
-
-// The maximum number of stack frames to unwind during the stack walk.
-#define MAX_STACK_FRAMES 8
-
-// Global handle for the NMI callback registration.
-extern PVOID G_NmiCallbackHandle;
 
 
 // =================================================================================================
-// == NMI Callback and Helper Functions
+// == Public Function Prototypes
 // =================================================================================================
 
 /**
- * @brief Initializes the NMI callback for stack walking.
- *
- * @return STATUS_SUCCESS on success, or an error code.
+ * @brief Initializes the NMI callback and deferred checking mechanism.
+ * @return STATUS_SUCCESS on success, otherwise an error code.
  */
 NTSTATUS InitializeNmiHandler(void);
 
 /**
- * @brief Deinitializes the NMI callback.
+ * @brief Deinitializes the NMI callback and cleans up all associated resources.
  */
 VOID DeinitializeNmiHandler(void);
 
 /**
- * @brief Triggers an NMI on the current processor to perform a stack walk.
+ * @brief Triggers NMIs on other processors to perform a stack walk and signature check.
  */
 VOID TriggerNmiStackwalk(void);
 
 /**
  * @brief Locates the KTRAP_FRAME saved on the NMI stack.
- * This is an advanced technique that inspects core system structures.
- *
  * @return A pointer to the KTRAP_FRAME, or NULL on failure.
  */
 PKTRAP_FRAME FindNmiTrapFrame(void);

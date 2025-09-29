@@ -127,6 +127,12 @@ typedef struct _UNWIND_HISTORY_TABLE
     UNWIND_HISTORY_TABLE_ENTRY Entry[UNWIND_HISTORY_TABLE_SIZE];
 } UNWIND_HISTORY_TABLE, *PUNWIND_HISTORY_TABLE;
 
+typedef struct _FILETIME
+{
+    UINT32 LowDateTime;
+    UINT32 HighDateTime;
+} FILETIME, *PFILETIME, *LPFILETIME;
+
 // We must define IoCreateDriver as it's not in the WDK headers.
 // This function creates a DRIVER_OBJECT.
 //
@@ -173,4 +179,11 @@ RtlLookupFunctionEntry(
     _In_ DWORD64                      ControlPc,
     _Out_ PDWORD64                    ImageBase,
     _Inout_opt_ PUNWIND_HISTORY_TABLE HistoryTable
+);
+
+PVOID
+NTAPI
+RtlPcToFileHeader(
+    _In_ PVOID   PcValue,
+    _Out_ PVOID* BaseOfImage
 );

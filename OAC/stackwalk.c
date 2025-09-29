@@ -4,6 +4,8 @@
 #include "arch.h"
 #include "ia32.h"
 #include "internals.h"
+#include "globals.h"
+#include "ci.h"
 
 //
 // The global instance of our context structure.
@@ -14,6 +16,21 @@ NMI_CONTEXT G_NmiContext = {0};
 // Global handle for the NMI callback registration.
 //
 PVOID G_NmiCallbackHandle = NULL;
+
+//
+// === Internal (Static) Function Prototypes ===
+//
+// By declaring these as static, we ensure they are only visible within this translation unit,
+// which is proper encapsulation for internal helper functions.
+//
+static VOID SignatureCheckDpcRoutine(
+    _In_ PKDPC     Dpc, _In_opt_ PVOID             DeferredContext,
+    _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2
+);
+
+static VOID SignatureCheckWorkerRoutine(
+    _In_ PVOID Parameter
+);
 
 
 /**
@@ -53,15 +70,11 @@ BOOLEAN NmiCallback(
     // Step 3: Check if this NMI was triggered by our driver.
     // If the pending count is 0, it's an unexpected NMI (e.g., hardware error).
     //
-    if (NmiContext->PendingCount == 0)
+    if (InterlockedDecrement(&NmiContext->PendingCount) < 0)
     {
-        return FALSE;
+        InterlockedIncrement(&NmiContext->PendingCount);
+        return FALSE; // Not our NMI, let others handle it.
     }
-
-    //
-    // This NMI is confirmed to be for us. Atomically decrement the pending count.
-    //
-    InterlockedDecrement(&NmiContext->PendingCount);
 
     // --- Acquire Spinlock for Transactional Logging ---
     // Since we are at HIGH_LEVEL IRQL, we use the "AtDpcLevel" variant.
@@ -144,6 +157,8 @@ BOOLEAN NmiCallback(
     DbgPrint("[+] --- Begin Unwind-Data Stack Walk ---\n");
     DbgPrint("  [00] 0x%p (Interrupted RIP)\n", (PVOID)ContextRecord.Rip);
 
+    ULONG64 RetrievedRipArray[MAX_STACK_FRAMES] = {0};
+    RetrievedRipArray[0]                        = ContextRecord.Rip;
 
     for (int i = 1; i < MAX_STACK_FRAMES; i++)
     {
@@ -185,6 +200,7 @@ BOOLEAN NmiCallback(
         }
 
         DbgPrint("  [%02d] 0x%p\n", i, (PVOID)ContextRecord.Rip);
+        RetrievedRipArray[i] = ContextRecord.Rip;
     }
 
     DbgPrint("[+] --- End Unwind-Data Stack Walk ---\n");
@@ -195,7 +211,87 @@ BOOLEAN NmiCallback(
     // Release the spinlock.
     KeReleaseSpinLockFromDpcLevel(&NmiContext->Lock);
 
+    //
+    // Here we check if all the retrieved RIPs are from signed modules.
+    //
+    for (int RipIndex = 0; RipIndex < MAX_STACK_FRAMES && RetrievedRipArray[RipIndex] != 0; RipIndex++)
+    {
+        // Use a pre-allocated item from our pool. This is safe at HIGH_LEVEL IRQL.
+        LONG ItemIndex = InterlockedIncrement(&NmiContext->PoolIndex) - 1;
+        if (ItemIndex < MAX_PENDING_CHECKS)
+        {
+            PSIGNATURE_CHECK_ITEM CheckItem = &NmiContext->CheckItemPool[ItemIndex];
+            CheckItem->Rip = (PVOID)RetrievedRipArray[RipIndex]; // Use the last retrieved RIP for checking.
+
+            ExInterlockedInsertTailList(&NmiContext->PendingCheckList, &CheckItem->ListEntry,
+                                        &NmiContext->CheckListLock);
+        }
+        else
+        {
+            DbgPrint("[-] Signature check pool exhausted, dropping signature verification for this NMI.\n");
+            break;
+        }
+    }
+
+    // Schedule the DPC to queue the worker thread.
+    KeInsertQueueDpc(&NmiContext->SignatureDpc, NULL, NULL);
+
     return TRUE;
+}
+
+// =================================================================================================
+// == Deferred Checking Routines
+// =================================================================================================
+
+/**
+ * @brief DPC routine that queues the worker thread.
+ * @note Runs at DISPATCH_LEVEL.
+ */
+static VOID SignatureCheckDpcRoutine(
+    _In_ PKDPC     Dpc, _In_opt_ PVOID             DeferredContext,
+    _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2
+)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    // Attempt to transition the worker state from inactive (0) to active (1).
+    if (InterlockedCompareExchange(&G_NmiContext.IsWorkerActive, 1, 0) == 0)
+    {
+        // We successfully claimed the worker. Queue it.
+        ExQueueWorkItem(&G_NmiContext.SignatureWorkItem, DelayedWorkQueue);
+    }
+    // If the state was already 1, another DPC has already queued the worker,
+    // or the worker is currently running. We do nothing and let the active
+    // worker handle the item we just added to the list.
+}
+
+/**
+ * @brief Worker thread routine that performs the robust signature check.
+ * @note Runs at PASSIVE_LEVEL.
+ */
+static VOID SignatureCheckWorkerRoutine(
+    _In_ PVOID Parameter
+)
+{
+    UNREFERENCED_PARAMETER(Parameter);
+
+    PLIST_ENTRY ListEntry;
+    while ((ListEntry = ExInterlockedRemoveHeadList(&G_NmiContext.PendingCheckList, &G_NmiContext.CheckListLock)) !=
+        NULL)
+    {
+        PSIGNATURE_CHECK_ITEM CheckItem = CONTAINING_RECORD(ListEntry, SIGNATURE_CHECK_ITEM, ListEntry);
+        if (CheckItem)
+        {
+            // This function call does all the heavy lifting at PASSIVE_LEVEL.
+            VerifyModuleSignatureByRip(CheckItem->Rip);
+        }
+    }
+
+    // Reset the pool index so the pre-allocated items can be reused.
+    InterlockedExchange(&G_NmiContext.PoolIndex, 0);
 }
 
 /**
@@ -211,10 +307,28 @@ NTSTATUS InitializeNmiHandler(void)
         return STATUS_SUCCESS;
     }
 
+    // Resolve CI functions before setting up the NMI handler.
+    NTSTATUS Status = ResolveCiFunctions();
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("[-] Failed to resolve CI functions: 0x%X\n", Status);
+        return Status;
+    }
+
     // Initialize our context structure.
     RtlZeroMemory(&G_NmiContext, sizeof(NMI_CONTEXT));
     G_NmiContext.MagicSignature = NMI_CONTEXT_SIGNATURE;
-    G_NmiContext.PendingCount   = 0;
+    G_NmiContext.PoolIndex      = 0;
+    KeInitializeSpinLock(&G_NmiContext.Lock);
+
+    // Initialize deferred checking resources.
+    InitializeListHead(&G_NmiContext.PendingCheckList);
+    KeInitializeSpinLock(&G_NmiContext.CheckListLock);
+    KeInitializeDpc(&G_NmiContext.SignatureDpc, SignatureCheckDpcRoutine, NULL);
+    ExInitializeWorkItem(&G_NmiContext.SignatureWorkItem, SignatureCheckWorkerRoutine, NULL);
+
+    // Ensure the pending count starts at 0.
+    G_NmiContext.PendingCount = 0;
 
     //
     // Register the NMI callback.
@@ -226,7 +340,7 @@ NTSTATUS InitializeNmiHandler(void)
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    DbgPrint("[+] NMI callback registered successfully with context validation.\n");
+    DbgPrint("[+] NMI callback and deferred checker registered successfully.\n");
     return STATUS_SUCCESS;
 }
 

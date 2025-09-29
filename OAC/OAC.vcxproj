@@ -106,18 +106,23 @@
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="ci.c" />
     <ClCompile Include="cr3_thrasher.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="mm.c" />
+    <ClCompile Include="module.c" />
     <ClCompile Include="stackwalk.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="arch.h" />
+    <ClInclude Include="ci.h" />
     <ClInclude Include="cr3_thrasher.h" />
+    <ClInclude Include="globals.h" />
     <ClInclude Include="ia32.h" />
     <ClInclude Include="internals.h" />
     <ClInclude Include="isr.h" />
     <ClInclude Include="mm.h" />
+    <ClInclude Include="module.h" />
     <ClInclude Include="stackwalk.h" />
   </ItemGroup>
   <ItemGroup>

@@ -2,7 +2,7 @@
 #include <ntddk.h>
 #include <intrin.h>
 
-struct _MACHINE_FRAME
+typedef struct _MACHINE_FRAME
 {
     UINT64 ErrorCode;
     UINT64 Rip;

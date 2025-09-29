@@ -31,6 +31,12 @@
     <ClCompile Include="stackwalk.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="module.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ci.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
@@ -52,6 +58,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="stackwalk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="module.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ci.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="globals.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
