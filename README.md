@@ -44,7 +44,7 @@ During the NMI stackwalking, we gather all the Program Counters for each level o
 - **IOCTL_TRIGGER_NMI_STACKWALK** (0x803): the NMI stackwalking routine
 
 
-## Build
+## Build [![Build Windows Kernel Driver](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
 ### Requirements
 - Visual Studio (2022 preferably)
 - Windows Software Development Kit ([SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/))
