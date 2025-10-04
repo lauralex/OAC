@@ -6,17 +6,24 @@
 #include "arch.h"
 #include "cr3_thrasher.h"
 #include "ia32.h"
+#include "serial_logger.h"
 
 // Global variable to share the original CR3 with our assembly ISR.
 // This MUST be global.
 UINT64 G_OriginalCr3 = 0;
 
+// Global array to hold a copy of the IDT for our ISR to use.
+SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 Cr3ThrashIdtArray[256] = {0};
+
 // =================================================================================================
 // == CR3 Thrashing / Anti-Hypervisor Test Routine
 // =================================================================================================
 
-VOID TriggerCr3Thrash(void)
+VOID TriggerCr3Thrash(VOID)
 {
+    // Initialize the serial logger
+    LoggerInit();
+
     PHYSICAL_ADDRESS NewPml4Pa     = {0};
     PVOID            PageTablePool = NULL;
 
@@ -40,8 +47,13 @@ VOID TriggerCr3Thrash(void)
     // The first page of the pool is the PML4. Subsequent pages are allocated as needed.
     ULONG NextFreePageIdx = 1;
 
+    // Pin execution to the current processor.
+    KAFFINITY OldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
+
+    DbgPrint("[+] Pinning thread to current processor.\n");
+
     // Get the IDT
-    SEGMENT_DESCRIPTOR_REGISTER_64 Idtr;
+    SEGMENT_DESCRIPTOR_REGISTER_64 Idtr = {0};
     __sidt(&Idtr);
 
     // Step 1: Set up our minimal page tables
@@ -52,10 +64,15 @@ VOID TriggerCr3Thrash(void)
     MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, &PageFaultIsr);
     MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, &G_OriginalCr3);
     MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, (PVOID)Idtr.BaseAddress);
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, Cr3ThrashIdtArray);
 
+    // Map the current RIP region
     PVOID CurrentRip = GetRip();
     DbgPrint("[*] Current RIP: 0x%p\n", CurrentRip);
     MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, CurrentRip);
+
+    // Map also one page ahead (just in case)
+    MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, (PUCHAR)CurrentRip + 0x1000);
 
     // Handle IDT spanning a page boundary
     if (((ULONG_PTR)Idtr.BaseAddress & ~0xFFF) != (((ULONG_PTR)Idtr.BaseAddress + Idtr.Limit) & ~0xFFF))
@@ -64,48 +81,24 @@ VOID TriggerCr3Thrash(void)
                                      (PVOID)((PUCHAR)Idtr.BaseAddress + Idtr.Limit));
     }
 
-    DbgPrint("[+] Pinning thread to current processor.\n");
-
-    // Pin execution to the current processor.
-    KAFFINITY OldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
-
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* PageFaultDescriptor = (SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64*)(Idtr.BaseAddress
-        + (14 * sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64)));
-
-
-    // Print the address of the IDT entry
-    DbgPrint("[*] IDT pageFaultDescriptor: 0x%p\n", PageFaultDescriptor);
-
     // Save the original CR3
     G_OriginalCr3 = __readcr3();
     DbgPrint("[*] Original CR3: 0x%llX\n", G_OriginalCr3);
 
-    // Create a new IDT entry for our custom ISR
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 NewPfDescriptor = {0};
+    // Copy the original IDT to our global array for the ISR to use.
+    RtlCopyMemory(Cr3ThrashIdtArray, (PVOID)Idtr.BaseAddress, sizeof(Cr3ThrashIdtArray));
 
-    NewPfDescriptor.OffsetLow                = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
-    NewPfDescriptor.SegmentSelector          = PageFaultDescriptor->SegmentSelector;          // Kernel code segment
-    NewPfDescriptor.Type                     = PageFaultDescriptor->Type;                     // 64-bit interrupt gate
-    NewPfDescriptor.DescriptorPrivilegeLevel = PageFaultDescriptor->DescriptorPrivilegeLevel; // Kernel level
-    NewPfDescriptor.Present                  = PageFaultDescriptor->Present;
-    NewPfDescriptor.OffsetMiddle             = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
-    NewPfDescriptor.OffsetHigh               = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
-    NewPfDescriptor.InterruptStackTable      = PageFaultDescriptor->InterruptStackTable; // Use same IST as original
-    NewPfDescriptor.Reserved                 = PageFaultDescriptor->Reserved;
+    // Modify the IDT entry for the Page Fault (vector 14) to point to our custom handler.
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* NewPfDescriptor = &Cr3ThrashIdtArray[14];
 
+    NewPfDescriptor->OffsetLow    = (UINT16)((UINT64)PageFaultIsr & 0xFFFF);
+    NewPfDescriptor->OffsetMiddle = (UINT16)(((UINT64)PageFaultIsr >> 16) & 0xFFFF);
+    NewPfDescriptor->OffsetHigh   = (UINT32)(((UINT64)PageFaultIsr >> 32) & 0xFFFFFFFF);
 
     // Discover the existing IST stack used by the default PF handler
-    UINT32 IstIndex = PageFaultDescriptor->InterruptStackTable;
-    if (IstIndex == 0)
-    {
-        DbgPrint("[-] Original Page Fault handler does not use IST. Aborting.\n");
-        KeRevertToUserAffinityThreadEx(OldAffinity);
-        MmFreeContiguousMemory(PageTablePool);
-        return;
-    }
+    UINT32 IstIndex = NewPfDescriptor->InterruptStackTable;
 
-    DbgPrint("[*] Original Page Fault handler IST index: %u\n", IstIndex);
-
+    // We must locate the TSS (Task State Segment) to find the interrupt stack pointers.
     SEGMENT_DESCRIPTOR_REGISTER_64 Gdtr        = {0};
     SEGMENT_SELECTOR               TssSelector = {0};
     _sgdt(&Gdtr);
@@ -120,14 +113,28 @@ VOID TriggerCr3Thrash(void)
 
     TASK_STATE_SEGMENT_64* Tss = (TASK_STATE_SEGMENT_64*)TssBase;
 
-    // Get the stack top from the correct IST entry.
-    // The TSS struct has Ist1..7, which corresponds to indices 1..7.
-    UINT64 IstStackTop  = *(&Tss->Ist1 + (IstIndex - 1));
-    UINT64 IstStackBase = IstStackTop - 0x6000; // Assume 24KB stack size
-    DbgPrint("[*] IST stack for PF handler: 0x%llX - 0x%llX\n", IstStackBase, IstStackTop);
+    UINT64 StackTop  = 0;
+    UINT64 StackBase = 0;
+
+    if (IstIndex == 0)
+    {
+        // IST index is 0, which means we use the legacy mechanism. For a ring-0 interrupt,
+        // the CPU will use the RSP0 field from the TSS.
+        DbgPrint("[*] Original Page Fault handler does not use IST. Using legacy RSP0 stack.\n");
+        StackTop  = Tss->Rsp0;
+        StackBase = StackTop - 0x10000; // Assume 64KB maximum stack size
+    }
+    else
+    {
+        // An IST index is specified. Get the stack top from the correct IST entry.
+        // The TSS struct has Ist1..7, which corresponds to indices 1..7.
+        DbgPrint("[*] Original Page Fault handler IST index: %u\n", IstIndex);
+        StackTop  = *(&Tss->Ist1 + (IstIndex - 1));
+        StackBase = StackTop - 0x10000; // Assume 64KB maximum stack size
+    }
 
     // Map all pages of the discovered IST stack
-    for (UINT64 Addr = IstStackBase; Addr < IstStackTop; Addr += PAGE_SIZE)
+    for (UINT64 Addr = StackBase; Addr < StackTop; Addr += PAGE_SIZE)
     {
         MapVirtualAddressDynamically(PageTablePool, &NextFreePageIdx, (PVOID)Addr);
     }
@@ -138,22 +145,10 @@ VOID TriggerCr3Thrash(void)
     // --- CRITICAL SECTION START ---
     _disable(); // Disable Interrupts
 
-    // == BYPASS WRITE PROTECTION TO MODIFY IDT ==
-    UINT64 OriginalCr0 = __readcr0();
-    UINT64 NewCr0      = OriginalCr0 & (~0x10000); // Clear WP bit (bit 16)
-    __writecr0(NewCr0);
-    // ===========================================
-
-    // Save the original Page Fault handler entry struct
-    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 OriginalPfDescriptor = {0};
-    RtlCopyMemory(&OriginalPfDescriptor, PageFaultDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
-
-    // Overwrite the IDT entry for the Page Fault handler
-    RtlCopyMemory(PageFaultDescriptor, &NewPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
-
-    // == RE-ENABLE WRITE PROTECTION IMMEDIATELY ==
-    __writecr0(OriginalCr0);
-    // ============================================
+    // Swap the IDTR to point to our modified IDT with the custom PF handler.
+    SEGMENT_DESCRIPTOR_REGISTER_64 Cr3ThrashIdtr = Idtr;
+    Cr3ThrashIdtr.BaseAddress                    = (UINT64)Cr3ThrashIdtArray;
+    __lidt(&Cr3ThrashIdtr);
 
     // Thrash CR3 to trigger page faults
     CR3 Cr3                    = {.AsUInt = G_OriginalCr3};
@@ -161,28 +156,19 @@ VOID TriggerCr3Thrash(void)
 
     __writecr3(Cr3.AsUInt);
 
-    // Cause an unconditional VM-exit on some hypervisors.
-    _invd();
+    // Cause an unconditional VM-exit.
+    int DummyCpuId[4] = {0};
+    __cpuid(DummyCpuId, 0);
 
     // Deliberately cause a page fault. This MUST fail.
     // The write is volatile to prevent compiler optimization.
-    *(volatile char*)0xDEADBEEF = 1;
+    *(volatile char*)0x0 = 1;
 
     // --- EXECUTION RESUMES HERE AFTER ISR RESTORES ORIGINAL CR3 ---
     // The CPU state is now back to normal, but interrupts are still off.
 
-    // == BYPASS WRITE PROTECTION TO MODIFY IDT ==
-    OriginalCr0 = __readcr0();
-    NewCr0      = OriginalCr0 & (~0x10000); // Clear WP bit (bit 16)
-    __writecr0(NewCr0);
-    // ===========================================
-
-    // Restore the original IDT entry
-    RtlCopyMemory(PageFaultDescriptor, &OriginalPfDescriptor, sizeof(SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64));
-
-    // == RE-ENABLE WRITE PROTECTION IMMEDIATELY ==
-    __writecr0(OriginalCr0);
-    // ============================================
+    // Restore the original IDTR
+    __lidt(&Idtr);
 
     // Restore original CR3 (should already be restored by the ISR, but just in case)
     __writecr3(G_OriginalCr3);

@@ -94,8 +94,8 @@ NTSTATUS VerifyModuleSignatureByRip(
     // Initialize policy structures on the stack
     POLICY_INFO SignerPolicy    = {0};
     POLICY_INFO TimestampPolicy = {0};
-    SignerPolicy.StructSize    = sizeof(POLICY_INFO);
-    TimestampPolicy.StructSize = sizeof(POLICY_INFO);
+    SignerPolicy.StructSize     = sizeof(POLICY_INFO);
+    TimestampPolicy.StructSize  = sizeof(POLICY_INFO);
 
     InitializeObjectAttributes(&ObjAttr, &ModuleEntry->FullDllName, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL,
                                NULL)
@@ -104,7 +104,7 @@ NTSTATUS VerifyModuleSignatureByRip(
     {
         Status = ZwCreateFile(&FileHandle, FILE_READ_DATA | SYNCHRONIZE, &ObjAttr, &IoStatusBlock, NULL,
                               FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN, FILE_SYNCHRONOUS_IO_NONALERT, NULL, 0);
-        if (!NT_SUCCESS(Status))
+        if (!NT_SUCCESS(Status) || !FileHandle)
         {
             DbgPrint("[-] ZwCreateFile failed with status 0x%X for %wZ\n", Status, &ModuleEntry->FullDllName);
             __leave;
@@ -112,14 +112,18 @@ NTSTATUS VerifyModuleSignatureByRip(
 
         Status = ObReferenceObjectByHandle(FileHandle, FILE_READ_DATA, *IoFileObjectType, KernelMode,
                                            (PVOID*)&FileObject, NULL);
-        if (!NT_SUCCESS(Status))
+        if (!NT_SUCCESS(Status) || !FileObject)
         {
             DbgPrint("[-] ObReferenceObjectByHandle failed with status 0x%X\n", Status);
             __leave;
         }
-        LARGE_INTEGER SigningTime = {0};
-        Status = G_CiValidateFileObject(FileObject, 0, 0, &SignerPolicy, &TimestampPolicy, &SigningTime, NULL, NULL,
-                                        NULL);
+        LARGE_INTEGER SigningTime      = {0};
+        INT           DigestIdentifier = 0;
+        INT           DigestSize       = 64; // Minimum size for SHA-512
+
+        Status = G_CiValidateFileObject(FileObject, 0, 0, &SignerPolicy, &TimestampPolicy, &SigningTime, NULL,
+                                        &DigestSize,
+                                        &DigestIdentifier);
         if (NT_SUCCESS(Status))
         {
             DbgPrint("[+] Module %wZ is digitally signed and trusted.\n", &ModuleEntry->BaseDllName);

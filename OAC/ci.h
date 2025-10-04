@@ -98,8 +98,7 @@ typedef PVOID (NTAPI*CI_FREE_POLICY_INFO)(
  * @return STATUS_SUCCESS if all required functions were found, otherwise an error status.
  * @note Must be called at PASSIVE_LEVEL during driver initialization.
  */
-NTSTATUS ResolveCiFunctions(
-    VOID);
+NTSTATUS ResolveCiFunctions(VOID);
 
 /**
  * @brief Verifies the digital signature of the module containing a given RIP.

@@ -99,6 +99,7 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
+      <PreprocessorDefinitions>ZYDIS_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link />
   </ItemDefinitionGroup>
@@ -108,10 +109,17 @@
   <ItemGroup>
     <ClCompile Include="ci.c" />
     <ClCompile Include="cr3_thrasher.c" />
+    <ClCompile Include="instruction_decoder.c">
+      <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</TreatWarningAsError>
+    </ClCompile>
     <ClCompile Include="main.c" />
     <ClCompile Include="mm.c" />
     <ClCompile Include="module.c" />
+    <ClCompile Include="serial_logger.c" />
     <ClCompile Include="stackwalk.c" />
+    <ClCompile Include="Zydis.c">
+      <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</TreatWarningAsError>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="arch.h" />
@@ -119,17 +127,22 @@
     <ClInclude Include="cr3_thrasher.h" />
     <ClInclude Include="globals.h" />
     <ClInclude Include="ia32.h" />
+    <ClInclude Include="instruction_decoder.h" />
     <ClInclude Include="internals.h" />
     <ClInclude Include="isr.h" />
     <ClInclude Include="mm.h" />
     <ClInclude Include="module.h" />
+    <ClInclude Include="serial_logger.h" />
     <ClInclude Include="stackwalk.h" />
+    <ClInclude Include="stackwalk_saferecovery.h" />
+    <ClInclude Include="Zydis.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="arch.asm" />
     <MASM Include="isr.asm">
       <FileType>Document</FileType>
     </MASM>
+    <MASM Include="stackwalk_saferecovery.asm" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

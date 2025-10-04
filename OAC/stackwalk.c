@@ -6,6 +6,9 @@
 #include "internals.h"
 #include "globals.h"
 #include "ci.h"
+#include "isr.h"
+#include "serial_logger.h"
+#include "stackwalk_saferecovery.h"
 
 //
 // The global instance of our context structure.
@@ -16,6 +19,11 @@ NMI_CONTEXT G_NmiContext = {0};
 // Global handle for the NMI callback registration.
 //
 PVOID G_NmiCallbackHandle = NULL;
+
+//
+// Global context for page fault recovery
+//
+SAFE_UNWIND_CONTEXT G_SafeUnwindContext[50] = {0};
 
 //
 // === Internal (Static) Function Prototypes ===
@@ -36,8 +44,8 @@ static VOID SignatureCheckWorkerRoutine(
 /**
  * @brief The NMI callback routine that performs a stack walk.
  *
- * @param Context A pointer to our driver-defined NMI_CONTEXT structure.
- * @param Handled A boolean that indicates if a previous NMI handler has already claimed this NMI.
+ * @param[inopt]    Context A pointer to our driver-defined NMI_CONTEXT structure.
+ * @param[in]       Handled A boolean that indicates if a previous NMI handler has already claimed this NMI.
  *
  * @return TRUE if the NMI was handled, otherwise FALSE.
  */
@@ -160,10 +168,12 @@ BOOLEAN NmiCallback(
     ULONG64 RetrievedRipArray[MAX_STACK_FRAMES] = {0};
     RetrievedRipArray[0]                        = ContextRecord.Rip;
 
+
     for (int i = 1; i < MAX_STACK_FRAMES; i++)
     {
-        ULONG64 ImageBase   = 0;
-        PVOID   HandlerData = NULL;
+        ULONG64 ImageBase        = 0;
+        PVOID   HandlerData      = NULL;
+        ULONG64 EstablisherFrame = {0};
 
 
         // Step 2: Find the runtime function entry for the current instruction pointer.
@@ -179,11 +189,7 @@ BOOLEAN NmiCallback(
         // Step 3: Call RtlVirtualUnwind to "go back in time" to the caller's context.
         // This function will read the current context, and using the unwind data,
         // it will modify the context record to reflect the state of the calling function.
-
-        // We must pass a valid pointer, but we don't use it, otherwise a page-fault may occur (and a BSOD :().
-        ULONG64 EstablisherFrame = {0};
-
-        RtlVirtualUnwind(
+        NTSTATUS Status = PerformUnwindInSafeRegion(
             UNW_FLAG_NHANDLER,
             ImageBase,
             ContextRecord.Rip,
@@ -192,6 +198,12 @@ BOOLEAN NmiCallback(
             &HandlerData,
             &EstablisherFrame,
             NULL);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DbgPrint("[-] RtlVirtualUnwind failed with status 0x%X\n", Status);
+            break;
+        }
 
         // The Rip in the now-modified context record is our return address.
         if (!ContextRecord.Rip)
@@ -233,10 +245,68 @@ BOOLEAN NmiCallback(
         }
     }
 
-    // Schedule the DPC to queue the worker thread.
-    KeInsertQueueDpc(&NmiContext->SignatureDpc, NULL, NULL);
+    // Schedule the DPC to queue the worker thread (if not already active).
+    if (InterlockedCompareExchange(&G_NmiContext.IsWorkerActive, 0, 0) == 0)
+    {
+        KeInsertQueueDpc(&NmiContext->SignatureDpc, NULL, NULL);
+    }
 
     return TRUE;
+}
+
+// =================================================================================================
+// == Safe Unwinding Implementation
+// =================================================================================================
+
+NTSTATUS NTAPI PerformUnwindInSafeRegion(
+    _In_ ULONG                                 HandlerType,
+    _In_ ULONG64                               ImageBase,
+    _In_ ULONG64                               ControlPc,
+    _In_ PRUNTIME_FUNCTION                     FunctionEntry,
+    _Inout_ PCONTEXT                           ContextRecord,
+    _Out_ PVOID*                               HandlerData,
+    _Out_ PULONG64                             EstablisherFrame,
+    _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
+)
+{
+    NTSTATUS                       Status = STATUS_SUCCESS;
+    SEGMENT_DESCRIPTOR_REGISTER_64 OriginalIdtr;
+    SEGMENT_DESCRIPTOR_REGISTER_64 UnwindingIdtr;
+
+    // Get the current IDT
+    __sidt(&OriginalIdtr);
+
+    // Swap the IDTR register to point to our modified IDT with the custom PF handler.
+    UnwindingIdtr             = OriginalIdtr;
+    UnwindingIdtr.BaseAddress = (UINT64)&G_NmiContext.UnwindingIdt;
+
+    _disable();             // Disable interrupts to safely modify the IDT
+    __lidt(&UnwindingIdtr); // Load our modified IDT
+
+    // *** DANGER ZONE ***
+    // Now, with modified #PF handler in place, call the function
+    // that might page fault.
+    SafeRtlVirtualUnwind(
+        HandlerType, ImageBase, ControlPc, FunctionEntry, ContextRecord,
+        HandlerData, EstablisherFrame, ContextPointers
+    );
+
+    // Check if a fault occurred during the unwind
+    if (G_SafeUnwindContext[KeGetCurrentProcessorNumberEx(NULL)].FaultOccurred)
+    {
+        Status = STATUS_ACCESS_VIOLATION; // Or another appropriate error code
+        G_SafeUnwindContext[KeGetCurrentProcessorNumberEx(NULL)].FaultOccurred = 0; // Reset for future calls
+    }
+    else
+    {
+        DbgPrint("[+] RtlVirtualUnwind completed without faults.\n");
+    }
+    // *** END DANGER ZONE ***
+
+    __lidt(&OriginalIdtr); // Restore the original IDT
+    _enable();             // Re-enable interrupts after restoring the original IDT
+
+    return Status;
 }
 
 // =================================================================================================
@@ -278,20 +348,44 @@ static VOID SignatureCheckWorkerRoutine(
 {
     UNREFERENCED_PARAMETER(Parameter);
 
-    PLIST_ENTRY ListEntry;
-    while ((ListEntry = ExInterlockedRemoveHeadList(&G_NmiContext.PendingCheckList, &G_NmiContext.CheckListLock)) !=
-        NULL)
+    for (;;)
     {
+        PLIST_ENTRY ListEntry =
+            ExInterlockedRemoveHeadList(&G_NmiContext.PendingCheckList, &G_NmiContext.CheckListLock);
+        if (!ListEntry)
+        {
+            // Reset pool index
+            InterlockedExchange(&G_NmiContext.PoolIndex, 0);
+
+            // List is empty. Mark worker as inactive.
+            InterlockedExchange(&G_NmiContext.IsWorkerActive, 0);
+
+            // Re-check to close race condition.
+            if (IsListEmpty(&G_NmiContext.PendingCheckList))
+            {
+                return; // Truly done, return.
+            }
+            else
+            {
+                // Item arrived. Try to become active again.
+                if (InterlockedCompareExchange(&G_NmiContext.IsWorkerActive, 1, 0) != 0)
+                {
+                    // Another DPC already re-scheduled. Our job is done.
+                    return;
+                }
+                // We re-activated. Continue processing.
+                continue;
+            }
+        }
+
+        // Process the retrieved item.
         PSIGNATURE_CHECK_ITEM CheckItem = CONTAINING_RECORD(ListEntry, SIGNATURE_CHECK_ITEM, ListEntry);
         if (CheckItem)
         {
-            // This function call does all the heavy lifting at PASSIVE_LEVEL.
+            // Perform the signature verification.
             VerifyModuleSignatureByRip(CheckItem->Rip);
         }
     }
-
-    // Reset the pool index so the pre-allocated items can be reused.
-    InterlockedExchange(&G_NmiContext.PoolIndex, 0);
 }
 
 /**
@@ -299,7 +393,7 @@ static VOID SignatureCheckWorkerRoutine(
  *
  * @return STATUS_SUCCESS on success, otherwise an error code.
  */
-NTSTATUS InitializeNmiHandler(void)
+NTSTATUS InitializeNmiHandler(VOID)
 {
     // Check if already initialized.
     if (G_NmiCallbackHandle)
@@ -320,6 +414,19 @@ NTSTATUS InitializeNmiHandler(void)
     G_NmiContext.MagicSignature = NMI_CONTEXT_SIGNATURE;
     G_NmiContext.PoolIndex      = 0;
     KeInitializeSpinLock(&G_NmiContext.Lock);
+
+    // Copy the original IDT for safety.
+    SEGMENT_DESCRIPTOR_REGISTER_64 Idtr = {0};
+    __sidt(&Idtr);
+
+    // Copy to the unwinding IDT backup.
+    RtlCopyMemory(G_NmiContext.UnwindingIdt, (PVOID)Idtr.BaseAddress, sizeof(G_NmiContext.UnwindingIdt));
+
+    // Modify the PF handler in the unwinding IDT to point to our recovery ISR.
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64* PfDescriptor = &G_NmiContext.UnwindingIdt[14];
+    PfDescriptor->OffsetLow                            = (USHORT)((ULONG64)PageFaultRecoveryIsr & 0xFFFF);
+    PfDescriptor->OffsetMiddle                         = (USHORT)(((ULONG64)PageFaultRecoveryIsr >> 16) & 0xFFFF);
+    PfDescriptor->OffsetHigh                           = (ULONG)(((ULONG64)PageFaultRecoveryIsr >> 32) & 0xFFFFFFFF);
 
     // Initialize deferred checking resources.
     InitializeListHead(&G_NmiContext.PendingCheckList);
@@ -347,7 +454,7 @@ NTSTATUS InitializeNmiHandler(void)
 /**
  * @brief Deinitializes the NMI callback.
  */
-VOID DeinitializeNmiHandler(void)
+VOID DeinitializeNmiHandler(VOID)
 {
     if (G_NmiCallbackHandle)
     {
@@ -363,7 +470,7 @@ VOID DeinitializeNmiHandler(void)
  *
  * @return A pointer to the KTRAP_FRAME, or NULL on failure.
  */
-PKTRAP_FRAME FindNmiTrapFrame(void)
+PKTRAP_FRAME FindNmiTrapFrame(VOID)
 {
     // Step 1: Get the IDT to find the NMI descriptor.
     SEGMENT_DESCRIPTOR_REGISTER_64 Idtr = {0};
@@ -429,10 +536,13 @@ PKTRAP_FRAME FindNmiTrapFrame(void)
 /**
  * @brief Triggers an NMI on the current processor to perform a stack walk.
  */
-VOID TriggerNmiStackwalk(void)
+VOID TriggerNmiStackwalk(VOID)
 {
     // Assert that the IRQL is at PASSIVE_LEVEL using a macro (just to be sure that affinity changes are immediate).
     PAGED_CODE()
+
+    // Initialize logger.
+    LoggerInit();
 
     // Pin execution to one CPU to avoid complications with thread migration.
     KAFFINITY OldAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)(1ULL << KeGetCurrentProcessorNumberEx(NULL)));
@@ -462,51 +572,50 @@ VOID TriggerNmiStackwalk(void)
         return;
     }
 
-    // Initialize an empty affinity mask.
-    KAFFINITY_EX Affinity = {0};
-    KeInitializeAffinityEx(&Affinity);
-
-    // Step 4: Iterate through all active processors by their system-wide index.
-    for (ULONG ProcessorIndex = 0; ProcessorIndex < TotalProcs; ProcessorIndex++)
-    {
-        PROCESSOR_NUMBER TargetProcNum = {0};
-        NTSTATUS         Status        = KeGetProcessorNumberFromIndex(ProcessorIndex, &TargetProcNum);
-
-        if (!NT_SUCCESS(Status))
-        {
-            DbgPrint("[-] Failed to get processor number for index %d: 0x%X\n", ProcessorIndex, Status);
-            continue;
-        }
-
-        // Step 5: Check if the target processor is the same as the current one.
-        if (TargetProcNum.Group == CurrentProcNum.Group && TargetProcNum.Number == CurrentProcNum.Number)
-        {
-            // Skip sending NMI to ourselves.
-            continue;
-        }
-
-        // Add the target processor to the affinity mask.
-        KeAddProcessorAffinityEx(&Affinity, ProcessorIndex);
-
-        //
-        // Increment our pending counter BEFORE sending the NMI.
-        // This creates the "pending" state that the NMI callback will check for.
-        //
-        InterlockedIncrement(&G_NmiContext.PendingCount);
-    }
-
-    // Multiply the G_NmiContext.PendingCount by the number of broadcasts we will do.
-    InterlockedMultiply(&G_NmiContext.PendingCount, NMI_MAX_BROADCAST_COUNT);
-
+    // Step 4: Broadcast NMIs to all other processors.
     for (int NmiBroadcastCount = 0; NmiBroadcastCount < NMI_MAX_BROADCAST_COUNT; NmiBroadcastCount++)
     {
+        for (ULONG ProcessorIndex = 0; ProcessorIndex < TotalProcs; ProcessorIndex++)
+        {
+            // Initialize an empty affinity mask.
+            KAFFINITY_EX Affinity = {0};
+            KeInitializeAffinityEx(&Affinity);
+
+
+            PROCESSOR_NUMBER TargetProcNum = {0};
+            NTSTATUS         Status        = KeGetProcessorNumberFromIndex(ProcessorIndex, &TargetProcNum);
+
+            if (!NT_SUCCESS(Status))
+            {
+                DbgPrint("[-] Failed to get processor number for index %d: 0x%X\n", ProcessorIndex, Status);
+                continue;
+            }
+
+            // Step 5: Check if the target processor is the same as the current one.
+            if (TargetProcNum.Group == CurrentProcNum.Group && TargetProcNum.Number == CurrentProcNum.Number)
+            {
+                // Skip sending NMI to ourselves.
+                continue;
+            }
+
+            // Add the target processor to the affinity mask.
+            KeAddProcessorAffinityEx(&Affinity, ProcessorIndex);
+
+            //
+            // Increment our pending counter BEFORE sending the NMI.
+            // This creates the "pending" state that the NMI callback will check for.
+            //
+            InterlockedIncrement(&G_NmiContext.PendingCount);
+
+            // Step 6: Send NMI to the target processor.
+            HalSendNMI(&Affinity);
+        }
+
         DbgPrint("[*] Broadcasting NMI attempt %d...\n", NmiBroadcastCount + 1);
-        // Step 6: Send the NMI to the target processors.
-        HalSendNMI(&Affinity);
 
         // Wait a short moment to allow NMIs to be processed.
         LARGE_INTEGER WaitInterval = {0};
-        WaitInterval.QuadPart      = -10ll * 1000 * 50; // 50 milliseconds in 100-nanosecond intervals
+        WaitInterval.QuadPart      = -10ll * 1000 * 250; // 250 milliseconds in 100-nanosecond intervals
         KeDelayExecutionThread(KernelMode, FALSE, &WaitInterval);
     }
 

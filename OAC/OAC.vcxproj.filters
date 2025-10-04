@@ -37,6 +37,15 @@
     <ClCompile Include="ci.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="serial_logger.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="instruction_decoder.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Zydis.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
@@ -69,12 +78,27 @@
     <ClInclude Include="globals.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="stackwalk_saferecovery.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="serial_logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="instruction_decoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Zydis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <MASM Include="isr.asm">
       <Filter>Source Files</Filter>
     </MASM>
     <MASM Include="arch.asm">
+      <Filter>Source Files</Filter>
+    </MASM>
+    <MASM Include="stackwalk_saferecovery.asm">
       <Filter>Source Files</Filter>
     </MASM>
   </ItemGroup>

@@ -2,7 +2,20 @@
 #include "ia32.h"
 #include "internals.h"
 
-NTSTATUS MapVirtualAddressDynamically(PVOID PoolBase, ULONG* NextFreePageIndex, PVOID TargetVa)
+/**
+ * @brief Dynamically maps a virtual address into our custom page table hierarchy,
+ *        allocating new tables from a pool as needed to resolve index collisions.
+ *
+ * @param[in] PoolBase The virtual address of our pre-allocated page pool.
+ * @param[inout] NextFreePageIndex A pointer to an index tracking the next free page in the pool.
+ * @param[in] TargetVa The virtual address of the page we want to map.
+ * @return STATUS_SUCCESS on success, or an error code.
+ */
+NTSTATUS MapVirtualAddressDynamically(
+    _In_ PVOID     PoolBase,
+    _Inout_ ULONG* NextFreePageIndex,
+    _In_ PVOID     TargetVa
+)
 {
     PHYSICAL_ADDRESS PoolPa   = MmGetPhysicalAddress(PoolBase);
     PHYSICAL_ADDRESS TargetPa = MmGetPhysicalAddress(TargetVa);

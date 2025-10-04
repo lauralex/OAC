@@ -5,6 +5,8 @@
 #pragma once
 #include <ntddk.h>
 
+#include "ia32.h"
+
 // =================================================================================================
 // == Constants and Definitions
 // =================================================================================================
@@ -13,10 +15,10 @@
 #define NMI_CONTEXT_SIGNATURE   0x494D4E43414F // "OACNMI" in ASCII
 
 // Maximum number of times to broadcast NMIs to other processors.
-#define NMI_MAX_BROADCAST_COUNT 30
+#define NMI_MAX_BROADCAST_COUNT 10
 
 // Maximum stack frames to capture during a stack walk.
-#define MAX_STACK_FRAMES        8
+#define MAX_STACK_FRAMES        5
 
 /**
  * @def MAX_PENDING_CHECKS
@@ -26,7 +28,7 @@
  * If more NMIs arrive than this limit before the worker thread can process them,
  * subsequent RIPs will be dropped until the pool is cleared.
  */
-#define MAX_PENDING_CHECKS      128
+#define MAX_PENDING_CHECKS      256
 
 
 // =================================================================================================
@@ -49,9 +51,10 @@ typedef struct _SIGNATURE_CHECK_ITEM
  */
 typedef struct _NMI_CONTEXT
 {
-    volatile LONG PendingCount;   //!< Tracks pending NMIs to be handled.
-    UINT64        MagicSignature; //!< A unique value to verify context integrity.
-    KSPIN_LOCK    Lock;           //!< General spinlock for context data (not for the list).
+    volatile LONG                        PendingCount;      //!< Tracks pending NMIs to be handled.
+    SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 UnwindingIdt[256]; //!< Modified Unwinding IDT.
+    UINT64                               MagicSignature;    //!< A unique value to verify context integrity.
+    KSPIN_LOCK                           Lock;              //!< General spinlock for context data (not for the list).
 
     // --- Deferred Checking Resources ---
     LIST_ENTRY      PendingCheckList;  //!< Lock-free list of RIPs to check.
@@ -74,20 +77,20 @@ typedef struct _NMI_CONTEXT
  * @brief Initializes the NMI callback and deferred checking mechanism.
  * @return STATUS_SUCCESS on success, otherwise an error code.
  */
-NTSTATUS InitializeNmiHandler(void);
+NTSTATUS InitializeNmiHandler(VOID);
 
 /**
  * @brief Deinitializes the NMI callback and cleans up all associated resources.
  */
-VOID DeinitializeNmiHandler(void);
+VOID DeinitializeNmiHandler(VOID);
 
 /**
  * @brief Triggers NMIs on other processors to perform a stack walk and signature check.
  */
-VOID TriggerNmiStackwalk(void);
+VOID TriggerNmiStackwalk(VOID);
 
 /**
  * @brief Locates the KTRAP_FRAME saved on the NMI stack.
  * @return A pointer to the KTRAP_FRAME, or NULL on failure.
  */
-PKTRAP_FRAME FindNmiTrapFrame(void);
+PKTRAP_FRAME FindNmiTrapFrame(VOID);

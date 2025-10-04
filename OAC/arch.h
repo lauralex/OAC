@@ -12,12 +12,35 @@ typedef struct _MACHINE_FRAME
     UINT64 Ss;
 } MACHINE_FRAME, *PMACHINE_FRAME;
 
-inline __declspec(noinline) PVOID GetRip(void)
+/**
+ * @brief Retrieves the return address (RIP) of the caller function.
+ *
+ * This function uses the MSVC intrinsic `_ReturnAddress` to obtain the
+ * instruction pointer of the calling function. It is marked as `noinline`
+ * to prevent the compiler from optimizing it away, ensuring accurate retrieval.
+ *
+ * @return A pointer to the return address (RIP) of the caller.
+ */
+inline __declspec(noinline) PVOID GetRip(VOID)
 {
     return _ReturnAddress();
 }
 
-inline LONG InterlockedMultiply(volatile LONG* Target, LONG Factor)
+/**
+ * @brief Atomically multiplies a LONG value by a given factor.
+ *
+ * This function performs an atomic multiplication operation on a LONG integer
+ * pointed to by `Target`, multiplying it by `Factor`. It uses a compare-and-swap
+ * loop to ensure that the operation is thread-safe.
+ *
+ * @param[inout] Target A pointer to the LONG value to be multiplied.
+ * @param[in] Factor The factor by which to multiply the target value.
+ * @return The new value after multiplication.
+ */
+inline LONG InterlockedMultiply(
+    _Inout_ volatile LONG* Target,
+    _In_ LONG              Factor
+)
 {
     LONG OldVal, NewVal;
     do
