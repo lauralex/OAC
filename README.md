@@ -9,26 +9,26 @@ It creates its own page tables to map these critical pages:
 - The Page Fault handler
 - A portion of the Interrupt Stack for the Page Fault handler
 - The original IDT
+- Our custom IDT
 - The original CR3 global variable
 
 Everything else is **NOT** mapped; that's done purposefully to make incorrectly implemented hypervisors triple-fault.
 
-The CR3 thrashing routine will then rewrite the **#PF** IDT entry to our own **#PF** handler (_WP bit in CR0 is temporarily disabled_), rewrite the CR3 DTB entry to our own PML4 (after saving the original CR3 value) and trigger a Page Fault deliberately.
+The CR3 thrashing routine will then temporarily swap the **IDTR** to point to our own IDT (which contains our custom **#PF** entry), rewrite the CR3 DTB entry to our own PML4 (after saving the original CR3 value) and trigger a Page Fault deliberately.
 
-After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **#PF** IDT entry.
+After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **IDTR**.
 
 ### NMI Stackwalking Routine & Blocking Check
 Here, we implemented a simple stackwalking routine that is triggered during a NMI.
-
-The *NMI callback* is initialized by calling `KeRegisterNmiCallback`, an undocumented kernel function.
-
-The *NMI* is triggered by calling `HalSendNMI`, another undocumented kernel function.
-
-When the NMI is sent to all the logical processors (*except the sender one*), the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
-
-We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then we invoke some kernel functions that help us unwind each function.
-
-After a small period of time, we check if there was an *NMI blocking* (i.e., some NMIs were not processed by the callback). If yes, this would indicate a problem or malicious activity in the kernel.
+#### Steps:
+- The *NMI callback* is initialized by calling `KeRegisterNmiCallback`, an undocumented kernel function.
+- The *NMI* is triggered by calling `HalSendNMI`, another undocumented kernel function.
+- When the NMI is sent to all the logical processors (*except the sender one*), the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
+- We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then we invoke some kernel functions that help us unwind each function.
+  - More in detail, we first swap the **IDTR** to point to our custom IDT, so that we can handle *page-faults* happening in the unwinding routine.
+  - Then we proced with the actual unwinding logic.
+  - At the end, we restore the old **IDTR**.
+- After a small period of time, we check if there was an *NMI blocking* (i.e., some NMIs were not processed by the callback). If yes, this would indicate a problem or malicious activity in the kernel.
 
 ### Kernel Module Digital Signature Verification Routine
 During the NMI stackwalking, we gather all the Program Counters for each level of the call stack for each logical core. After that, we initiate a digital signature check routine, which works in the following way:
