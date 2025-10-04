@@ -59,3 +59,4 @@ During the NMI stackwalking, we gather all the Program Counters for each level o
 
 ## Credits
 - ia32-doc (from here: https://github.com/ia32-doc/ia32-doc)
+- zydis (from here: https://github.com/zyantific/zydis)
