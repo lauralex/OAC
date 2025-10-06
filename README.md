@@ -2,54 +2,49 @@
 Open Anti-Cheat. A kernel-mode anticheat just for fun.
 
 ## Features
-### CR3 Thrashing Routine
-For now, only a simple CR3 thrashing routine has been implemented.
-It creates its own page tables to map these critical pages:
-- A portion of the driver code
-- The Page Fault handler
-- A portion of the Interrupt Stack for the Page Fault handler
-- The original IDT
-- Our custom IDT
-- The original CR3 global variable
 
-Everything else is **NOT** mapped; that's done purposefully to make incorrectly implemented hypervisors triple-fault.
+OAC implements several advanced detection vectors, each designed to uncover a different class of malicious activity.
 
-The CR3 thrashing routine will then temporarily swap the **IDTR** to point to our own IDT (which contains our custom **#PF** entry), rewrite the CR3 DTB entry to our own PML4 (after saving the original CR3 value) and trigger a Page Fault deliberately.
+### 1. Anti-Hypervisor CR3 Thrashing
 
-After the **#PF** ISR is completed and the old CR3 value is restored, our driver code will continue its execution and restore the old **IDTR**.
+This routine is designed to detect and crash poorly implemented hypervisors or virtualization-based cheats by manipulating memory management in a way that is valid on bare metal but often unhandled in a virtualized environment.
 
-### NMI Stackwalking Routine & Blocking Check
-Here, we implemented a simple stackwalking routine that is triggered during a NMI.
-#### Steps:
-- The *NMI callback* is initialized by calling `KeRegisterNmiCallback`, an undocumented kernel function.
-- The *NMI* is triggered by calling `HalSendNMI`, another undocumented kernel function.
-- When the NMI is sent to all the logical processors (*except the sender one*), the NMI callback is invoked by the kernel after setting up additional context in the NMI's Interrupt Stack (i.e., **KTRAP_FRAME**).
-- We parse the **KTRAP_FRAME** structure from the NMI's Interrupt Stack and then we invoke some kernel functions that help us unwind each function.
-  - More in detail, we first swap the **IDTR** to point to our custom IDT, so that we can handle *page-faults* happening in the unwinding routine.
-  - Then we proced with the actual unwinding logic.
-  - At the end, we restore the old **IDTR**.
-- After a small period of time, we check if there was an *NMI blocking* (i.e., some NMIs were not processed by the callback). If yes, this would indicate a problem or malicious activity in the kernel.
+The detection works through the following sequence:
+1.  **Minimalist Page Table Creation:** The driver constructs its own set of page tables in memory. These tables only map the absolute minimum required for the routine to function: a small portion of the driver's code, the custom Page Fault ISR, the Interrupt Stack, the IDT, and a variable to store the original `CR3`.
+2.  **Context Swap:** In a critical, interrupt-disabled section, the driver saves the original `CR3` and swaps the Interrupt Descriptor Table Register (`IDTR`) to point to its own custom IDT.
+3.  **CR3 Thrash:** The driver then overwrites the live `CR3` register with the physical address of its own minimalist PML4 table.
+4.  **Deliberate Page Fault:** A page fault is intentionally triggered by accessing an unmapped address. A legitimate system will vector this fault through our custom ISR. Many simple hypervisors, however, will fail to properly handle the nested page fault during the `CR3` write VM-exit, leading to a system crash (triple fault).
+5.  **Recovery:** Our custom Page Fault ISR immediately restores the original `CR3` value and resumes execution. The driver then restores the original `IDTR`, cleans up, and returns the system to a stable state.
 
-### Kernel Module Digital Signature Verification Routine
-During the NMI stackwalking, we gather all the Program Counters for each level of the call stack for each logical core. After that, we initiate a digital signature check routine, which works in the following way:
-1. Enqueue all the collected *Program Counters* (for the current logical core) to a synchronized linked list inside the **NMI Context** structure.
-2. Start a DPC routine (Deferred Procedure Call) which will process all the elements in this synchronized linked list.
-3. Check if each Program Counter in the list is in a *valid region* (i.e., a signed kernel module). An undocumented kernel function (`CiValidateFileObject`) is called for this purpose.
-4. Print the verification state as a debug message: *CORRECT* or **INCORRECT** signature.
+### 2. NMI-Based System Integrity Scans
 
-### CR3 validation routine
-During the NMI stackwalking, we check if current **CR3** value for the current logical core is not *suspicious* (i.e., it doesn't belong to any active process, including *System*).
-For this purpose: 
-- We first traverse the list of all current processes starting from the head: `PsActiveProcessHead`.
-- Then, we check the **CR3** value of the current `_EPROCESS` in the list by parsing the `DirectoryTableBase` field inside the `_KPROCESS` structure (inside *_EPROCESS*).
-- If the **CR3** value during the NMI doesn't match any of the scanned CR3s (for all active processes), then we debug-log a **warning message**.
+To perform analysis from a high-privilege, "out-of-band" context that is difficult for malware to intercept, OAC uses Non-Maskable Interrupts (NMIs). An NMI is sent to every logical processor, triggering a series of deferred checks that run at a lower, safer IRQL.
 
+#### a. Kernel Stack Unwinding & NMI Blocking Check
+When the NMI callback is invoked, it first locates the `KTRAP_FRAME` to get the state of the interrupted code. It then performs a safe stack walk to gather the instruction pointers (`RIP`) from the call stack of the code that was executing on each core. The safe unwinding is ensured by temporarily installing a custom Page Fault handler to gracefully handle potential memory access violations during the process. A failure to process all sent NMIs within a timeout period indicates that an NMI might have been blocked or dropped, a highly suspicious event.
 
-### IOCTLs
-- **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
-- **IOCTL_TRIGGER_CR3_THRASH** (0x801): the main CR3 thrashing routine
-- **IOCTL_UNLOAD_DRIVER** (0x802): the driver unloading routine
-- **IOCTL_TRIGGER_NMI_STACKWALK** (0x803): the NMI stackwalking routine (including NMI blocking check and digital signature verification)
+#### b. Kernel Module Digital Signature Verification
+The instruction pointers gathered during the NMI stack walk are enqueued for deferred analysis. A worker thread processes each `RIP` to verify that it resides within a legitimately signed kernel module. This is accomplished by using the undocumented `CiValidateFileObject` function, effectively checking the digital signature of the driver file on disk that corresponds to the code running in memory. An invalid signature is a strong indicator of an unsigned or maliciously patched driver.
+
+#### c. CR3 Validation
+The `CR3` register, which holds the physical address of the current process's page tables, is captured during the NMI. In the deferred worker thread, this captured `CR3` is validated against a list of `CR3` values from all active processes on the system (derived from `PsActiveProcessHead`). A `CR3` value that does not belong to any known process is a hallmark of a stealthy rootkit or hypervisor attempting to hide its own execution by using its own private memory space.
+
+#### d. Suspicious Page Table Mapping Detection
+This is a robust memory forensics routine that scans for fundamental security boundary violations within a process's memory layout.
+-   **Threat Model:** Detects if a user-mode process has page table entries (PTEs) that grant it direct access (Read, Write, or Execute) to canonical kernel-space virtual addresses (`0xFFFF800000000000` and higher). Such a mapping is a critical security flaw and a common technique used in privilege escalation exploits.
+-   **Methodology:** The routine performs a full, recursive walk of the page table hierarchy (PML4 -> PDPT -> PD -> PT) for each active user-mode process.
+-   **Validation Logic:** For a virtual address to be accessible from user mode, the `User/Supervisor` bit must be set to `User` at **every single level** of the translation chain. This routine validates this condition and flags any kernel address that is accessible to user mode, also reporting on large page (2MB) mappings.
+
+## IOCTL Interface
+
+The driver is controlled from a user-mode client via the following IOCTLs:
+
+| Control Code                  | Hex Value | Description                                                                                             |
+| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------- |
+| `IOCTL_TEST_COMMUNICATION`    | `0x800`   | A simple test command to verify that the client and driver can communicate.                             |
+| `IOCTL_TRIGGER_CR3_THRASH`    | `0x801`   | Executes the anti-hypervisor CR3 thrashing routine.                                                     |
+| `IOCTL_UNLOAD_DRIVER`         | `0x802`   | Unloads the kernel driver.                                                                              |
+| `IOCTL_TRIGGER_NMI_STACKWALK` | `0x803`   | Triggers the NMI-based system integrity scans (stackwalk, signature check, CR3 validation, etc.).       |
 
 
 ## Build [![Build Windows Kernel Driver](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
@@ -57,14 +52,19 @@ For this purpose:
 - Visual Studio (2022 preferably)
 - Windows Software Development Kit ([SDK](https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/))
 - Windows Driver Kit ([WDK](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk))
-### External tools (optional, but suggested)
-- KDMapper (from here: https://github.com/TheCruZ/kdmapper)
 
-## Run
-1. Disable VDBL (Vulnerable Driver BlockList): [Instructions](https://www.elevenforum.com/t/enable-or-disable-microsoft-vulnerable-driver-blocklist-in-windows-11.10031/)
-2. Open cmd, type: `kdmapper_Release.exe OAC.sys`
-3. Open `OAC-Client.exe`
+## Usage
+
+> **:warning: WARNING:** This is a kernel-mode driver. Running this code can lead to system instability or Blue Screen of Death (BSOD) errors. It requires disabling fundamental Windows security features. **Use this exclusively on a test machine or in a virtual machine.**
+
+### External tools (optional, but suggested)
+- **Kernel Driver Mapper:** A tool is required to map the driver into the kernel. [KDMapper](https://github.com/TheCruZ/kdmapper) is recommended.
+
+### Running the Anti-Cheat
+1. **Disable VDBL (Vulnerable Driver BlockList):** This security feature must be disabled as it may prevent `kdmapper`'s vulnerable driver from loading. [Instructions here](https://www.elevenforum.com/t/enable-or-disable-microsoft-vulnerable-driver-blocklist-in-windows-11.10031/).
+2. **Map the driver:** Open an administrator command prompt and run `kdmapper.exe OAC.sys`.
+3. **Run the client:** Execute `OAC-Client.exe` to interact with the driver and trigger its features via the IOCTL interface.
 
 ## Credits
-- ia32-doc (from here: https://github.com/ia32-doc/ia32-doc)
-- zydis (from here: https://github.com/zyantific/zydis)
+- [ia32-doc](https://github.com/ia32-doc/ia32-doc): for invaluable Intel architecture documentation and structures.
+- [zydis](https://github.com/zyantific/zydis): for the powerful Zydis disassembler library.
