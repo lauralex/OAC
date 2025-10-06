@@ -1,7 +1,7 @@
 # OAC
 Open Anti-Cheat. A kernel-mode anticheat just for fun.
 
-## Description
+## Features
 ### CR3 Thrashing Routine
 For now, only a simple CR3 thrashing routine has been implemented.
 It creates its own page tables to map these critical pages:
@@ -36,6 +36,14 @@ During the NMI stackwalking, we gather all the Program Counters for each level o
 2. Start a DPC routine (Deferred Procedure Call) which will process all the elements in this synchronized linked list.
 3. Check if each Program Counter in the list is in a *valid region* (i.e., a signed kernel module). An undocumented kernel function (`CiValidateFileObject`) is called for this purpose.
 4. Print the verification state as a debug message: *CORRECT* or **INCORRECT** signature.
+
+### CR3 validation routine
+During the NMI stackwalking, we check if current **CR3** value for the current logical core is not *suspicious* (i.e., it doesn't belong to any active process, including *System*).
+For this purpose: 
+- We first traverse the list of all current processes starting from the head: `PsActiveProcessHead`.
+- Then, we check the **CR3** value of the current `_EPROCESS` in the list by parsing the `DirectoryTableBase` field inside the `_KPROCESS` structure (inside *_EPROCESS*).
+- If the **CR3** value during the NMI doesn't match any of the scanned CR3s (for all active processes), then we debug-log a **warning message**.
+
 
 ### IOCTLs
 - **IOCTL_TEST_COMMUNICATION** (0x800): only for testing
