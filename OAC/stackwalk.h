@@ -28,7 +28,7 @@
  * If more NMIs arrive than this limit before the worker thread can process them,
  * subsequent RIPs will be dropped until the pool is cleared.
  */
-#define MAX_PENDING_CHECKS      256
+#define MAX_PENDING_CHECKS      512
 
 
 // =================================================================================================

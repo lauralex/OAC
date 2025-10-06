@@ -117,6 +117,7 @@
     <ClCompile Include="main.c" />
     <ClCompile Include="mm.c" />
     <ClCompile Include="module.c" />
+    <ClCompile Include="pt_analyzer.c" />
     <ClCompile Include="serial_logger.c" />
     <ClCompile Include="stackwalk.c" />
     <ClCompile Include="Zydis.c">
@@ -135,6 +136,7 @@
     <ClInclude Include="isr.h" />
     <ClInclude Include="mm.h" />
     <ClInclude Include="module.h" />
+    <ClInclude Include="pt_analyzer.h" />
     <ClInclude Include="serial_logger.h" />
     <ClInclude Include="stackwalk.h" />
     <ClInclude Include="stackwalk_saferecovery.h" />

@@ -52,6 +52,9 @@
     <ClCompile Include="internals.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="pt_analyzer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
@@ -97,6 +100,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="cr3_validation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="pt_analyzer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

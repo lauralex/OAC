@@ -8,6 +8,7 @@
 #include "ci.h"
 #include "cr3_validation.h"
 #include "isr.h"
+#include "pt_analyzer.h"
 #include "serial_logger.h"
 #include "stackwalk_saferecovery.h"
 
@@ -350,6 +351,25 @@ static VOID SignatureCheckWorkerRoutine(
 {
     UNREFERENCED_PARAMETER(Parameter);
 
+    // --- Perform comprehensive scans when the worker starts ---
+    // This is an ideal place for periodic, system-wide checks.
+    DbgPrint("[+] Worker thread starting periodic system analysis.\n");
+    if (PsActiveProcessHead)
+    {
+        PLIST_ENTRY ListEntry = PsActiveProcessHead->Flink;
+        while (ListEntry != PsActiveProcessHead)
+        {
+            PEPROCESS Process = (PEPROCESS)CONTAINING_RECORD(ListEntry, EPROCESS, ActiveProcessLinks);
+
+            // Call the specialized analysis function from our pt_analyzer module.
+            AnalyzeProcessPageTables(Process);
+
+            ListEntry = ListEntry->Flink;
+        }
+    }
+    DbgPrint("[+] Periodic system analysis complete.\n");
+
+    // --- Process items captured from NMIs ---
     for (;;)
     {
         PLIST_ENTRY ListEntry =
