@@ -109,9 +109,11 @@
   <ItemGroup>
     <ClCompile Include="ci.c" />
     <ClCompile Include="cr3_thrasher.c" />
+    <ClCompile Include="cr3_validation.c" />
     <ClCompile Include="instruction_decoder.c">
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</TreatWarningAsError>
     </ClCompile>
+    <ClCompile Include="internals.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="mm.c" />
     <ClCompile Include="module.c" />
@@ -125,6 +127,7 @@
     <ClInclude Include="arch.h" />
     <ClInclude Include="ci.h" />
     <ClInclude Include="cr3_thrasher.h" />
+    <ClInclude Include="cr3_validation.h" />
     <ClInclude Include="globals.h" />
     <ClInclude Include="ia32.h" />
     <ClInclude Include="instruction_decoder.h" />

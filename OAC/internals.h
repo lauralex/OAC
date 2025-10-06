@@ -1,6 +1,14 @@
 #pragma once
 #include <ntddk.h>
 
+/**
+ * @brief Initializes internal structures and pointers used by the driver.
+ *
+ * This function should be called at driver initialization time, at PASSIVE_LEVEL.
+ * It sets up any necessary internal state required for the driver's operation.
+ */
+VOID InitializeInternals(VOID);
+
 #pragma warning(push)
 #pragma warning(disable : 4201) // nameless struct/union
 typedef union _VIRTUAL_ADDRESS
@@ -37,6 +45,28 @@ typedef struct _KAFFINITY_EX
     } DUMMYUNIONNAME;
 } KAFFINITY_EX, *PKAFFINITY_EX;
 #pragma warning(pop)
+
+// --------------------------------
+
+// Partial _KPROCESS and _EPROCESS structures for our use.
+typedef struct _KPROCESS
+{
+    DISPATCHER_HEADER Header;
+    LIST_ENTRY        ProfileListHead;
+    ULONGLONG         DirectoryTableBase;
+    UCHAR             Padding[0x408];
+} KPROCESS, *PKPROCESS;
+
+typedef struct _EPROCESS
+{
+    KPROCESS     Pcb;
+    EX_PUSH_LOCK ProcessLock;
+    VOID*        UniqueProcessId;
+    LIST_ENTRY   ActiveProcessLinks;
+    UCHAR        Padding[0x728];
+} EPROCESS, *PEPROCESS;
+
+//--------------------------------
 
 #define UNW_FLAG_NHANDLER 0x0
 #define UNW_FLAG_EHANDLER 0x1
@@ -152,6 +182,9 @@ VOID NTAPI IoDeleteDriver(
 NTSTATUS NTAPI HalSendNMI(
     _In_ PKAFFINITY_EX Affinity
 );
+
+// Undocumented head of the system's active process list.
+extern PLIST_ENTRY PsActiveProcessHead;
 
 PVOID NTAPI KeInitializeAffinityEx(
     _In_ PKAFFINITY_EX Affinity

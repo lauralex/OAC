@@ -136,6 +136,9 @@ NTSTATUS NTAPI DriverInitialize(
     DriverObject->MajorFunction[IRP_MJ_CLOSE]          = IrpCreateCloseHandler;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IrpDeviceIoCtlHandler;
 
+    // Initialize internal structures and state.
+    InitializeInternals();
+
     // Clear the initialization flag to allow I/O.
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 

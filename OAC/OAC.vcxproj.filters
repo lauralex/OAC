@@ -46,6 +46,12 @@
     <ClCompile Include="Zydis.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="cr3_validation.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="internals.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="internals.h">
@@ -88,6 +94,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Zydis.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="cr3_validation.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

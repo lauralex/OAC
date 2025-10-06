@@ -6,6 +6,7 @@
 #include "internals.h"
 #include "globals.h"
 #include "ci.h"
+#include "cr3_validation.h"
 #include "isr.h"
 #include "serial_logger.h"
 #include "stackwalk_saferecovery.h"
@@ -234,6 +235,7 @@ BOOLEAN NmiCallback(
         {
             PSIGNATURE_CHECK_ITEM CheckItem = &NmiContext->CheckItemPool[ItemIndex];
             CheckItem->Rip = (PVOID)RetrievedRipArray[RipIndex]; // Use the last retrieved RIP for checking.
+            CheckItem->CapturedCr3 = __readcr3(); // Capture the current CR3 for context.
 
             ExInterlockedInsertTailList(&NmiContext->PendingCheckList, &CheckItem->ListEntry,
                                         &NmiContext->CheckListLock);
@@ -382,6 +384,16 @@ static VOID SignatureCheckWorkerRoutine(
         PSIGNATURE_CHECK_ITEM CheckItem = CONTAINING_RECORD(ListEntry, SIGNATURE_CHECK_ITEM, ListEntry);
         if (CheckItem)
         {
+            // Perform the CR3 validation at PASSIVE_LEVEL.
+            if (!IsCr3InProcessList(CheckItem->CapturedCr3))
+            {
+                DbgPrint("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+                DbgPrint("!!! SUSPICIOUS CR3 DETECTED: 0x%llX\n", CheckItem->CapturedCr3);
+                DbgPrint("!!! This CR3 does not belong to any active process.\n");
+                DbgPrint("!!! Associated RIP: 0x%p\n", CheckItem->Rip);
+                DbgPrint("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
+            }
+
             // Perform the signature verification.
             VerifyModuleSignatureByRip(CheckItem->Rip);
         }
@@ -414,6 +426,22 @@ NTSTATUS InitializeNmiHandler(VOID)
     G_NmiContext.MagicSignature = NMI_CONTEXT_SIGNATURE;
     G_NmiContext.PoolIndex      = 0;
     KeInitializeSpinLock(&G_NmiContext.Lock);
+
+    // --- Retrieve and store the System process CR3 ---
+    // This must be done at PASSIVE_LEVEL during initialization.
+    // The KPROCESS.DirectoryTableBase is at offset 0x28 in most x64 Windows versions.
+    if (PsInitialSystemProcess != NULL)
+    {
+        G_NmiContext.SystemCr3 = PsInitialSystemProcess->Pcb.DirectoryTableBase;
+        DbgPrint("[+] Stored System CR3: 0x%llX\n", G_NmiContext.SystemCr3);
+    }
+    else
+    {
+        DbgPrint("[-] PsInitialSystemProcess is NULL. Cannot get System CR3.\n");
+        // Continue without the check, but it will be ineffective.
+        G_NmiContext.SystemCr3 = 0;
+    }
+    // ---
 
     // Copy the original IDT for safety.
     SEGMENT_DESCRIPTOR_REGISTER_64 Idtr = {0};

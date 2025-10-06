@@ -41,8 +41,9 @@
  */
 typedef struct _SIGNATURE_CHECK_ITEM
 {
-    LIST_ENTRY ListEntry; //!< Linked list entry for the queue.
-    PVOID      Rip;       //!< The instruction pointer captured during the NMI.
+    LIST_ENTRY ListEntry;   //!< Linked list entry for the queue.
+    PVOID      Rip;         //!< The instruction pointer captured during the NMI.
+    UINT64     CapturedCr3; //!< The CR3 value at the time of capture.
 } SIGNATURE_CHECK_ITEM, *PSIGNATURE_CHECK_ITEM;
 
 /**
@@ -54,6 +55,7 @@ typedef struct _NMI_CONTEXT
     volatile LONG                        PendingCount;      //!< Tracks pending NMIs to be handled.
     SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 UnwindingIdt[256]; //!< Modified Unwinding IDT.
     UINT64                               MagicSignature;    //!< A unique value to verify context integrity.
+    UINT64                               SystemCr3;         //!< The CR3 value of the System process (for comparison).
     KSPIN_LOCK                           Lock;              //!< General spinlock for context data (not for the list).
 
     // --- Deferred Checking Resources ---
