@@ -62,7 +62,7 @@ The driver is controlled from a user-mode client via the following IOCTLs:
 
 ### Running the Anti-Cheat
 1. **Disable VDBL (Vulnerable Driver BlockList):** This security feature must be disabled as it may prevent `kdmapper`'s vulnerable driver from loading. [Instructions here](https://www.elevenforum.com/t/enable-or-disable-microsoft-vulnerable-driver-blocklist-in-windows-11.10031/).
-2. **Map the driver:** Open an administrator command prompt and run `kdmapper.exe OAC.sys`.
+2. **Map the driver:** Open an administrator command prompt and run `kdmapper_Release.exe OAC.sys`.
 3. **Run the client:** Execute `OAC-Client.exe` to interact with the driver and trigger its features via the IOCTL interface.
 
 ## Credits
