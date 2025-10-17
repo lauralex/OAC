@@ -23,7 +23,7 @@ void SendCr3ThrashRequest(HANDLE hDevice)
     std::cin.get();
 
     DWORD bytesReturned = 0;
-    BOOL  success = DeviceIoControl(
+    BOOL  success       = DeviceIoControl(
         hDevice,
         IOCTL_TRIGGER_CR3_THRASH,
         nullptr, 0,
@@ -45,7 +45,7 @@ void TriggerNmiStackwalk(HANDLE hDevice)
 {
     std::cout << "[!] Sending IOCTL to trigger an NMI stack walk." << std::endl;
     DWORD bytesReturned = 0;
-    BOOL  success = DeviceIoControl(
+    BOOL  success       = DeviceIoControl(
         hDevice,
         IOCTL_TRIGGER_NMI_STACKWALK,
         nullptr, 0,
@@ -59,7 +59,8 @@ void TriggerNmiStackwalk(HANDLE hDevice)
     }
     else
     {
-        std::cout << "[+] NMI stack walk request sent successfully. Check your kernel debugger for the output." << std::endl;
+        std::cout << "[+] NMI stack walk request sent successfully. Check your kernel debugger for the output." <<
+            std::endl;
     }
 }
 
@@ -67,7 +68,7 @@ void InitializeWfpMonitorRequest(HANDLE hDevice)
 {
     std::cout << "[!] Sending IOCTL to initialize the WFP network monitor." << std::endl;
     DWORD bytesReturned = 0;
-    BOOL  success = DeviceIoControl(
+    BOOL  success       = DeviceIoControl(
         hDevice,
         IOCTL_INITIALIZE_WFP_MONITOR,
         nullptr, 0,
@@ -89,7 +90,7 @@ void DeinitializeWfpMonitorRequest(HANDLE hDevice)
 {
     std::cout << "[!] Sending IOCTL to de-initialize the WFP network monitor." << std::endl;
     DWORD bytesReturned = 0;
-    BOOL  success = DeviceIoControl(
+    BOOL  success       = DeviceIoControl(
         hDevice,
         IOCTL_DEINITIALIZE_WFP_MONITOR,
         nullptr, 0,
@@ -111,7 +112,7 @@ void SendUnloadRequest(HANDLE hDevice)
 {
     std::cout << "[!] Sending IOCTL to unload the driver." << std::endl;
     DWORD bytesReturned = 0;
-    BOOL  success = DeviceIoControl(
+    BOOL  success       = DeviceIoControl(
         hDevice,
         IOCTL_UNLOAD_DRIVER,
         nullptr, 0,

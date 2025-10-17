@@ -19,9 +19,9 @@
 #include "stackwalk.h"
 #include "wfp_monitor.h"
 
- // =================================================================================================
- // == IOCTL Definitions
- // =================================================================================================
+// =================================================================================================
+// == IOCTL Definitions
+// =================================================================================================
 #define IOCTL_TEST_COMMUNICATION          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_TRIGGER_CR3_THRASH          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_UNLOAD_DRIVER               CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -58,8 +58,8 @@ NTSTATUS IrpDeviceIoCtlHandler(
 // == Global Variables
 // =================================================================================================
 
-const wchar_t* G_DRIVER_NAME = L"\\Driver\\OAC6"; // For IoCreateDriver. Can be NULL for stealth.
-const wchar_t* G_DEVICE_NAME = L"\\Device\\OAC6";
+const wchar_t* G_DRIVER_NAME  = L"\\Driver\\OAC6"; // For IoCreateDriver. Can be NULL for stealth.
+const wchar_t* G_DEVICE_NAME  = L"\\Device\\OAC6";
 const wchar_t* G_SYMLINK_NAME = L"\\DosDevices\\OAC6";
 
 // Global state to track if the WFP component is currently initialized.
@@ -80,23 +80,23 @@ NTSTATUS DriverEntry(
 
     DbgPrint("[+] kdmapper has called DriverEntry\n");
 
-    UNICODE_STRING driverName;
-    RtlInitUnicodeString(&driverName, G_DRIVER_NAME);
+    UNICODE_STRING DriverName;
+    RtlInitUnicodeString(&DriverName, G_DRIVER_NAME);
 
     // Call the undocumented function IoCreateDriver.
     // This will create our DRIVER_OBJECT and call our DriverInitialize function.
-    NTSTATUS status = IoCreateDriver(&driverName, &DriverInitialize);
+    NTSTATUS Status = IoCreateDriver(&DriverName, &DriverInitialize);
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateDriver failed: 0x%X\n", status);
+        DbgPrint("[-] IoCreateDriver failed: 0x%X\n", Status);
     }
     else
     {
         DbgPrint("[+] IoCreateDriver succeeded\n");
     }
 
-    return status;
+    return Status;
 }
 
 // This function is called by IoCreateDriver to perform driver initialization.
@@ -107,61 +107,61 @@ NTSTATUS NTAPI DriverInitialize(
 {
     UNREFERENCED_PARAMETER(RegistryPath);
 
-    NTSTATUS       status = STATUS_SUCCESS;
-    PDEVICE_OBJECT deviceObject = NULL;
-    UNICODE_STRING deviceName = { 0 };
-    UNICODE_STRING symbolicLinkName = { 0 };
+    NTSTATUS       Status           = STATUS_SUCCESS;
+    PDEVICE_OBJECT DeviceObject     = NULL;
+    UNICODE_STRING DeviceName       = {0};
+    UNICODE_STRING SymbolicLinkName = {0};
 
-    RtlInitUnicodeString(&deviceName, G_DEVICE_NAME);
-    RtlInitUnicodeString(&symbolicLinkName, G_SYMLINK_NAME);
+    RtlInitUnicodeString(&DeviceName, G_DEVICE_NAME);
+    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
 
     DbgPrint("[+] DriverInitialize called by IoCreateDriver\n");
 
     // Create the device object.
-    status = IoCreateDevice(
+    Status = IoCreateDevice(
         DriverObject,
         0,
-        &deviceName,
+        &DeviceName,
         FILE_DEVICE_UNKNOWN,
         FILE_DEVICE_SECURE_OPEN,
         FALSE,
-        &deviceObject
+        &DeviceObject
     );
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateDevice failed: 0x%X\n", status);
-        return status;
+        DbgPrint("[-] IoCreateDevice failed: 0x%X\n", Status);
+        return Status;
     }
 
     DbgPrint("[+] Device object created successfully\n");
 
     // Create a symbolic link so user-mode applications can find the device.
-    status = IoCreateSymbolicLink(&symbolicLinkName, &deviceName);
+    Status = IoCreateSymbolicLink(&SymbolicLinkName, &DeviceName);
 
-    if (!NT_SUCCESS(status))
+    if (!NT_SUCCESS(Status))
     {
-        DbgPrint("[-] IoCreateSymbolicLink failed: 0x%X\n", status);
-        IoDeleteDevice(deviceObject);
-        return status;
+        DbgPrint("[-] IoCreateSymbolicLink failed: 0x%X\n", Status);
+        IoDeleteDevice(DeviceObject);
+        return Status;
     }
 
     DbgPrint("[+] Symbolic link created successfully\n");
 
     // Set up the driver unload routine and IRP handlers.
-    DriverObject->DriverUnload = DriverUnload;
-    DriverObject->MajorFunction[IRP_MJ_CREATE] = IrpCreateCloseHandler;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE] = IrpCreateCloseHandler;
+    DriverObject->DriverUnload                         = DriverUnload;
+    DriverObject->MajorFunction[IRP_MJ_CREATE]         = IrpCreateCloseHandler;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = IrpCreateCloseHandler;
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IrpDeviceIoCtlHandler;
 
     // Clear the initialization flag to allow I/O.
-    deviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
     // Initialize internal structures.
     InitializeInternals();
 
     DbgPrint("[+] Driver initialized successfully. WFP monitor is ready to be activated via IOCTL.\n");
-    return status;
+    return Status;
 }
 
 //
@@ -172,8 +172,8 @@ VOID DriverUnload(
     _In_ PDRIVER_OBJECT DriverObject
 )
 {
-    UNICODE_STRING symbolicLinkName = { 0 };
-    RtlInitUnicodeString(&symbolicLinkName, G_SYMLINK_NAME);
+    UNICODE_STRING SymbolicLinkName = {0};
+    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
     DbgPrint("[+] DriverUnload called\n");
 
     // Deinitialize the NMI handler if it was initialized.
@@ -188,7 +188,7 @@ VOID DriverUnload(
     }
 
     // Delete the symbolic link.
-    IoDeleteSymbolicLink(&symbolicLinkName);
+    IoDeleteSymbolicLink(&SymbolicLinkName);
     DbgPrint("[+] Symbolic link deleted\n");
 
     // Delete the device object.
@@ -211,7 +211,7 @@ NTSTATUS IrpCreateCloseHandler(
 {
     UNREFERENCED_PARAMETER(DeviceObject);
     DbgPrint("[+] IrpCreateCloseHandler called\n");
-    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Status      = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
@@ -222,17 +222,17 @@ NTSTATUS IrpDeviceIoCtlHandler(
     _In_ PIRP           Irp
 )
 {
-    PIO_STACK_LOCATION irpStack = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS           status = STATUS_SUCCESS;
-    ULONG_PTR          information = 0;
+    PIO_STACK_LOCATION IrpStack    = IoGetCurrentIrpStackLocation(Irp);
+    NTSTATUS           Status      = STATUS_SUCCESS;
+    ULONG_PTR          Information = 0;
 
-    if (!irpStack)
+    if (!IrpStack)
     {
-        status = STATUS_UNSUCCESSFUL;
+        Status = STATUS_UNSUCCESSFUL;
     }
     else
     {
-        switch (irpStack->Parameters.DeviceIoControl.IoControlCode)
+        switch (IrpStack->Parameters.DeviceIoControl.IoControlCode)
         {
         case IOCTL_TEST_COMMUNICATION:
             DbgPrint("[+] IOCTL_TEST_COMMUNICATION received\n");
@@ -253,12 +253,12 @@ NTSTATUS IrpDeviceIoCtlHandler(
             if (G_IsWfpInitialized)
             {
                 DbgPrint("[*] WFP monitor is already initialized.\n");
-                status = STATUS_SUCCESS; // Or a custom status like STATUS_ALREADY_INITIALIZED
+                Status = STATUS_SUCCESS; // Or a custom status like STATUS_ALREADY_INITIALIZED
             }
             else
             {
-                status = InitializeWfpMonitor(DeviceObject);
-                if (NT_SUCCESS(status))
+                Status = InitializeWfpMonitor(DeviceObject);
+                if (NT_SUCCESS(Status))
                 {
                     G_IsWfpInitialized = TRUE;
                 }
@@ -281,22 +281,22 @@ NTSTATUS IrpDeviceIoCtlHandler(
         case IOCTL_UNLOAD_DRIVER:
             DbgPrint("[+] IOCTL_UNLOAD_DRIVER received\n");
             // CRITICAL: Complete the request back to user-mode BEFORE unloading.
-            Irp->IoStatus.Status = status;
+            Irp->IoStatus.Status      = Status;
             Irp->IoStatus.Information = 0;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
             // Now that the client's request is complete, proceed with cleanup.
             DriverUnload(DeviceObject->DriverObject);
-            return status; // Exit without completing the request again.
+            return Status; // Exit without completing the request again.
 
         default:
-            status = STATUS_INVALID_DEVICE_REQUEST;
+            Status = STATUS_INVALID_DEVICE_REQUEST;
             break;
         }
     }
 
-    Irp->IoStatus.Status = status;
-    Irp->IoStatus.Information = information;
+    Irp->IoStatus.Status      = Status;
+    Irp->IoStatus.Information = Information;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
 
-    return status;
+    return Status;
 }

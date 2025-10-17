@@ -150,9 +150,9 @@ static BOOLEAN IsPrecededByCall(
 
     while (Offset < SearchBytes)
     {
-        ZyanStatus status = ZydisDecoderDecodeFull(Decoder, Buffer + Offset, SearchBytes - Offset,
+        ZyanStatus Status = ZydisDecoderDecodeFull(Decoder, Buffer + Offset, SearchBytes - Offset,
                                                    &Instruction, Operands);
-        if (!ZYAN_SUCCESS(status))
+        if (!ZYAN_SUCCESS(Status))
         {
             DecodeFailures++;
             if (DecodeFailures >= MaxDecodeFailures)
@@ -163,10 +163,10 @@ static BOOLEAN IsPrecededByCall(
             continue;
         }
 
-        UINT64 instr_start = Address - SearchBytes + Offset;
-        UINT64 instr_end   = instr_start + Instruction.length;
+        UINT64 InstructionStart = Address - SearchBytes + Offset;
+        UINT64 InstructionEnd   = InstructionStart + Instruction.length;
 
-        if (instr_end == Address)
+        if (InstructionEnd == Address)
         {
             if (Instruction.mnemonic == ZYDIS_MNEMONIC_CALL &&
                 Instruction.attributes & ZYDIS_ATTRIB_IS_RELATIVE)
@@ -180,7 +180,7 @@ static BOOLEAN IsPrecededByCall(
                     if (Operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
                         Operands[0].imm.is_relative)
                     {
-                        UINT64 call_target = instr_end + (INT64)Operands[0].imm.value.s;
+                        UINT64 call_target = InstructionEnd + (INT64)Operands[0].imm.value.s;
                         if (!IsUserModeAddress(call_target))
                         {
                             return FALSE;
