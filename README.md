@@ -35,16 +35,34 @@ This is a robust memory forensics routine that scans for fundamental security bo
 -   **Methodology:** The routine performs a full, recursive walk of the page table hierarchy (PML4 -> PDPT -> PD -> PT) for each active user-mode process.
 -   **Validation Logic:** For a virtual address to be accessible from user mode, the `User/Supervisor` bit must be set to `User` at **every single level** of the translation chain. This routine validates this condition and flags any kernel address that is accessible to user mode, also reporting on large page (2MB) mappings.
 
+### 3. WFP-Based Shellcode Detection
+This feature leverages the Windows Filtering Platform (WFP) to monitor outbound network connections and perform deep, heuristic-based analysis on the originating thread to detect in-memory shellcode, such as reverse shells.
+
+-   **Threat Model:** Detects cheats or malware that inject raw shellcode into a process and then execute it to establish a network connection. A common pattern for this is creating a memory region with Read-Write-Execute (RWX) permissions.
+-   **Methodology:** The detection process is triggered for every new outbound connection:
+    1.  **WFP Callout:** The driver registers a callout at the `ALE_AUTH_CONNECT` layer, intercepting TCP/IP connection attempts before they are established.
+    2.  **Thread Context Acquisition:** Upon interception, the driver identifies the originating process and thread. It then locates the thread's kernel trap frame (`KTRAP_FRAME`) to access the user-mode register state (like `RIP` and `RSP`) at the exact moment of the system call that initiated the connection.
+    3.  **Heuristic Stack Unwinding:** A custom stack walker, built using the Zydis disassembler, unwinds the user-mode call stack of the originating thread. To ensure accuracy and avoid bad data, the stack walker validates each potential return address using several heuristics:
+        *   The address must be a valid user-mode address.
+        *   The memory page containing the address must have execute permissions.
+        *   The address must be the target of a preceding `CALL` instruction, confirming a legitimate function call.
+    4.  **RWX and Signature Scanning:** For each validated instruction pointer on the call stack, the driver performs two final checks:
+        *   It queries the memory protection of the page. If the page is marked as `PAGE_EXECUTE_READWRITE` (RWX), it is flagged as highly suspicious, as legitimate code rarely resides in writable and executable memory.
+        *   It scans the memory at the address for known shellcode byte patterns.
+    5.  **Blocking Action:** If a return address points to an RWX memory region and contains a shellcode signature, the driver concludes that the connection is malicious. It then instructs WFP to block the connection, preventing the shellcode from communicating.
+
 ## IOCTL Interface
 
 The driver is controlled from a user-mode client via the following IOCTLs:
 
-| Control Code                  | Hex Value | Description                                                                                             |
-| ----------------------------- | --------- | ------------------------------------------------------------------------------------------------------- |
-| `IOCTL_TEST_COMMUNICATION`    | `0x800`   | A simple test command to verify that the client and driver can communicate.                             |
-| `IOCTL_TRIGGER_CR3_THRASH`    | `0x801`   | Executes the anti-hypervisor CR3 thrashing routine.                                                     |
-| `IOCTL_UNLOAD_DRIVER`         | `0x802`   | Unloads the kernel driver.                                                                              |
-| `IOCTL_TRIGGER_NMI_STACKWALK` | `0x803`   | Triggers the NMI-based system integrity scans (stackwalk, signature check, CR3 validation, etc.).       |
+| Control Code                     | Hex Value | Description                                                                                             |
+| -------------------------------- | --------- | ------------------------------------------------------------------------------------------------------- |
+| `IOCTL_TEST_COMMUNICATION`       | `0x800`   | A simple test command to verify that the client and driver can communicate.                             |
+| `IOCTL_TRIGGER_CR3_THRASH`       | `0x801`   | Executes the anti-hypervisor CR3 thrashing routine.                                                     |
+| `IOCTL_UNLOAD_DRIVER`            | `0x802`   | Unloads the kernel driver.                                                                              |
+| `IOCTL_TRIGGER_NMI_STACKWALK`    | `0x803`   | Triggers the NMI-based system integrity scans (stackwalk, signature check, CR3 validation, etc.).       |
+| `IOCTL_INITIALIZE_WFP_MONITOR`   | `0x804`   | Registers the WFP callouts to begin monitoring outbound network connections.                            |
+| `IOCTL_DEINITIALIZE_WFP_MONITOR` | `0x805`   | De-registers the WFP callouts and cleans up all related filters, stopping network monitoring.           |
 
 
 ## Build [![Build Windows Kernel Driver](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
