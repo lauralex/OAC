@@ -10,7 +10,6 @@ env:
   SOLUTION_FILE_PATH: ./OAC.sln
   BUILD_CONFIGURATION: Release
   PLATFORM: x64
-  SDK_VERSION: 10.0.26100
   WDK_VERSION: 10.0.26100
 
 jobs:
@@ -24,26 +23,8 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2.0.0
 
-    # Cache Windows SDK + WDK installation folders
-    - name: Cache Windows Kits
-      id: cache
-      uses: actions/cache@v4
-      with:
-        path: |
-          C:\Program Files (x86)\Windows Kits\10
-          C:\Program Files (x86)\Windows Kits\WDK
-        key: windows-kits-${{ runner.os }}-${{ env.SDK_VERSION }}-${{ env.WDK_VERSION }}
-
-    # Install SDK if cache miss
-    - name: Install Windows SDK
-      if: steps.cache.outputs.cache-hit != 'true'
-      run: |
-        winget install --id Microsoft.WindowsSDK.${{ env.SDK_VERSION }} `
-          --accept-package-agreements --accept-source-agreements --silent
-
-    # Install WDK if cache miss
+    # Install WDK
     - name: Install Windows Driver Kit
-      if: steps.cache.outputs.cache-hit != 'true'
       run: |
         winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} `
           --accept-package-agreements --accept-source-agreements --silent
