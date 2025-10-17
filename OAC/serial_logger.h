@@ -1,28 +1,24 @@
+/**
+ * @file serial_logger.h
+ * @brief A simple serial logger for debugging purposes.
+ *
+ * This module provides a basic logging mechanism that outputs formatted messages
+ * to a serial port (COM1 by default). It is designed for use in low-level system
+ * programming, such as operating system kernels or embedded systems, where standard
+ * I/O facilities may not be available.
+ *
+ * The logger supports a subset of standard format specifiers and ensures that all
+ * output is null-terminated. It is safe to use in interrupt service routines (ISRs).
+ *
+ * Note: This implementation assumes a standard PC architecture with a 16550 UART.
+ */
+
 #pragma once
 #include <ntdef.h>
 
 // A configurable constant for the maximum log message size.
 #define MAX_LOG_MESSAGE_LENGTH 256
 
-
-/**
- * @brief Formats a string using a va_list of arguments.
- *
- * This is the core formatting engine, designed to be a safe replacement for vsnprintf.
- * It supports a subset of standard format specifiers: %s, %d, %i, %u, %x, %X, %p, %%.
- * The output is always null-terminated, even on truncation.
- *
- * @param[out] Buffer      The destination buffer for the formatted string.
- * @param[in]  BufferSize  The total size of the destination buffer, including the null terminator.
- * @param[in]  Format      The format control string.
- * @param[in]  Args        The va_list of arguments to format.
- */
-VOID SerialLoggerFormatV(
-    _Out_ PCHAR  Buffer,
-    _In_ size_t  BufferSize,
-    _In_ PCSTR   Format,
-    _In_ va_list Args
-);
 
 VOID LoggerInit(VOID);
 
@@ -52,7 +48,7 @@ VOID UartPutchar(
  * @param[in] ...    The arguments to format.
  */
 VOID SerialLoggerWrite(
-    _In_ PCSTR Format,
+    _In_z_ _Printf_format_string_ PCSTR Format,
     _In_ ...
 );
 

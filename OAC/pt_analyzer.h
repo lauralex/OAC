@@ -1,10 +1,10 @@
-#pragma once
-#include <ntddk.h>
-
 /**
  * @file pt_analyzer.h
  * @brief Provides the interface for analyzing process page tables for suspicious mappings.
  */
+
+#pragma once
+#include <ntddk.h>
 
 /**
  * @brief Analyzes the page tables of a given process for security violations.

@@ -3,9 +3,9 @@
  * @brief Defines structures and interfaces for NMI-based stack walking and deferred analysis.
  */
 #pragma once
-#include <ntddk.h>
-
 #include "ia32.h"
+
+#include <ntddk.h>
 
 // =================================================================================================
 // == Constants and Definitions
@@ -69,6 +69,43 @@ typedef struct _NMI_CONTEXT
     SIGNATURE_CHECK_ITEM CheckItemPool[MAX_PENDING_CHECKS]; //!< Pool of items to avoid allocation at HIGH_LEVEL IRQL.
     volatile LONG        PoolIndex;                         //!< Atomic index for the next free item in the pool.
 } NMI_CONTEXT, *PNMI_CONTEXT;
+
+// =================================================================================================
+// == Public Helper Functions
+// =================================================================================================
+
+/**
+ * @brief Fills a CONTEXT structure from a given KTRAP_FRAME.
+ * @param[inout] ContextRecord Pointer to the CONTEXT structure to fill.
+ * @param[in]    TrapFrame Pointer to the KTRAP_FRAME containing the saved state.
+ */
+inline VOID FillContextStructure(
+    _Inout_ CONTEXT*  ContextRecord,
+    _In_ PKTRAP_FRAME TrapFrame
+)
+{
+    // Copy all general-purpose and control registers.
+    ContextRecord->Rax    = TrapFrame->Rax;
+    ContextRecord->Rcx    = TrapFrame->Rcx;
+    ContextRecord->Rdx    = TrapFrame->Rdx;
+    ContextRecord->Rbx    = TrapFrame->Rbx;
+    ContextRecord->Rsp    = TrapFrame->Rsp;
+    ContextRecord->Rbp    = TrapFrame->Rbp;
+    ContextRecord->Rsi    = TrapFrame->Rsi;
+    ContextRecord->Rdi    = TrapFrame->Rdi;
+    ContextRecord->R8     = TrapFrame->R8;
+    ContextRecord->R9     = TrapFrame->R9;
+    ContextRecord->R10    = TrapFrame->R10;
+    ContextRecord->R11    = TrapFrame->R11;
+    ContextRecord->Rip    = TrapFrame->Rip;
+    ContextRecord->EFlags = TrapFrame->EFlags;
+    ContextRecord->SegCs  = TrapFrame->SegCs;
+    ContextRecord->SegDs  = TrapFrame->SegDs;
+    ContextRecord->SegEs  = TrapFrame->SegEs;
+    ContextRecord->SegFs  = TrapFrame->SegFs;
+    ContextRecord->SegGs  = TrapFrame->SegGs;
+    ContextRecord->SegSs  = TrapFrame->SegSs;
+}
 
 
 // =================================================================================================

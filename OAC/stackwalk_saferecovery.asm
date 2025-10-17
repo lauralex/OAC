@@ -118,9 +118,10 @@ PageFaultRecoveryIsr PROC
     ; Get current processor index.
     xor     ecx, ecx ; Clear rcx for the call
     call    KeGetCurrentProcessorNumberEx
+    mov eax, eax     ; zero-extend to rax
 
     ; Calculate the offset: index * sizeof(SAFE_UNWIND_CONTEXT)
-    imul eax, SIZEOF SAFE_UNWIND_CONTEXT
+    imul rax, SIZEOF SAFE_UNWIND_CONTEXT
 
     ; Add the offset to the base address to get the address of the element
     lea r14, [G_SafeUnwindContext]
@@ -194,23 +195,24 @@ PageFaultRecoveryIsr ENDP
 ; == Safe Wrapper for RtlVirtualUnwind
 ; =========================================================================================
 SafeRtlVirtualUnwind PROC
-    sub rsp, 228h
+    sub rsp, 78h
 
     ; Get current processor index.
-    mov [rsp + 28h], rcx ; Save rcx since we'll use it.
+    mov [rsp + 30h], rcx ; Save rcx since we'll use it.
     xor     ecx, ecx     ; Clear rcx for the call
     call    KeGetCurrentProcessorNumberEx
-    mov rcx, [rsp + 28h] ; Restore rcx
+    mov eax, eax         ; zero-extend to rax
+    mov rcx, [rsp + 30h] ; Restore rcx
 
     ; Calculate the offset: index * sizeof(SAFE_UNWIND_CONTEXT)
-    imul eax, SIZEOF SAFE_UNWIND_CONTEXT
+    imul rax, SIZEOF SAFE_UNWIND_CONTEXT
 
     ; Add the offset to the base address to get the address of the element
     lea r10, [G_SafeUnwindContext]
     add r10, rax
 
     ; Save r10 into stack for later use
-    mov [rsp + 68h], r10
+    mov [rsp + 60h], r10
 
     ; === Save Current State for Potential Recovery ===
     mov SAFE_UNWIND_CONTEXT.$RegisterState.$Rax[r10], rax
@@ -246,16 +248,16 @@ SafeRtlVirtualUnwind PROC
     ; Clear the fault indicator.
     mov SAFE_UNWIND_CONTEXT.$FaultOccurred[r10], 0
 
-    mov     rax, [rsp + 228h + 40h] ; eighth parameter
+    mov     rax, [rsp + 78h + 40h] ; eighth parameter
     mov     [rsp + 38h], rax
 
-    mov     rax, [rsp + 228h + 38h] ; seventh parameter
+    mov     rax, [rsp + 78h + 38h] ; seventh parameter
     mov     [rsp + 30h], rax
 
-    mov     rax, [rsp + 228h + 30h] ; sixth parameter
+    mov     rax, [rsp + 78h + 30h] ; sixth parameter
     mov     [rsp + 28h], rax
 
-    mov     rax, [rsp + 228h + 28h] ; fifth parameter
+    mov     rax, [rsp + 78h + 28h] ; fifth parameter
     mov     [rsp + 20h], rax
 
     mov     r9,  r9                 ; fourth parameter
@@ -268,7 +270,7 @@ SafeRtlVirtualUnwind PROC
 
 RecoveryLabel:
     ; Execution resumes here either normally or via a JMP from the ISR.
-    mov r10, [rsp + 68h] ; Retrieve r10 (context pointer)
+    mov r10, [rsp + 60h] ; Retrieve r10 (context pointer)
     cmp     SAFE_UNWIND_CONTEXT.$FaultOccurred[r10], 1 ; Check if a fault occurred
     jne     NoFault
     
@@ -278,7 +280,7 @@ RecoveryLabel:
 NoFault:
     ; Normal return or recovery complete. The return value is already in RAX.
     
-    add rsp, 228h
+    add rsp, 78h
     ret
 
 SafeRtlVirtualUnwind ENDP

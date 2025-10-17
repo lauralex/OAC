@@ -1,3 +1,13 @@
+/**
+ * @file cr3_validation.h
+ * @brief Header file for CR3 validation functions.
+ * 
+ * This file declares functions for validating CR3 values against the system's active process list.
+ * It includes necessary type definitions and ensures compatibility with the Windows kernel environment.
+ * 
+ * @note This code is intended for use in a Windows kernel-mode driver.
+ */
+
 #pragma once
 #include <ntdef.h>
 

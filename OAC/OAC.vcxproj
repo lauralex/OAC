@@ -99,9 +99,12 @@
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <PreprocessorDefinitions>ZYDIS_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link />
+    <Link>
+      <AdditionalDependencies>Fwpkclnt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
@@ -119,7 +122,10 @@
     <ClCompile Include="module.c" />
     <ClCompile Include="pt_analyzer.c" />
     <ClCompile Include="serial_logger.c" />
+    <ClCompile Include="shellcode_analyzer.c" />
     <ClCompile Include="stackwalk.c" />
+    <ClCompile Include="wfp_monitor.c" />
+    <ClCompile Include="zyan_stackwalker.c" />
     <ClCompile Include="Zydis.c">
       <TreatWarningAsError Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</TreatWarningAsError>
     </ClCompile>
@@ -136,10 +142,14 @@
     <ClInclude Include="isr.h" />
     <ClInclude Include="mm.h" />
     <ClInclude Include="module.h" />
+    <ClInclude Include="pattern_scanner.h" />
     <ClInclude Include="pt_analyzer.h" />
     <ClInclude Include="serial_logger.h" />
+    <ClInclude Include="shellcode_analyzer.h" />
     <ClInclude Include="stackwalk.h" />
     <ClInclude Include="stackwalk_saferecovery.h" />
+    <ClInclude Include="wfp_monitor.h" />
+    <ClInclude Include="zyan_stackwalker.h" />
     <ClInclude Include="Zydis.h" />
   </ItemGroup>
   <ItemGroup>

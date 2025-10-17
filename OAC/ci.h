@@ -6,9 +6,11 @@
  * including function resolution and signature verification. All functions
  * in this module must be called at IRQL = PASSIVE_LEVEL.
  */
+
 #pragma once
-#include <ntddk.h>
 #include "internals.h"
+
+#include <ntddk.h>
 
 //
 // === Undocumented Code Integrity Structures ===

@@ -76,9 +76,3 @@ NTSTATUS NTAPI PerformUnwindInSafeRegion(
     _Out_ PULONG64                             EstablisherFrame,
     _Inout_opt_ PKNONVOLATILE_CONTEXT_POINTERS ContextPointers
 );
-
-
-//
-// Global context for page fault recovery
-//
-extern SAFE_UNWIND_CONTEXT G_SafeUnwindContext[50];

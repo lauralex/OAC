@@ -1,3 +1,25 @@
+/** 
+ * @file stackwalk.c
+ * @brief Implements NMI-based stack walking and deferred signature verification.
+ *
+ * This module provides functionality to trigger NMIs on all processors,
+ * perform stack walks using unwind data, and defer signature verification
+ * to a worker thread running at PASSIVE_LEVEL.
+ *
+ * Key Features:
+ * - NMI Callback Registration: Registers a callback to handle NMIs.
+ * - Stack Walking: Uses RtlVirtualUnwind to walk the stack from the context
+ *   captured in the KTRAP_FRAME saved during the NMI.
+ * - Deferred Signature Verification: Captured return addresses are queued for
+ *   signature verification in a worker thread to avoid high IRQL constraints.
+ * - Safe Unwinding: Implements a mechanism to safely call RtlVirtualUnwind
+ *   with a custom page fault handler to recover from faults during unwinding.
+ *
+ * Note: This code is intended for educational purposes and should be used
+ * with caution in production environments due to the complexity and risks
+ * associated with handling NMIs and low-level system structures.
+ */
+
 #include <intrin.h>
 
 #include "stackwalk.h"
@@ -12,19 +34,19 @@
 #include "serial_logger.h"
 #include "stackwalk_saferecovery.h"
 
-//
-// The global instance of our context structure.
-//
+/**
+ * @brief The global instance of our context structure.
+ */
 NMI_CONTEXT G_NmiContext = {0};
 
-//
-// Global handle for the NMI callback registration.
-//
+/**
+ * @brief Global handle for the NMI callback registration.
+ */
 PVOID G_NmiCallbackHandle = NULL;
 
-//
-// Global context for page fault recovery
-//
+/**
+ * @brief Global context for page fault recovery
+ */
 SAFE_UNWIND_CONTEXT G_SafeUnwindContext[50] = {0};
 
 //
@@ -231,7 +253,7 @@ BOOLEAN NmiCallback(
     for (int RipIndex = 0; RipIndex < MAX_STACK_FRAMES && RetrievedRipArray[RipIndex] != 0; RipIndex++)
     {
         // Use a pre-allocated item from our pool. This is safe at HIGH_LEVEL IRQL.
-        LONG ItemIndex = InterlockedIncrement(&NmiContext->PoolIndex) - 1;
+        LONG ItemIndex = InterlockedIncrementIfLessOrEqual(&G_NmiContext.PoolIndex, MAX_PENDING_CHECKS) - 1;
         if (ItemIndex < MAX_PENDING_CHECKS)
         {
             PSIGNATURE_CHECK_ITEM CheckItem = &NmiContext->CheckItemPool[ItemIndex];
@@ -285,6 +307,10 @@ NTSTATUS NTAPI PerformUnwindInSafeRegion(
 
     _disable();             // Disable interrupts to safely modify the IDT
     __lidt(&UnwindingIdtr); // Load our modified IDT
+    _enable();              // Re-enable interrupts after loading the new IDT
+
+
+    PVOID PrevRetAddr = _ReturnAddress();
 
     // *** DANGER ZONE ***
     // Now, with modified #PF handler in place, call the function
@@ -293,6 +319,13 @@ NTSTATUS NTAPI PerformUnwindInSafeRegion(
         HandlerType, ImageBase, ControlPc, FunctionEntry, ContextRecord,
         HandlerData, EstablisherFrame, ContextPointers
     );
+
+    PVOID PostRetAddr = _ReturnAddress();
+    if (PrevRetAddr != PostRetAddr)
+    {
+        SerialLoggerWrite("Return address was altered in PerformUnwindInSafeRegion. Prev addr: %p, Post addr: %p",
+                          PrevRetAddr, PostRetAddr);
+    }
 
     // Check if a fault occurred during the unwind
     if (G_SafeUnwindContext[KeGetCurrentProcessorNumberEx(NULL)].FaultOccurred)
@@ -305,7 +338,7 @@ NTSTATUS NTAPI PerformUnwindInSafeRegion(
         DbgPrint("[+] RtlVirtualUnwind completed without faults.\n");
     }
     // *** END DANGER ZONE ***
-
+    _disable();            // Disable interrupts to safely restore the original IDT
     __lidt(&OriginalIdtr); // Restore the original IDT
     _enable();             // Re-enable interrupts after restoring the original IDT
 
@@ -377,7 +410,7 @@ static VOID SignatureCheckWorkerRoutine(
         if (!ListEntry)
         {
             // Reset pool index
-            InterlockedExchange(&G_NmiContext.PoolIndex, 0);
+            InterlockedCompareExchange(&G_NmiContext.PoolIndex, 0, MAX_PENDING_CHECKS + 1);
 
             // List is empty. Mark worker as inactive.
             InterlockedExchange(&G_NmiContext.IsWorkerActive, 0);

@@ -1,3 +1,16 @@
+/**
+ * @file pt_analyzer.c
+ * @brief Implementation of process page table analysis for security violations.
+ *
+ * This module provides functionality to recursively walk a process's page table
+ * hierarchy and analyze the page table entries (PTEs) for suspicious mappings,
+ * such as user-mode mappings of kernel-mode virtual addresses.
+ * It is designed to be used in a kernel-mode driver context.
+ *
+ * @note This code is intended for educational purposes only. Unauthorized use or distribution
+ *       of this code may violate local laws and regulations.
+ */
+
 #include "pt_analyzer.h"
 #include "internals.h"
 #include "stackwalk.h"
@@ -8,11 +21,17 @@
 
 // === Internal Function Prototypes ===
 
+/**
+ * @brief Begins the recursive walk of a process's page tables starting from the PML4.
+ */
 static VOID WalkPageTableHierarchy(
     _In_ PEPROCESS Process,
     _In_ UINT64    DirectoryTableBase
 );
 
+/**
+ * @brief Walks a Page Directory Pointer Table (PDPT), continuing the permission chain check.
+ */
 static VOID WalkPdpt(
     _In_ PEPROCESS Process,
     _In_ PDPTE_64* Pdpt,
@@ -21,7 +40,9 @@ static VOID WalkPdpt(
 
 );
 
-
+/**
+ * @brief Walks a Page Directory (PD), continuing the permission chain check.
+ */
 static VOID WalkPd(
     _In_ PEPROCESS Process,
     _In_ PDE_64*   Pd,
@@ -29,6 +50,9 @@ static VOID WalkPd(
     _In_ BOOLEAN   IsUserChain
 );
 
+/**
+ * @brief Walks a Page Table (PT) and performs the final, robust analysis on its PTEs.
+ */
 static VOID WalkPt(
     _In_ PEPROCESS Process,
     _In_ PTE_64*   Pt,
@@ -38,6 +62,15 @@ static VOID WalkPt(
 
 // === Public Function Implementation ===
 
+/**
+ * @brief Analyzes the page tables of a given process for security violations.
+ *
+ * This function initiates a recursive walk of the process's page table hierarchy
+ * to detect anomalies, such as user-mode mappings of kernel-mode virtual addresses.
+ *
+ * @note This function must be called at PASSIVE_LEVEL.
+ * @param[in] TargetProcess A pointer to the EPROCESS object of the process to analyze.
+ */
 VOID AnalyzeProcessPageTables(
     _In_ PEPROCESS TargetProcess
 )

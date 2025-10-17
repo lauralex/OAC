@@ -1,10 +1,16 @@
+/**
+ * @file cr3_thrasher.h
+ * @brief Header file for CR3 thrashing functionality.
+ *
+ * This header defines the interface for triggering CR3 thrashing, which involves setting up
+ * a custom page table hierarchy and modifying the IDT to point to a custom Page Fault handler.
+ * The original CR3 is restored by the ISR.
+ */
+
 #pragma once
-#include <ntddk.h>
 #include "ia32.h"
 
-// Global variable to share the original CR3 with our assembly ISR.
-// This MUST be global.
-extern UINT64 G_OriginalCr3;
+#include <ntddk.h>
 
 // Global array to hold a copy of the IDT for our ISR to use.
 extern SEGMENT_DESCRIPTOR_INTERRUPT_GATE_64 Cr3ThrashIdtArray[256];

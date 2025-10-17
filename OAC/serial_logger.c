@@ -1,6 +1,40 @@
+/**
+ * @file serial_logger.c
+ * @brief A simple serial logger for low-level debugging.
+ *
+ * This module provides a basic serial logging mechanism suitable for
+ * low-level debugging in environments where standard libraries are unavailable.
+ * It initializes a UART port and provides functions to send formatted log messages.
+ *
+ * The logger supports a limited set of format specifiers:
+ * - %s: String
+ * - %d, %i: Signed decimal integer
+ * - %u: Unsigned decimal integer
+ * - %x, %X: Unsigned hexadecimal integer (lowercase/uppercase)
+ * - %p: Pointer (as hexadecimal)
+ * - %%: Literal percent sign
+ *
+ * The implementation avoids dynamic memory allocation and is designed to be
+ * safe against buffer overflows by using fixed-size buffers and careful formatting.
+ *
+ * Note: This code is intended for educational purposes and may require adaptation
+ * for use in production environments, especially regarding hardware specifics
+ * and concurrency considerations.
+ */
+
+#include "serial_logger.h"
+#include "globals.h"
+
 #include <intrin.h>
 #include <stdarg.h>
-#include "serial_logger.h"
+#include <ntddk.h>
+
+/**
+ * @brief Enable `DEBUG_MODE` to activate serial logging.
+ */
+#define DEBUG_MODE 0
+
+static KSPIN_LOCK LogLock = {0};
 
 
 /***************************************************
@@ -31,6 +65,7 @@
 
 VOID LoggerInit(VOID)
 {
+#if DEBUG_MODE
     /***************************************************
      ***************************************************
      **                                               **
@@ -56,6 +91,7 @@ VOID LoggerInit(VOID)
 
     // Set the Modem Control Register (MCR) to 0x08
     __outbyte(COM1_PORT + UART_MCR_OFFSET, UART_MCR_OUT2);
+#endif
 }
 
 /**
@@ -134,7 +170,7 @@ static SIZE_T LogpIntegerToString(
         return 0;
     }
 
-    while (Value > 0)
+    while (Value != 0)
     {
         if (Index >= (BufferSize - 1))
         {
@@ -153,17 +189,19 @@ static SIZE_T LogpIntegerToString(
 
 /**
  * @brief Formats a string using a va_list of arguments.
- *
+ * 
+ * @internal
  * This is the core formatting engine, designed to be a safe replacement for vsnprintf.
  * It supports a subset of standard format specifiers: %s, %d, %i, %u, %x, %X, %p, %%.
  * The output is always null-terminated, even on truncation.
+ * @endinternal
  *
  * @param[out] Buffer      The destination buffer for the formatted string.
  * @param[in]  BufferSize  The total size of the destination buffer, including the null terminator.
  * @param[in]  Format      The format control string.
  * @param[in]  Args        The va_list of arguments to format.
  */
-VOID SerialLoggerFormatV(
+static VOID SerialLoggerFormatV(
     _Out_ PCHAR  Buffer,
     _In_ size_t  BufferSize,
     _In_ PCSTR   Format,
@@ -188,8 +226,8 @@ VOID SerialLoggerFormatV(
 
         PFormat++; // Move past the '%'
 
-        char  TempNumberBuffer[65]; // Sufficient for 64-bit integer in binary + null
-        PCHAR StringToCopy = NULL;
+        char  TempNumberBuffer[65] = {0}; // Sufficient for 64-bit integer in binary + null
+        PCHAR StringToCopy         = NULL;
 
         switch (*PFormat)
         {
@@ -326,13 +364,14 @@ static VOID LogpWriteString(
  * @param[in] ...    The arguments to format.
  */
 VOID SerialLoggerWrite(
-    _In_ PCSTR Format,
+    _In_z_ _Printf_format_string_ PCSTR Format,
     _In_ ...
 )
 {
+#if DEBUG_MODE
     // A buffer on the stack to hold the formatted log message.
     // Its size is controlled by a single, clear constant.
-    CHAR    LogBuffer[MAX_LOG_MESSAGE_LENGTH];
+    CHAR    LogBuffer[MAX_LOG_MESSAGE_LENGTH] = {0};
     va_list Args;
 
     // Format the string safely using the new, robust formatting function.
@@ -341,9 +380,22 @@ VOID SerialLoggerWrite(
     SerialLoggerFormatV(LogBuffer, sizeof(LogBuffer), Format, Args);
     va_end(Args);
 
+    // Prepend the processor number to the log message.
+    CHAR ProcessorBuffer[10] = {0};
+    LogpIntegerToString(KeGetCurrentProcessorNumberEx(NULL), ProcessorBuffer, sizeof(ProcessorBuffer), 10, TRUE);
+
+    //KeStallExecutionProcessor(500);
+
     // Write the resulting string and a CRLF sequence to the serial port.
+    KIRQL OldIrql;
+    KeAcquireSpinLock(&LogLock, &OldIrql);
+    LogpWriteString(ProcessorBuffer);
     LogpWriteString(LogBuffer);
     LogpWriteString("\r\n");
+    KeReleaseSpinLock(&LogLock, OldIrql);
+#else
+    UNREFERENCED_PARAMETER(Format);
+#endif
 }
 
 /**
@@ -357,5 +409,9 @@ VOID SerialLoggerIsr(
     _In_ UINT64 Something
 )
 {
+#if DEBUG_MODE
     SerialLoggerWrite("Logging from ISR. Info: %p", Something);
+#else
+    UNREFERENCED_PARAMETER(Something);
+#endif
 }

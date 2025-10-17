@@ -1,3 +1,20 @@
+/**
+ * @file cr3_validation.c
+ * @brief Validates a captured CR3 value against the system's active process list.
+ *
+ * This module provides functionality to verify if a given CR3 value corresponds to any
+ * active process in the system. This is crucial for detecting potential anomalies or
+ * malicious activities that may involve unauthorized context switches.
+ *
+ * The primary function, `IsCr3InProcessList`, iterates through the active process list
+ * and compares the captured CR3 value against each process's Directory Table Base (DTB).
+ * If a match is found, it indicates that the CR3 is valid; otherwise, it is considered suspicious.
+ *
+ * Note: This code assumes a Windows kernel environment and relies on certain internal
+ * structures and globals that may vary between Windows versions. Proper offsets and
+ * structures should be verified for compatibility with the target OS version.
+ */
+
 #include "cr3_validation.h"
 #include "globals.h"
 #include "ia32.h"

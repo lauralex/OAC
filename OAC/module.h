@@ -6,7 +6,7 @@
  * and to resolve exported functions from their PE headers.
  */
 #pragma once
-#include <ntdef.h>
+#include <ntddk.h>
 
 /**
  * @struct _LDR_DATA_TABLE_ENTRY
@@ -42,11 +42,36 @@ extern PLIST_ENTRY PsLoadedModuleList;
  * @brief Finds the base address of a loaded kernel module by its name.
  *
  * @param[in] ModuleName The case-insensitive name of the module (e.g., L"ci.dll").
+ * @param[in_opt] ModuleSize If non-NULL, receives the size of the module in bytes.
+ * @return The base address of the module if found; otherwise, NULL.
+ * @note This function must be called at IRQL = PASSIVE_LEVEL.
+ */
+PVOID FindModuleByName2(
+    _In_ PCWSTR      ModuleName,
+    _In_opt_ PSIZE_T ModuleSize
+);
+
+/**
+ * @brief Finds the base address of a loaded kernel module by its name.
+ *
+ * @param[in] ModuleName The case-insensitive name of the module (e.g., L"ci.dll").
  * @return The base address of the module if found; otherwise, NULL.
  * @note This function must be called at IRQL = PASSIVE_LEVEL.
  */
 PVOID FindModuleByName(
     _In_ PCWSTR ModuleName
+);
+
+/**
+ * @brief Finds the base address of a user-mode module by its name.
+ *
+ * @param[in] Process The EPROCESS pointer of the target process.
+ * @param[in] ModuleName The case-insensitive name of the module (e.g., L"kernel32.dll").
+ * @return The base address of the module if found; otherwise, NULL.
+ */
+PVOID FindUserModuleByName(
+    _In_ PEPROCESS Process,
+    _In_ PCWSTR    ModuleName
 );
 
 /**

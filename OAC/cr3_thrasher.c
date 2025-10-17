@@ -1,15 +1,30 @@
-#include <ntddk.h>
-#include <intrin.h>
+/**
+ * @file cr3_thrasher.c
+ * @brief Implements a CR3 thrashing routine to test for hypervisor presence.
+ *
+ * This code sets up a minimal page table hierarchy in a contiguous memory pool,
+ * modifies the IDT to point to a custom page fault handler, and then thrashes
+ * the CR3 register to trigger page faults. The custom handler restores the original
+ * CR3 and IDT, ensuring system stability.
+ *
+ * Note: This code is intended for educational purposes only. Running it on a
+ * production system may cause instability or crashes.
+ */
 
+#include "cr3_thrasher.h"
+#include "globals.h"
 #include "mm.h"
 #include "isr.h"
 #include "arch.h"
-#include "cr3_thrasher.h"
 #include "ia32.h"
 #include "serial_logger.h"
 
-// Global variable to share the original CR3 with our assembly ISR.
-// This MUST be global.
+#include <ntddk.h>
+#include <intrin.h>
+
+/**
+ * @brief Global variable to share the original CR3 with our assembly ISR, defined in cr3_thrasher.c.
+ */
 UINT64 G_OriginalCr3 = 0;
 
 // Global array to hold a copy of the IDT for our ISR to use.

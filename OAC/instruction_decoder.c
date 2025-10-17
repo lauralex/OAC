@@ -1,10 +1,16 @@
-// --- START OF FILE decoder.c ---
+/**
+ * @file instruction_decoder.c
+ * @brief Implements dynamic x86-64 instruction length decoding using the Zydis library.
+ *
+ * This module provides a function to determine the length of an x86-64 instruction
+ * at runtime, which is essential for accurate stack walking and unwinding.
+ * It leverages the Zydis library, a fast and lightweight x86/x86-64 instruction decoder.
+ */
+
+#include "instruction_decoder.h"
+#include "Zydis.h"
 
 #include <ntddk.h>
-#include "instruction_decoder.h"
-
-// We must include the Zydis header
-#include "Zydis.h"
 
 /**
  * @brief Dynamically calculates the length of an x86-64 instruction.
