@@ -1,5 +1,5 @@
 # OAC
-Open Anti-Cheat. A kernel-mode anticheat just for fun.
+Open Anti-Cheat. A kernel-mode anticheat just for fun. [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/lauralex/OAC)
 
 ## Features
 
