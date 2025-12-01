@@ -1,5 +1,5 @@
-# OAC
-Open Anti-Cheat is a Windows kernel-mode playground that bundles multiple detection techniques into a single driver, plus a small user-mode client to trigger them. This document keeps the highlights concise and links directly into the code for easy navigation.
+# OAC [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/lauralex/OAC) [![Build Windows Kernel Driver](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
+Open Anti-Cheat is a Windows kernel-mode playground that bundles multiple detection techniques into a single driver, plus a small user-mode client to trigger them. This document stays concise while linking straight to the relevant code.
 
 ## Architecture at a Glance
 - **Driver entry & IOCTL hub** — `OAC/main.c` creates the device, hooks IRP handlers, and routes user requests to feature modules:
@@ -46,6 +46,8 @@ Open Anti-Cheat is a Windows kernel-mode playground that bundles multiple detect
 1. Map the driver (e.g., with [KDMapper](https://github.com/TheCruZ/kdmapper)).
 2. Run `OAC-Client.exe` as Administrator to send IOCTLs to the driver.
 3. Disable protections such as Microsoft's vulnerable driver blocklist only on disposable VMs.
+
+> **:warning: WARNING:** This is a kernel-mode driver. Running this code can lead to instability or BSODs and requires disabling security features. **Use only on test machines or disposable VMs.**
 
 ## IOCTL Cheat Sheet
 | Control Code | Purpose |
