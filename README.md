@@ -3,53 +3,44 @@ Open Anti-Cheat. A kernel-mode anticheat just for fun. [![Ask DeepWiki](https://
 
 ## Features
 
-OAC implements several advanced detection vectors, each designed to uncover a different class of malicious activity.
+OAC implements several advanced detection vectors.
 
 ### 1. Anti-Hypervisor CR3 Thrashing
+Detects hypervisors by manipulating memory management (page tables and `CR3`) in ways that are valid on bare metal but often mishandled by virtualization.
 
-This routine is designed to detect and crash poorly implemented hypervisors or virtualization-based cheats by manipulating memory management in a way that is valid on bare metal but often unhandled in a virtualized environment.
-
-The detection works through the following sequence:
-1.  **Minimalist Page Table Creation:** The driver constructs its own set of page tables in memory. These tables only map the absolute minimum required for the routine to function: a small portion of the driver's code, the custom Page Fault ISR, the Interrupt Stack, the IDT, and a variable to store the original `CR3`.
-2.  **Context Swap:** In a critical, interrupt-disabled section, the driver saves the original `CR3` and swaps the Interrupt Descriptor Table Register (`IDTR`) to point to its own custom IDT.
-3.  **CR3 Thrash:** The driver then overwrites the live `CR3` register with the physical address of its own minimalist PML4 table.
-4.  **Deliberate Page Fault:** A page fault is intentionally triggered by accessing an unmapped address. A legitimate system will vector this fault through our custom ISR. Many simple hypervisors, however, will fail to properly handle the nested page fault during the `CR3` write VM-exit, leading to a system crash (triple fault).
-5.  **Recovery:** Our custom Page Fault ISR immediately restores the original `CR3` value and resumes execution. The driver then restores the original `IDTR`, cleans up, and returns the system to a stable state.
+*   **Implementation:** [`OAC/cr3_thrasher.c`](OAC/cr3_thrasher.c)
+    *   **Minimalist Page Table Creation:** `TriggerCr3Thrash` creates a minimal page table hierarchy.
+    *   **Context Swap:** Swaps IDT to a custom one using `__lidt`.
+    *   **CR3 Thrash:** Overwrites `CR3` with a custom value (`__writecr3`) to trigger VM-exits.
+    *   **Deliberate Page Fault:** Intentionally triggers a page fault to test exception handling.
+*   **Recovery:** [`OAC/isr.asm`](OAC/isr.asm)
+    *   **Page Fault ISR:** `PageFaultIsr` restores the original `CR3` and resumes execution.
 
 ### 2. NMI-Based System Integrity Scans
+Uses Non-Maskable Interrupts (NMIs) to perform high-privilege, out-of-band analysis of system state.
 
-To perform analysis from a high-privilege, "out-of-band" context that is difficult for malware to intercept, OAC uses Non-Maskable Interrupts (NMIs). An NMI is sent to every logical processor, triggering a series of deferred checks that run at a lower, safer IRQL.
-
-#### a. Kernel Stack Unwinding & NMI Blocking Check
-When the NMI callback is invoked, it first locates the `KTRAP_FRAME` to get the state of the interrupted code. It then performs a safe stack walk to gather the instruction pointers (`RIP`) from the call stack of the code that was executing on each core. The safe unwinding is ensured by temporarily installing a custom Page Fault handler to gracefully handle potential memory access violations during the process. A failure to process all sent NMIs within a timeout period indicates that an NMI might have been blocked or dropped, a highly suspicious event.
-
-#### b. Kernel Module Digital Signature Verification
-The instruction pointers gathered during the NMI stack walk are enqueued for deferred analysis. A worker thread processes each `RIP` to verify that it resides within a legitimately signed kernel module. This is accomplished by using the undocumented `CiValidateFileObject` function, effectively checking the digital signature of the driver file on disk that corresponds to the code running in memory. An invalid signature is a strong indicator of an unsigned or maliciously patched driver.
-
-#### c. CR3 Validation
-The `CR3` register, which holds the physical address of the current process's page tables, is captured during the NMI. In the deferred worker thread, this captured `CR3` is validated against a list of `CR3` values from all active processes on the system (derived from `PsActiveProcessHead`). A `CR3` value that does not belong to any known process is a hallmark of a stealthy rootkit or hypervisor attempting to hide its own execution by using its own private memory space.
-
-#### d. Suspicious Page Table Mapping Detection
-This is a robust memory forensics routine that scans for fundamental security boundary violations within a process's memory layout.
--   **Threat Model:** Detects if a user-mode process has page table entries (PTEs) that grant it direct access (Read, Write, or Execute) to canonical kernel-space virtual addresses (`0xFFFF800000000000` and higher). Such a mapping is a critical security flaw and a common technique used in privilege escalation exploits.
--   **Methodology:** The routine performs a full, recursive walk of the page table hierarchy (PML4 -> PDPT -> PD -> PT) for each active user-mode process.
--   **Validation Logic:** For a virtual address to be accessible from user mode, the `User/Supervisor` bit must be set to `User` at **every single level** of the translation chain. This routine validates this condition and flags any kernel address that is accessible to user mode, also reporting on large page (2MB) mappings.
+*   **NMI Callback & Loop:** [`OAC/stackwalk.c`](OAC/stackwalk.c)
+    *   `TriggerNmiStackwalk` broadcasts NMIs to all cores.
+    *   `NmiCallback` handles the interrupt and initiates checks.
+*   **Kernel Stack Unwinding:** [`OAC/stackwalk.c`](OAC/stackwalk.c)
+    *   `PerformUnwindInSafeRegion` safely unwinds the stack to find executing code.
+*   **Kernel Module Verification:** [`OAC/ci.c`](OAC/ci.c)
+    *   `VerifyModuleSignatureByRip` verifies digital signatures of executing code.
+*   **CR3 Validation:** [`OAC/cr3_validation.c`](OAC/cr3_validation.c)
+    *   `IsCr3InProcessList` checks if the captured `CR3` belongs to a valid process.
+*   **Suspicious Page Table Mapping:** [`OAC/pt_analyzer.c`](OAC/pt_analyzer.c)
+    *   `AnalyzeProcessPageTables` detects user-mode mappings of kernel memory.
 
 ### 3. WFP-Based Shellcode Detection
-This feature leverages the Windows Filtering Platform (WFP) to monitor outbound network connections and perform deep, heuristic-based analysis on the originating thread to detect in-memory shellcode, such as reverse shells.
+Monitors outbound network connections and analyzes the originating thread for in-memory shellcode.
 
--   **Threat Model:** Detects cheats or malware that inject raw shellcode into a process and then execute it to establish a network connection. A common pattern for this is creating a memory region with Read-Write-Execute (RWX) permissions.
--   **Methodology:** The detection process is triggered for every new outbound connection:
-    1.  **WFP Callout:** The driver registers a callout at the `ALE_AUTH_CONNECT` layer, intercepting TCP/IP connection attempts before they are established.
-    2.  **Thread Context Acquisition:** Upon interception, the driver identifies the originating process and thread. It then locates the thread's kernel trap frame (`KTRAP_FRAME`) to access the user-mode register state (like `RIP` and `RSP`) at the exact moment of the system call that initiated the connection.
-    3.  **Heuristic Stack Unwinding:** A custom stack walker, built using the Zydis disassembler, unwinds the user-mode call stack of the originating thread. To ensure accuracy and avoid bad data, the stack walker validates each potential return address using several heuristics:
-        *   The address must be a valid user-mode address.
-        *   The memory page containing the address must have execute permissions.
-        *   The address must be the target of a preceding `CALL` instruction, confirming a legitimate function call.
-    4.  **RWX and Signature Scanning:** For each validated instruction pointer on the call stack, the driver performs two final checks:
-        *   It queries the memory protection of the page. If the page is marked as `PAGE_EXECUTE_READWRITE` (RWX), it is flagged as highly suspicious, as legitimate code rarely resides in writable and executable memory.
-        *   It scans the memory at the address for known shellcode byte patterns.
-    5.  **Blocking Action:** If a return address points to an RWX memory region and contains a shellcode signature, the driver concludes that the connection is malicious. It then instructs WFP to block the connection, preventing the shellcode from communicating.
+*   **WFP Callout:** [`OAC/wfp_monitor.c`](OAC/wfp_monitor.c)
+    *   `WfpConnectCallout` intercepts connection attempts at `ALE_AUTH_CONNECT`.
+*   **Thread Analysis:** [`OAC/shellcode_analyzer.c`](OAC/shellcode_analyzer.c)
+    *   `AnalyzeThreadForShellcode` unwinds the stack of the connecting thread.
+    *   `IsMemoryRwAndContainsSignature` checks for RWX permissions and shellcode signatures.
+*   **Zydis Integration:** [`OAC/zyan_stackwalker.c`](OAC/zyan_stackwalker.c)
+    *   Uses Zydis for heuristic stack unwinding.
 
 ## IOCTL Interface
 
