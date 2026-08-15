@@ -1,5 +1,7 @@
 # OAC
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/lauralex/OAC)
+
 OAC is a defensive, x64 Windows anti-cheat reference implementation. Version 4 builds on the
 original crash-oriented proof of concept with a signed kernel control driver and an elevated
 user-mode scanner. The kernel component performs only bounded, IRQL-appropriate work; pageable
