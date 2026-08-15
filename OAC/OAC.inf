@@ -1,0 +1,37 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=System
+ClassGuid={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%ProviderName%
+DriverVer=08/11/2026,3.0.0.0
+CatalogFile=OAC.cat
+PnpLockdown=1
+
+[DefaultInstall.NTamd64]
+CopyFiles=@OAC.sys
+
+[DefaultInstall.NTamd64.Services]
+AddService=OAC,0x00000002,OAC.Service
+
+[DestinationDirs]
+DefaultDestDir=13
+
+[SourceDisksNames]
+1=%DiskName%,,
+
+[SourceDisksFiles]
+OAC.sys=1
+
+[OAC.Service]
+DisplayName=%ServiceDisplayName%
+Description=%ServiceDescription%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\OAC.sys
+
+[Strings]
+ProviderName="OAC Project"
+DiskName="OAC Driver Installation Media"
+ServiceDisplayName="OAC Defensive Anti-Cheat"
+ServiceDescription="OAC process-protection and kernel-integrity control driver"

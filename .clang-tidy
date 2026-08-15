@@ -1,0 +1,13 @@
+---
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -bugprone-easily-swappable-parameters,
+  -performance-no-int-to-ptr,
+  -clang-analyzer-optin.core.EnumCastOutOfRange
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*[\\/]OAC-Client[\\/].*'
+...

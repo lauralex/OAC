@@ -19,30 +19,34 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Install MSBuild
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2.0.0
+      uses: microsoft/setup-msbuild@v3
+      with:
+        msbuild-architecture: x64
 
-    # Install WDK
     - name: Install Windows Driver Kit
       run: |
         winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} `
-          --accept-package-agreements --accept-source-agreements --silent
+          --exact --accept-package-agreements --accept-source-agreements `
+          --disable-interactivity --silent
 
-    # Restore NuGet packages if needed
-    - name: Restore NuGet packages
-      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
+    - name: Build solution
+      run: |
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /m /t:Rebuild `
+          /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+          /p:Platform=${{ env.PLATFORM }} `
+          /p:PreferredToolArchitecture=x64 `
+          /p:Inf2CatUseLocalTime=true
 
-    # Build the driver
-    - name: Build Driver
-      run: msbuild ${{ env.SOLUTION_FILE_PATH }} /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.PLATFORM }}
-
-    # Optionally, upload the .sys/.exe/.pdb as artifacts
-    - name: Upload Driver Artifacts
+    - name: Upload unsigned build artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: driver-binaries
+        name: oac-release-x64-unsigned
+        if-no-files-found: error
         path: |
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.sys
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.exe
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC.sys
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Client.exe
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Protocol-Test.exe
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/OAC.inf
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/oac.cat
