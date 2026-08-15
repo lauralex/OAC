@@ -17,7 +17,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v3
@@ -34,7 +34,7 @@ jobs:
           /p:Inf2CatUseLocalTime=true
 
     - name: Upload unsigned build artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: oac-release-x64-unsigned
         if-no-files-found: error
