@@ -12,9 +12,8 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{fa688b46-5ab5-42ac-8d56-86e5219418c4}</ProjectGuid>
-    <RootNamespace>OACClient</RootNamespace>
+    <ProjectGuid>{C4FCE3D2-69DD-4AE1-9AA2-8F3D48A72EF1}</ProjectGuid>
+    <RootNamespace>OACProtocolTest</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -34,8 +33,15 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="PropertySheets">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props"
+      Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')"
+      Label="LocalAppDataPlatform" />
   </ImportGroup>
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <OutDir>$(SolutionDir)x64\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)x64\$(Configuration)\OAC-Protocol-Test\</IntDir>
+    <TargetName>OAC-Protocol-Test</TargetName>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
@@ -53,22 +59,12 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
-      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Bthprops.lib;Cfgmgr32.lib;Dbghelp.lib;Hid.lib;Iphlpapi.lib;Ole32.lib;Psapi.lib;Setupapi.lib;User32.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="driver_client.cpp" />
-    <ClCompile Include="hardware_identity.cpp" />
-    <ClCompile Include="OAC-Client.cpp" />
-    <ClCompile Include="process_scanner.cpp" />
-    <ClCompile Include="platform_security.cpp" />
-    <ClCompile Include="scanner_common.cpp" />
-    <ClCompile Include="system_scanner.cpp" />
+    <ClCompile Include="OAC-Protocol-Test.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="driver_hash_policy.inc" />
-    <ClInclude Include="scanner.hpp" />
-    <ClInclude Include="..\shared\oac_driver_policy.h" />
     <ClInclude Include="..\shared\oac_protocol.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

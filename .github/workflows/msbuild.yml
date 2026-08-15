@@ -1,6 +1,7 @@
 name: Build Windows Kernel Driver
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
   pull_request:
@@ -10,39 +11,37 @@ env:
   SOLUTION_FILE_PATH: ./OAC.sln
   BUILD_CONFIGURATION: Release
   PLATFORM: x64
-  WDK_VERSION: 10.0.26100
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
 
-    # Install MSBuild
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2.0.0
-
-    # Install WDK
-    - name: Install Windows Driver Kit
-      run: |
-        winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} `
-          --accept-package-agreements --accept-source-agreements --silent
-
-    # Restore NuGet packages if needed
-    - name: Restore NuGet packages
-      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
-
-    # Build the driver
-    - name: Build Driver
-      run: msbuild ${{ env.SOLUTION_FILE_PATH }} /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.PLATFORM }}
-
-    # Optionally, upload the .sys/.exe/.pdb as artifacts
-    - name: Upload Driver Artifacts
-      uses: actions/upload-artifact@v4
+      uses: microsoft/setup-msbuild@v3
       with:
-        name: driver-binaries
+        msbuild-architecture: x64
+        vs-version: '[17.0,18.0)'
+
+    - name: Build solution
+      run: |
+        msbuild ${{ env.SOLUTION_FILE_PATH }} /m /t:Rebuild `
+          /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+          /p:Platform=${{ env.PLATFORM }} `
+          /p:PreferredToolArchitecture=x64 `
+          /p:Inf2CatUseLocalTime=true
+
+    - name: Upload unsigned build artifacts
+      uses: actions/upload-artifact@v7
+      with:
+        name: oac-release-x64-unsigned
+        if-no-files-found: error
         path: |
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.sys
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.exe
-          ./${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC.sys
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Client.exe
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Protocol-Test.exe
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/OAC.inf
+          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/oac.cat

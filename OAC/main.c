@@ -1,302 +1,295 @@
-/**
- * @file main.c
- * @brief Main driver code for OAC6.
- *
- * This file contains the entry point and initialization code for the OAC6 kernel-mode driver.
- * It sets up the device object, symbolic link, and IRP handlers. It also includes IOCTL
- * definitions for communication with user-mode applications.
- *
- * The driver provides functionalities such as CR3 thrashing and NMI stack walking, which can be
- * triggered via IOCTLs. It also initializes a WFP-based network monitor and manages internal
- * structures.
- *
- * Note: This code is intended for educational purposes only. Unauthorized use or distribution
- * of this code may violate local laws and regulations.
- */
+#include <ntifs.h>
+#include <wdmsec.h>
+#include <initguid.h>
 
-#include "cr3_thrasher.h"
-#include "internals.h"
-#include "stackwalk.h"
-#include "wfp_monitor.h"
+#include "..\shared\oac_protocol.h"
+#include "compat.h"
+#include "cpu_snapshot.h"
+#include "protection.h"
+#include "scanner.h"
+#include "telemetry.h"
 
-// =================================================================================================
-// == IOCTL Definitions
-// =================================================================================================
-#define IOCTL_TEST_COMMUNICATION          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_TRIGGER_CR3_THRASH          CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_UNLOAD_DRIVER               CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_TRIGGER_NMI_STACKWALK       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_INITIALIZE_WFP_MONITOR      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_DEINITIALIZE_WFP_MONITOR    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define OAC_DEVICE_NAME L"\\Device\\OAC"
+#define OAC_DOS_DEVICE_NAME L"\\DosDevices\\OAC"
 
+DEFINE_GUID(GUID_DEVCLASS_OAC,
+    0x8f69af54, 0x6284, 0x4f94, 0xa0, 0x49, 0x21, 0x96, 0x75, 0x9b, 0x9a, 0xd2);
 
-// =================================================================================================
-// == Function Prototypes
-// =================================================================================================
+static UNICODE_STRING g_DeviceName;
+static UNICODE_STRING g_DosDeviceName;
+static PDEVICE_OBJECT g_DeviceObject;
+static BOOLEAN g_DosLinkCreated;
+static BOOLEAN g_TelemetryInitialized;
+static BOOLEAN g_ScannerInitialized;
+static BOOLEAN g_CpuSnapshotInitialized;
+static BOOLEAN g_ProtectionInitialized;
 
-// The function that performs the actual driver initialization.
-NTSTATUS DriverInitialize(
-    _In_ PDRIVER_OBJECT  DriverObject,
-    _In_ PUNICODE_STRING RegistryPath
-);
+DRIVER_INITIALIZE DriverEntry;
+DRIVER_UNLOAD OacDriverUnload;
+_Dispatch_type_(IRP_MJ_CREATE)
+_Dispatch_type_(IRP_MJ_CLEANUP)
+_Dispatch_type_(IRP_MJ_CLOSE)
+DRIVER_DISPATCH OacCreateClose;
+_Dispatch_type_(IRP_MJ_DEVICE_CONTROL)
+DRIVER_DISPATCH OacDeviceControl;
 
-// Standard IRP and Unload handlers.
-VOID DriverUnload(
-    _In_ PDRIVER_OBJECT DriverObject
-);
-NTSTATUS IrpCreateCloseHandler(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp
-);
-NTSTATUS IrpDeviceIoCtlHandler(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp
-);
-
-
-// =================================================================================================
-// == Global Variables
-// =================================================================================================
-
-const wchar_t* G_DRIVER_NAME  = L"\\Driver\\OAC6"; // For IoCreateDriver. Can be NULL for stealth.
-const wchar_t* G_DEVICE_NAME  = L"\\Device\\OAC6";
-const wchar_t* G_SYMLINK_NAME = L"\\DosDevices\\OAC6";
-
-// Global state to track if the WFP component is currently initialized.
-BOOLEAN G_IsWfpInitialized = FALSE;
-
-
-// =================================================================================================
-// == Driver Entry & Initialization
-// =================================================================================================
-
-NTSTATUS DriverEntry(
-    _In_ PDRIVER_OBJECT  DriverObject,
-    _In_ PUNICODE_STRING RegistryPath
-)
+static NTSTATUS OacCompleteIrp(
+    _Inout_ PIRP Irp,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
 {
-    UNREFERENCED_PARAMETER(DriverObject);
-    UNREFERENCED_PARAMETER(RegistryPath);
-
-    DbgPrint("[+] kdmapper has called DriverEntry\n");
-
-    UNICODE_STRING DriverName;
-    RtlInitUnicodeString(&DriverName, G_DRIVER_NAME);
-
-    // Call the undocumented function IoCreateDriver.
-    // This will create our DRIVER_OBJECT and call our DriverInitialize function.
-    NTSTATUS Status = IoCreateDriver(&DriverName, &DriverInitialize);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DbgPrint("[-] IoCreateDriver failed: 0x%X\n", Status);
-    }
-    else
-    {
-        DbgPrint("[+] IoCreateDriver succeeded\n");
-    }
-
-    return Status;
-}
-
-// This function is called by IoCreateDriver to perform driver initialization.
-NTSTATUS NTAPI DriverInitialize(
-    _In_ PDRIVER_OBJECT  DriverObject,
-    _In_ PUNICODE_STRING RegistryPath
-)
-{
-    UNREFERENCED_PARAMETER(RegistryPath);
-
-    NTSTATUS       Status           = STATUS_SUCCESS;
-    PDEVICE_OBJECT DeviceObject     = NULL;
-    UNICODE_STRING DeviceName       = {0};
-    UNICODE_STRING SymbolicLinkName = {0};
-
-    RtlInitUnicodeString(&DeviceName, G_DEVICE_NAME);
-    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
-
-    DbgPrint("[+] DriverInitialize called by IoCreateDriver\n");
-
-    // Create the device object.
-    Status = IoCreateDevice(
-        DriverObject,
-        0,
-        &DeviceName,
-        FILE_DEVICE_UNKNOWN,
-        FILE_DEVICE_SECURE_OPEN,
-        FALSE,
-        &DeviceObject
-    );
-
-    if (!NT_SUCCESS(Status))
-    {
-        DbgPrint("[-] IoCreateDevice failed: 0x%X\n", Status);
-        return Status;
-    }
-
-    DbgPrint("[+] Device object created successfully\n");
-
-    // Create a symbolic link so user-mode applications can find the device.
-    Status = IoCreateSymbolicLink(&SymbolicLinkName, &DeviceName);
-
-    if (!NT_SUCCESS(Status))
-    {
-        DbgPrint("[-] IoCreateSymbolicLink failed: 0x%X\n", Status);
-        IoDeleteDevice(DeviceObject);
-        return Status;
-    }
-
-    DbgPrint("[+] Symbolic link created successfully\n");
-
-    // Set up the driver unload routine and IRP handlers.
-    DriverObject->DriverUnload                         = DriverUnload;
-    DriverObject->MajorFunction[IRP_MJ_CREATE]         = IrpCreateCloseHandler;
-    DriverObject->MajorFunction[IRP_MJ_CLOSE]          = IrpCreateCloseHandler;
-    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = IrpDeviceIoCtlHandler;
-
-    // Clear the initialization flag to allow I/O.
-    DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
-
-    // Initialize internal structures.
-    InitializeInternals();
-
-    DbgPrint("[+] Driver initialized successfully. WFP monitor is ready to be activated via IOCTL.\n");
-    return Status;
-}
-
-//
-// IRP Handlers and Unload Routine
-//
-
-VOID DriverUnload(
-    _In_ PDRIVER_OBJECT DriverObject
-)
-{
-    UNICODE_STRING SymbolicLinkName = {0};
-    RtlInitUnicodeString(&SymbolicLinkName, G_SYMLINK_NAME);
-    DbgPrint("[+] DriverUnload called\n");
-
-    // Deinitialize the NMI handler if it was initialized.
-    DeinitializeNmiHandler();
-
-    // Ensure WFP is cleaned up if it was left active. This is a critical cleanup step.
-    if (G_IsWfpInitialized)
-    {
-        DbgPrint("[*] WFP was active during unload. De-initializing now.\n");
-        DeinitializeWfpMonitor();
-        G_IsWfpInitialized = FALSE;
-    }
-
-    // Delete the symbolic link.
-    IoDeleteSymbolicLink(&SymbolicLinkName);
-    DbgPrint("[+] Symbolic link deleted\n");
-
-    // Delete the device object.
-    if (DriverObject->DeviceObject)
-    {
-        IoDeleteDevice(DriverObject->DeviceObject);
-        DbgPrint("[+] Device object deleted\n");
-    }
-
-    // Delete the driver object itself.
-    IoDeleteDriver(DriverObject);
-
-    DbgPrint("[+] Driver unloaded successfully\n");
-}
-
-NTSTATUS IrpCreateCloseHandler(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp
-)
-{
-    UNREFERENCED_PARAMETER(DeviceObject);
-    DbgPrint("[+] IrpCreateCloseHandler called\n");
-    Irp->IoStatus.Status      = STATUS_SUCCESS;
-    Irp->IoStatus.Information = 0;
-    IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS IrpDeviceIoCtlHandler(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ PIRP           Irp
-)
-{
-    PIO_STACK_LOCATION IrpStack    = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS           Status      = STATUS_SUCCESS;
-    ULONG_PTR          Information = 0;
-
-    if (!IrpStack)
-    {
-        Status = STATUS_UNSUCCESSFUL;
-    }
-    else
-    {
-        switch (IrpStack->Parameters.DeviceIoControl.IoControlCode)
-        {
-        case IOCTL_TEST_COMMUNICATION:
-            DbgPrint("[+] IOCTL_TEST_COMMUNICATION received\n");
-            break;
-
-        case IOCTL_TRIGGER_CR3_THRASH:
-            DbgPrint("[+] IOCTL_TRIGGER_CR3_THRASH received\n");
-            TriggerCr3Thrash();
-            break;
-
-        case IOCTL_TRIGGER_NMI_STACKWALK:
-            DbgPrint("[+] IOCTL_TRIGGER_NMI_STACKWALK received\n");
-            TriggerNmiStackwalk();
-            break;
-
-        case IOCTL_INITIALIZE_WFP_MONITOR:
-            DbgPrint("[+] IOCTL_INITIALIZE_WFP_MONITOR received\n");
-            if (G_IsWfpInitialized)
-            {
-                DbgPrint("[*] WFP monitor is already initialized.\n");
-                Status = STATUS_SUCCESS; // Or a custom status like STATUS_ALREADY_INITIALIZED
-            }
-            else
-            {
-                Status = InitializeWfpMonitor(DeviceObject);
-                if (NT_SUCCESS(Status))
-                {
-                    G_IsWfpInitialized = TRUE;
-                }
-            }
-            break;
-
-        case IOCTL_DEINITIALIZE_WFP_MONITOR:
-            DbgPrint("[+] IOCTL_DEINITIALIZE_WFP_MONITOR received\n");
-            if (!G_IsWfpInitialized)
-            {
-                DbgPrint("[*] WFP monitor is not currently initialized.\n");
-            }
-            else
-            {
-                DeinitializeWfpMonitor();
-                G_IsWfpInitialized = FALSE;
-            }
-            break;
-
-        case IOCTL_UNLOAD_DRIVER:
-            DbgPrint("[+] IOCTL_UNLOAD_DRIVER received\n");
-            // CRITICAL: Complete the request back to user-mode BEFORE unloading.
-            Irp->IoStatus.Status      = Status;
-            Irp->IoStatus.Information = 0;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            // Now that the client's request is complete, proceed with cleanup.
-            DriverUnload(DeviceObject->DriverObject);
-            return Status; // Exit without completing the request again.
-
-        default:
-            Status = STATUS_INVALID_DEVICE_REQUEST;
-            break;
-        }
-    }
-
-    Irp->IoStatus.Status      = Status;
+    Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = Information;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-
     return Status;
+}
+
+static NTSTATUS OacUnsupportedRequest(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return OacCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0);
+}
+
+NTSTATUS OacCreateClose(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return OacCompleteIrp(Irp, STATUS_SUCCESS, 0);
+}
+
+static BOOLEAN OacIsTrustedClient(VOID)
+{
+    return OacIsTrustedClientProcess(PsGetCurrentProcess());
+}
+
+NTSTATUS OacDeviceControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION stack;
+    PVOID buffer;
+    ULONG inputLength;
+    ULONG outputLength;
+    ULONG code;
+    ULONG bytesWritten = 0;
+    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+    stack = IoGetCurrentIrpStackLocation(Irp);
+    buffer = Irp->AssociatedIrp.SystemBuffer;
+    inputLength = stack->Parameters.DeviceIoControl.InputBufferLength;
+    outputLength = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    code = stack->Parameters.DeviceIoControl.IoControlCode;
+
+    if (code != IOCTL_OAC_PING && !OacIsTrustedClient() &&
+        (code != IOCTL_OAC_CONFIGURE ||
+         OacTrustedClientProcessId() != NULL))
+    {
+        return OacCompleteIrp(Irp, STATUS_ACCESS_DENIED, 0);
+    }
+
+    switch (code)
+    {
+    case IOCTL_OAC_PING:
+        if (buffer == NULL || outputLength < sizeof(OAC_STATUS_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        RtlZeroMemory(buffer, sizeof(OAC_STATUS_RESPONSE));
+        ((POAC_STATUS_RESPONSE)buffer)->Version = OAC_PROTOCOL_VERSION;
+        ((POAC_STATUS_RESPONSE)buffer)->Size = sizeof(OAC_STATUS_RESPONSE);
+        bytesWritten = sizeof(OAC_STATUS_RESPONSE);
+        status = STATUS_SUCCESS;
+        break;
+
+    case IOCTL_OAC_CONFIGURE:
+        if (buffer == NULL || inputLength != sizeof(OAC_CONFIG_REQUEST))
+        {
+            status = STATUS_INFO_LENGTH_MISMATCH;
+            break;
+        }
+        status = OacConfigureProtection(
+            (const OAC_CONFIG_REQUEST*)buffer,
+            PsGetCurrentProcessId());
+        break;
+
+    case IOCTL_OAC_RUN_KERNEL_SCAN:
+        if (buffer == NULL || inputLength != sizeof(OAC_SCAN_REQUEST))
+        {
+            status = STATUS_INFO_LENGTH_MISMATCH;
+            break;
+        }
+        status = OacRunKernelScan((const OAC_SCAN_REQUEST*)buffer);
+        break;
+
+    case IOCTL_OAC_GET_FINDINGS:
+        if (buffer == NULL)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        status = OacReadFindings(
+            (POAC_FINDINGS_RESPONSE)buffer,
+            outputLength,
+            &bytesWritten);
+        break;
+
+    case IOCTL_OAC_CPU_SNAPSHOT:
+        if (buffer == NULL)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        status = OacCaptureCpuSnapshot(
+            (POAC_CPU_RESPONSE)buffer,
+            outputLength,
+            &bytesWritten);
+        break;
+
+    case IOCTL_OAC_GET_STATUS:
+        if (buffer == NULL || outputLength < sizeof(OAC_STATUS_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            POAC_STATUS_RESPONSE response = (POAC_STATUS_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            response->Version = OAC_PROTOCOL_VERSION;
+            response->Size = sizeof(*response);
+            response->Capabilities = OAC_CAP_HANDLE_PROTECTION |
+                OAC_CAP_IMAGE_TELEMETRY |
+                OAC_CAP_CPU_SNAPSHOT |
+                OAC_CAP_DRIVER_GATE |
+                OacScannerCapabilities();
+            response->ConfigurationFlags = OacConfigurationFlags();
+            response->ProtectedProcessId = HandleToULong(OacProtectedProcessId());
+            response->ClientProcessId = HandleToULong(OacTrustedClientProcessId());
+            response->FindingsWritten = OacTelemetryWritten();
+            response->FindingsDropped = OacTelemetryDropped();
+            response->PostStartLoads = OacPostStartLoads();
+            response->DriverGateTrips = OacDriverGateTrips();
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    default:
+        break;
+    }
+
+    return OacCompleteIrp(Irp, status, bytesWritten);
+}
+
+static VOID OacCleanup(VOID)
+{
+    if (g_ProtectionInitialized)
+    {
+        OacProtectionShutdown();
+        g_ProtectionInitialized = FALSE;
+    }
+    if (g_CpuSnapshotInitialized)
+    {
+        OacCpuSnapshotShutdown();
+        g_CpuSnapshotInitialized = FALSE;
+    }
+    if (g_ScannerInitialized)
+    {
+        OacScannerShutdown();
+        g_ScannerInitialized = FALSE;
+    }
+    if (g_DosLinkCreated)
+    {
+        (VOID)IoDeleteSymbolicLink(&g_DosDeviceName);
+        g_DosLinkCreated = FALSE;
+    }
+    if (g_DeviceObject != NULL)
+    {
+        IoDeleteDevice(g_DeviceObject);
+        g_DeviceObject = NULL;
+    }
+    if (g_TelemetryInitialized)
+    {
+        OacTelemetryShutdown();
+        g_TelemetryInitialized = FALSE;
+    }
+}
+
+VOID OacDriverUnload(_In_ PDRIVER_OBJECT DriverObject)
+{
+    UNREFERENCED_PARAMETER(DriverObject);
+    OacCleanup();
+}
+
+NTSTATUS DriverEntry(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath)
+{
+    NTSTATUS status;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(RegistryPath);
+    RtlInitUnicodeString(&g_DeviceName, OAC_DEVICE_NAME);
+    RtlInitUnicodeString(&g_DosDeviceName, OAC_DOS_DEVICE_NAME);
+
+    for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; ++i)
+    {
+        /* One default handler intentionally covers every unsupported major code. */
+#pragma warning(suppress: 28169)
+        DriverObject->MajorFunction[i] = OacUnsupportedRequest;
+    }
+    DriverObject->MajorFunction[IRP_MJ_CREATE] = OacCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLEANUP] = OacCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_CLOSE] = OacCreateClose;
+    DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = OacDeviceControl;
+    DriverObject->DriverUnload = OacDriverUnload;
+
+    OacCompatibilityInitialize();
+
+    status = OacTelemetryInitialize();
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_TelemetryInitialized = TRUE;
+
+    status = IoCreateDeviceSecure(
+        DriverObject,
+        0,
+        &g_DeviceName,
+        FILE_DEVICE_UNKNOWN,
+        FILE_DEVICE_SECURE_OPEN,
+        TRUE,
+        &SDDL_DEVOBJ_SYS_ALL_ADM_ALL,
+        &GUID_DEVCLASS_OAC,
+        &g_DeviceObject);
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_DeviceObject->Flags |= DO_BUFFERED_IO;
+
+    status = IoCreateSymbolicLink(&g_DosDeviceName, &g_DeviceName);
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_DosLinkCreated = TRUE;
+
+    status = OacScannerInitialize(DriverObject);
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_ScannerInitialized = TRUE;
+
+    status = OacCpuSnapshotInitialize();
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_CpuSnapshotInitialized = TRUE;
+
+    status = OacProtectionInitialize(DriverObject);
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_ProtectionInitialized = TRUE;
+
+    g_DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
+    OacReportFinding(OacSeverityInfo, OacCategoryGeneral, NULL, NULL,
+        NULL, OAC_PROTOCOL_VERSION,
+        L"OAC driver initialized with signed-load security model");
+    return STATUS_SUCCESS;
+
+Failure:
+    OacCleanup();
+    return status;
 }

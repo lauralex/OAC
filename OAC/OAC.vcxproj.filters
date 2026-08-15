@@ -1,141 +1,35 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <MASM Include="descriptor.asm"><Filter>Source Files</Filter></MASM>
+  </ItemGroup>
   <ItemGroup>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
     <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
-    </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
-    </Filter>
-    <Filter Include="Driver Files">
-      <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
-      <Extensions>inf;inv;inx;mof;mc;</Extensions>
+      <UniqueIdentifier>{93995380-89BD-4B04-88EB-625FBE52EBFB}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="main.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="mm.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="cr3_thrasher.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="stackwalk.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="module.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="ci.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="serial_logger.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="instruction_decoder.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Zydis.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="cr3_validation.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="internals.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="pt_analyzer.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="wfp_monitor.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="shellcode_analyzer.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="zyan_stackwalker.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
+    <ClCompile Include="compat.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="cpu_snapshot.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="main.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="protection.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="scanner.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="telemetry.c"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="internals.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ia32.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="cr3_thrasher.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="arch.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="mm.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="isr.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="stackwalk.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="module.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ci.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="globals.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="stackwalk_saferecovery.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="serial_logger.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="instruction_decoder.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Zydis.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="cr3_validation.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="pt_analyzer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="wfp_monitor.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="shellcode_analyzer.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="pattern_scanner.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="zyan_stackwalker.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
+    <ClInclude Include="compat.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="cpu_snapshot.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="descriptor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="protection.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="scanner.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="telemetry.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_protocol.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <MASM Include="isr.asm">
-      <Filter>Source Files</Filter>
-    </MASM>
-    <MASM Include="arch.asm">
-      <Filter>Source Files</Filter>
-    </MASM>
-    <MASM Include="stackwalk_saferecovery.asm">
-      <Filter>Source Files</Filter>
-    </MASM>
+    <Inf Include="OAC.inf" />
   </ItemGroup>
 </Project>
