@@ -11,11 +11,10 @@ env:
   SOLUTION_FILE_PATH: ./OAC.sln
   BUILD_CONFIGURATION: Release
   PLATFORM: x64
-  WDK_VERSION: 10.0.26100
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
     - uses: actions/checkout@v4
@@ -24,12 +23,7 @@ jobs:
       uses: microsoft/setup-msbuild@v3
       with:
         msbuild-architecture: x64
-
-    - name: Install Windows Driver Kit
-      run: |
-        winget install --id Microsoft.WindowsWDK.${{ env.WDK_VERSION }} `
-          --exact --accept-package-agreements --accept-source-agreements `
-          --disable-interactivity --silent
+        vs-version: '[17.0,18.0)'
 
     - name: Build solution
       run: |
