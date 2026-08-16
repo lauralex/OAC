@@ -1,0 +1,56 @@
+# Contributing to OAC
+
+OAC accepts defensive engineering work that improves safety, correctness, compatibility,
+observability, privacy, or test coverage. Contributions that add kernel exploitation, vulnerable
+driver loading, security-control bypasses, hiding, or anti-forensics are out of scope.
+
+Read `AGENTS.md` for the repository invariants and `docs/README.md` for the documentation map.
+
+## Development setup
+
+You need Visual Studio 2022 with the Desktop C++ workload, Windows SDK/WDK `10.0.26100.0`, and the
+x64 toolchain. Build both supported configurations with the 64-bit MSBuild host:
+
+```powershell
+& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe" `
+  .\OAC.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform=x64 `
+  /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
+
+& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe" `
+  .\OAC.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64 `
+  /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
+```
+
+If Visual Studio is installed in another edition or location, use `vswhere.exe` as shown in
+`AGENTS.md`.
+
+## Change requirements
+
+- Keep the driver demand-start and preserve all documented protocol and kernel safety checks.
+- Update the driver, client, protocol test, size assertions, and docs together for an ABI change.
+- Regenerate `OAC-Client/driver_hash_policy.inc` only with the pinned policy script. Review the
+  archive hash, upstream policy version, rule count, and generated diff.
+- Keep current behavior and planned behavior clearly labeled. A single VM result is not a universal
+  Windows compatibility claim.
+- Do not include raw HWIDs, private reports, dumps, signing keys, binaries, or VM artifacts.
+
+Run the checks appropriate to the change:
+
+| Change | Required validation |
+|---|---|
+| Documentation or metadata | Link/schema checks and `git diff --check` |
+| C/C++ or project files | Clean x64 Debug and Release rebuilds |
+| Driver, shared ABI, callbacks, or synchronization | PREfast, protocol tests, and Driver Verifier in a disposable VM |
+| Client scanners | Clang-Tidy and an elevated VM smoke scan |
+| INF, signing, or packaging | `InfVerif /w`, catalog/signature checks, and manifest verification |
+| Driver policy | Pinned regeneration and manual generated-diff review |
+
+Never enable test signing, disable Secure Boot, install the test driver, or run Driver Verifier on
+a workstation you need to preserve. Follow `docs/test-signing.md` in an isolated disposable VM.
+
+## Pull requests
+
+Keep each pull request focused. Explain the threat or defect, the chosen behavior, compatibility and
+privacy effects, and exactly which checks ran. Call out protocol, INF, driver lifecycle, signing,
+or generated-policy changes explicitly. Security vulnerabilities should be reported privately as
+described in `SECURITY.md`, not opened as public issues.

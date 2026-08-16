@@ -1,18 +1,25 @@
 # OAC
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/lauralex/OAC)
+OAC is a defensive, x64 Windows anti-cheat reference implementation. The current protocol-v4
+implementation builds on the original crash-oriented proof of concept with an unsigned-by-default
+kernel control driver intended for authorized signing and an elevated user-mode scanner. The kernel
+component performs only bounded, IRQL-appropriate work; pageable memory inspection, service/device
+enumeration, signature validation, and stack walking stay in user mode. The driver is deliberately
+`SERVICE_DEMAND_START`, never boot-start. The launcher owns the security boundary: global preflight
+runs first, the game is created suspended, protection is bound to its process object, and execution
+is allowed only after a clean target gate.
 
-OAC is a defensive, x64 Windows anti-cheat reference implementation. Version 4 builds on the
-original crash-oriented proof of concept with a signed kernel control driver and an elevated
-user-mode scanner. The kernel component performs only bounded, IRQL-appropriate work; pageable
-memory inspection, service/device enumeration, signature validation, and stack walking stay in
-user mode. The driver is deliberately `SERVICE_DEMAND_START`, never boot-start. The launcher owns
-the security boundary: global preflight runs first, the game is created suspended, protection is
-bound to its process object, and execution is allowed only after a clean target gate.
+## Project guide
+
+- [`AGENTS.md`](AGENTS.md) is the concise repository guide for coding agents and maintainers.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) describes development and review requirements.
+- [`SECURITY.md`](SECURITY.md) explains private vulnerability reporting and sensitive-data rules.
+- [`docs/README.md`](docs/README.md) indexes current procedures, research notes, and the explicitly
+  planned [`production hardening roadmap`](docs/hardening-plan.md).
 
 ## Security and compatibility contract
 
-- The maintained build target is **x64 Windows 10, Windows 11, and corresponding Windows Server
+- The maintained design target is **x64 Windows 10, Windows 11, and corresponding Windows Server
   releases**. The portable path is not keyed to a Windows build number and is intended to remain
   active across every patched build in that maintained family. Stable checks use documented APIs
   or length-validated system-information responses.
@@ -42,7 +49,7 @@ bound to its process object, and execution is allowed only after a clean target 
 | Hidden processes | Toolhelp, PSAPI, and `NtQuerySystemInformation` cross-view in the client; kernel process snapshot is compared with handle/object owners. Live-process revalidation reduces process-churn false positives. |
 | Hidden kernel modules | `AuxKlibQueryModuleInformation` versus system-module cross-view, load-image telemetry, IDT/LSTAR validation, and system-thread start addresses outside all modules. |
 | Suspicious DLLs | Three-view module inventory plus explicit cheat/injector IOCs and separately classified overlay/hooking modules. |
-| Suspicious drivers / all loaded drivers | Kernel and PSAPI inventories, a shared conservative family deny/review policy, 542 compiled exact Authenticode SHA-256 denies, embedded-or-catalog trust validation, and a complete report entry for each loaded driver. A monotonic callback-era load latch survives random names, rapid unload, file deletion, telemetry draining, and PiDDB/hash/unloaded-driver trace cleanup. The compiled policy and latch operate even when the host HVCI or Microsoft blocklist settings are off. |
+| Suspicious drivers / all loaded drivers | Kernel and PSAPI inventories, a shared conservative family deny/review policy, 542 compiled exact Authenticode SHA-256 denies, embedded-or-catalog trust validation, and individual inventory records when driver paths can be resolved. Unresolved paths are counted and reported in aggregate. A monotonic callback-era load latch survives random names, rapid unload, file deletion, telemetry draining, and PiDDB/hash/unloaded-driver trace cleanup. The compiled policy and latch operate even when the host HVCI or Microsoft blocklist settings are off. |
 | All open handles | Extended system-handle snapshot saved to `oac-open-handles.csv`; target handles are correlated by kernel object identity. |
 | Disks and devices | Logical volumes, DOS device names, physical-drive storage descriptors, and all present PnP devices. |
 | HWID | Multi-source, privacy-preserving identity graph: bounded SMBIOS types, Windows-computed hardware-ID registry corroboration, storage descriptors/IDs/DUID/FRU/NVMe/ATA, GPT/MBR and mount-manager IDs, PnP instances/containers, permanent/current NIC addresses, EDID, battery-class serial/unique IDs, HID/Bluetooth, and ACPI. Placeholders are rejected, comparable paths are cross-checked after format normalization, removable evidence is separated from stable core anchors, and raw material is not written to the report. |
@@ -285,8 +292,8 @@ matrix and use an authorized production signing pipeline before deployment.
 
 ## Removed unsafe design
 
-Version 3 removes the original custom page-fault ISR, CR3 replacement/thrashing, fixed 50-CPU NMI
-array, NMI-time stack unwinding/logging, fabricated `PsActiveProcessHead`, hardcoded
+The current design removes the original custom page-fault ISR, CR3 replacement/thrashing, fixed
+50-CPU NMI array, NMI-time stack unwinding/logging, fabricated `PsActiveProcessHead`, hardcoded
 `EPROCESS`/`ETHREAD` layouts, page-table RAM mapping, self-unload IOCTL, `FILE_ANY_ACCESS` IOCTLs,
 and pageable WFP classification. Those paths could corrupt affinity/IDT state, access freed or
 version-dependent memory, recurse through a fault handler, or unload while returning through the

@@ -1,0 +1,25 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{md,json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{xml,vcxproj,filters,props,targets}]
+end_of_line = crlf
+indent_size = 2
+
+[*.{ps1,sln,inf,asm}]
+end_of_line = crlf
+
+[*.sln]
+indent_style = tab
