@@ -1,3 +1,5 @@
+#Requires -RunAsAdministrator
+
 [CmdletBinding()]
 param(
     [string]$VMName = 'OAC-Win11-24H2-Test',
