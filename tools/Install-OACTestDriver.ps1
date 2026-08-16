@@ -178,6 +178,9 @@ $principal = [Security.Principal.WindowsPrincipal]::new(
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell session inside the disposable VM.'
 }
+if (-not [Environment]::Is64BitProcess) {
+    throw 'Run this installer from 64-bit PowerShell inside the disposable VM.'
+}
 
 function Add-TestCertificateToMachineStore([string]$StoreName) {
     $output = & certutil.exe -f -addstore $StoreName $certificate 2>&1
@@ -520,6 +523,19 @@ function Get-VerifiedDriverPackage([switch]$Required) {
         throw 'The published OAC driver metadata does not match the reviewed package.'
     }
 
+    $publishedInfPath = [IO.Path]::GetFullPath((Join-Path `
+        $env:SystemRoot (Join-Path 'INF' $publishedInf)))
+    if (-not (Test-Path -LiteralPath $publishedInfPath -PathType Leaf)) {
+        throw 'The published OAC INF is missing from the Windows INF directory.'
+    }
+    $publishedInfItem = Get-Item -LiteralPath $publishedInfPath -Force
+    if (($publishedInfItem.Attributes -band
+            [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        (Get-FileHash -LiteralPath $publishedInfPath -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $inf -Algorithm SHA256).Hash) {
+        throw 'The published Windows INF does not match this package.'
+    }
+
     $storeRoot = [IO.Path]::GetFullPath((Join-Path `
         $env:SystemRoot 'System32\DriverStore\FileRepository')).TrimEnd(
             [IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
@@ -543,24 +559,25 @@ function Get-VerifiedDriverPackage([switch]$Required) {
     $catalogRoot = Join-Path $env:SystemRoot `
         'System32\CatRoot\{F750E6C3-38EE-11D1-85E5-00C04FC295EE}'
     $catalogValue = [string]$record.CatalogFile
-    if ([string]::IsNullOrWhiteSpace($catalogValue)) {
-        throw 'DISM did not return the installed OAC catalog identity.'
+    $catalogLeaf = [IO.Path]::GetFileName($catalogValue)
+    if ([string]::IsNullOrWhiteSpace($catalogValue) -or
+        $catalogLeaf -ine [IO.Path]::GetFileName($catalog)) {
+        throw 'The installed OAC catalog metadata does not match this package.'
     }
-    if ([IO.Path]::IsPathRooted($catalogValue)) {
-        $installedCatalog = [IO.Path]::GetFullPath($catalogValue)
-    } else {
-        if ([IO.Path]::GetFileName($catalogValue) -ne $catalogValue) {
-            throw 'The installed OAC catalog has an invalid relative path.'
-        }
-        $installedCatalog = [IO.Path]::GetFullPath((Join-Path `
-            $catalogRoot $catalogValue))
+    $storeCatalog = Join-Path $storeDirectory ([IO.Path]::GetFileName($catalog))
+    Assert-SignedFileIdentity `
+        $storeCatalog $catalog $certificateObject.Thumbprint
+    if (-not (Test-Path -LiteralPath $catalogRoot -PathType Container)) {
+        throw "The system catalog store is missing: $catalogRoot"
     }
-    $catalogPrefix = [IO.Path]::GetFullPath($catalogRoot).TrimEnd(
-        [IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    if (-not $installedCatalog.StartsWith(
-            $catalogPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The installed OAC catalog is outside the system catalog store.'
+    $catalogRootItem = Get-Item -LiteralPath $catalogRoot -Force
+    if (($catalogRootItem.Attributes -band
+            [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The system catalog store is a reparse point.'
     }
+    # SetupCopyOEMInf gives the published INF and catalog the same oemN stem.
+    $publishedCatalog = [IO.Path]::ChangeExtension($publishedInf, '.cat')
+    $installedCatalog = Join-Path $catalogRoot $publishedCatalog
     Assert-SignedFileIdentity `
         $installedCatalog $catalog $certificateObject.Thumbprint
 
@@ -592,8 +609,10 @@ function Get-VerifiedDriverPackage([switch]$Required) {
 
     return [pscustomobject]@{
         PublishedInf = $publishedInf
+        PublishedInfPath = $publishedInfPath
         StoreInf = $storeInf
         StoreBinary = $storeBinary
+        StoreCatalog = $storeCatalog
         ServiceBinary = $serviceBinary
         Catalog = $installedCatalog
     }
@@ -729,8 +748,12 @@ if ($Remove) {
     $remainingDriver = @(Get-WindowsDriver -Online -ErrorAction Stop |
         Where-Object Driver -IEQ $verifiedDriverPackage.PublishedInf)
     if ($remainingDriver.Count -ne 0 -or
+        (Test-Path -LiteralPath $verifiedDriverPackage.PublishedInfPath) -or
         (Test-Path -LiteralPath $verifiedDriverPackage.StoreInf) -or
         (Test-Path -LiteralPath $verifiedDriverPackage.StoreBinary) -or
+        (Test-Path -LiteralPath $verifiedDriverPackage.StoreCatalog) -or
+        ($null -ne $verifiedDriverPackage.ServiceBinary -and
+            (Test-Path -LiteralPath $verifiedDriverPackage.ServiceBinary)) -or
         (Test-Path -LiteralPath $verifiedDriverPackage.Catalog)) {
         throw 'Windows retained part of the exact OAC driver package after removal.'
     }
@@ -780,8 +803,15 @@ foreach ($path in $signedFiles) {
     }
 }
 
-& pnputil.exe /add-driver $inf /install
-if ($LASTEXITCODE -ne 0) { throw 'PnPUtil failed to install the OAC test package.' }
+if ($null -eq $verifiedDriverPackage -or
+    $null -eq $verifiedDriverPackage.ServiceBinary) {
+    & pnputil.exe /add-driver $inf /install
+    if ($LASTEXITCODE -ne 0) {
+        throw 'PnPUtil failed to install the OAC test package.'
+    }
+} else {
+    Write-Host "Reusing verified driver package $($verifiedDriverPackage.PublishedInf)."
+}
 
 $driverServiceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\OAC'
 $driverConfiguration = Get-ItemProperty -LiteralPath $driverServiceKey

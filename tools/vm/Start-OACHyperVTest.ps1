@@ -138,13 +138,30 @@ function Read-JsonFile([string]$Path, [string]$Context) {
 }
 
 function ConvertTo-UtcTime([object]$Value, [string]$Context) {
+    if ($Value -is [DateTime]) {
+        $date = [DateTime]$Value
+        if ($date.Kind -eq [DateTimeKind]::Unspecified) {
+            throw "$Context does not include a time zone."
+        }
+        return $date.ToUniversalTime()
+    }
+    if ($Value -is [DateTimeOffset]) {
+        return ([DateTimeOffset]$Value).UtcDateTime
+    }
+    if ($Value -isnot [string]) {
+        throw "$Context is not a round-trip timestamp."
+    }
     $parsed = [DateTime]::MinValue
-    if (-not [DateTime]::TryParse(
-            [string]$Value,
+    if (-not [DateTime]::TryParseExact(
+            $Value,
+            'o',
             [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::RoundtripKind,
             [ref]$parsed)) {
         throw "$Context is not a round-trip timestamp."
+    }
+    if ($parsed.Kind -eq [DateTimeKind]::Unspecified) {
+        throw "$Context does not include a time zone."
     }
     return $parsed.ToUniversalTime()
 }
