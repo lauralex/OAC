@@ -22,6 +22,27 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+if (-not [Environment]::Is64BitProcess) {
+    throw 'Run the Hyper-V campaign from a 64-bit elevated PowerShell host.'
+}
+$whoami = Join-Path $env:SystemRoot 'System32\whoami.exe'
+$privilegeRows = @(& $whoami /priv /fo csv /nh)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Could not inspect the host token privileges.'
+}
+$hasManageVolumePrivilege = $false
+foreach ($line in $privilegeRows) {
+    $row = $line | ConvertFrom-Csv -Header Name, Description, State
+    if ($row.Name -ceq 'SeManageVolumePrivilege') {
+        $hasManageVolumePrivilege = $true
+        break
+    }
+}
+if (-not $hasManageVolumePrivilege) {
+    throw ('The host token lacks SeManageVolumePrivilege. Hyper-V Administrators membership ' +
+        'alone is insufficient; run the campaign from an elevated host PowerShell.')
+}
+
 $baselineZeroTests = @(
     'baseline-install',
     'baseline-remove',
