@@ -229,10 +229,38 @@ try {
     }
 
     Invoke-Checked $inf2Cat @("/driver:$package", '/os:10_X64', '/uselocaltime')
-    $catalog = Join-Path $package 'OAC.cat'
-    if (-not (Test-Path -LiteralPath $catalog -PathType Leaf)) {
-        throw "Inf2Cat did not create $catalog"
+    $catalogFiles = @(Get-ChildItem -LiteralPath $package -File |
+        Where-Object { $_.Extension -ieq '.cat' })
+    if ($catalogFiles.Count -ne 1 -or $catalogFiles[0].Name -ine 'OAC.cat') {
+        throw 'Inf2Cat did not create the single expected OAC catalog.'
     }
+    if ($catalogFiles[0].Name -cne 'OAC.cat') {
+        $originalCatalog = $catalogFiles[0].FullName
+        $temporaryCatalog = Join-Path $package `
+            ".oac-$([Guid]::NewGuid().ToString('N')).tmp"
+        Move-Item -LiteralPath $originalCatalog -Destination $temporaryCatalog
+        try {
+            Move-Item -LiteralPath $temporaryCatalog `
+                -Destination (Join-Path $package 'OAC.cat')
+        } catch {
+            $renameError = $_
+            if (Test-Path -LiteralPath $temporaryCatalog -PathType Leaf) {
+                if (-not (Test-Path -LiteralPath $originalCatalog)) {
+                    try {
+                        Move-Item -LiteralPath $temporaryCatalog -Destination $originalCatalog
+                    } catch {
+                        Write-Warning 'Could not restore the catalog name after rename failure.'
+                    }
+                }
+                if (Test-Path -LiteralPath $temporaryCatalog -PathType Leaf) {
+                    Remove-Item -LiteralPath $temporaryCatalog -Force `
+                        -ErrorAction SilentlyContinue
+                }
+            }
+            throw $renameError
+        }
+    }
+    $catalog = Join-Path $package 'OAC.cat'
     Invoke-Checked $signTool @(
         'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
         '/s', 'My', $catalog

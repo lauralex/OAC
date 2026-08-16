@@ -48,18 +48,29 @@ function Get-ContainedFile(
     [string]$Prefix,
     [string]$Name
 ) {
-    if ([IO.Path]::GetFileName($Name) -ne $Name) {
+    if ([IO.Path]::GetFileName($Name) -cne $Name) {
         throw "Package manifest contains a non-leaf file name: $Name"
     }
-    $candidate = Join-Path $Root $Name
-    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-        throw "Required package file is missing: $candidate"
+    $matches = @(Get-ChildItem -LiteralPath $Root -Force -File |
+        Where-Object { $_.Name -ieq $Name })
+    if ($matches.Count -eq 0) {
+        throw "Required package file is missing: $(Join-Path $Root $Name)"
     }
-    $resolved = (Resolve-Path -LiteralPath $candidate).Path
+    if ($matches.Count -ne 1) {
+        throw "Package directory contains ambiguous file names for: $Name"
+    }
+    $item = $matches[0]
+    if ($item.Name -cne $Name) {
+        throw "Package file casing does not match its manifest: $Name"
+    }
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Package file is a reparse point: $Name"
+    }
+    $resolved = $item.FullName
     if (-not $resolved.StartsWith($Prefix, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Package file escaped its directory: $resolved"
     }
-    return $resolved
+    return $item
 }
 
 $manifestPath = Join-Path $bundle 'package-manifest.json'
@@ -79,14 +90,15 @@ function Read-ManifestGroup(
     [string]$Root,
     [string]$Prefix
 ) {
-    $paths = @{}
+    $paths = [Collections.Generic.Dictionary[string, string]]::new(
+        [StringComparer]::Ordinal)
     foreach ($entry in @($Entries)) {
         $name = [string]$entry.name
         if ($paths.ContainsKey($name)) {
             throw "Package manifest contains a duplicate file: $name"
         }
-        $path = Get-ContainedFile $Root $Prefix $name
-        $item = Get-Item -LiteralPath $path
+        $item = Get-ContainedFile $Root $Prefix $name
+        $path = $item.FullName
         $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         if ($item.Length -ne [int64]$entry.bytes -or
             $actualHash -ne [string]$entry.sha256) {
