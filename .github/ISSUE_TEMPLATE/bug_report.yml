@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible correctness, compatibility, or false-positive problem.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose vulnerabilities, raw HWIDs, private reports, dumps, or signing material here.
+        Use the private security-reporting link instead.
+  - type: input
+    id: revision
+    attributes:
+      label: OAC revision
+      description: Commit SHA or release tag where the issue reproduces.
+      placeholder: 0123456789abcdef
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows environment
+      description: Edition, full build number, architecture, and physical or virtual machine.
+      placeholder: Windows 11 Pro 24H2, build 26100.x, x64, Hyper-V VM
+    validations:
+      required: true
+  - type: textarea
+    id: security_config
+    attributes:
+      label: Security configuration
+      description: Secure Boot, VBS/HVCI, Hyper-V, test signing, Driver Verifier, and relevant endpoint security state.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence and frequency.
+      placeholder: |
+        1. Build ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual result
+      description: Include exit codes and sanitized findings where useful.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Remove usernames, paths, serials, tokens, raw HWIDs, and private game/user data before pasting logs.
+      render: text
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I reproduced this on the stated revision and removed sensitive data.
+          required: true
+        - label: This is not a vulnerability report or a request to bypass Windows security controls.
+          required: true

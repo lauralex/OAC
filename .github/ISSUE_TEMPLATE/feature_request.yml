@@ -1,0 +1,46 @@
+name: Defensive improvement
+description: Propose a scoped security, compatibility, privacy, performance, or tooling improvement.
+title: "[Proposal] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: OAC accepts defensive proposals. Mappers, bypasses, exploit loaders, hiding, and anti-forensics are out of scope.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and threat model
+      description: Describe the concrete gap, affected trust boundary, and adversary capability.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the supported Windows mechanism, data flow, and failure behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility, privacy, and performance
+      description: Cover false positives, version support, data collection/retention, and hot-path cost.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation plan
+      description: Name the unit, integration, VM, Verifier, and Windows-matrix evidence needed.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This proposal is defensive and does not require weakening Windows security controls.
+          required: true
+        - label: Planned behavior will be labeled separately from implemented and tested behavior.
+          required: true
