@@ -1,0 +1,877 @@
+#include <Windows.h>
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <iostream>
+#include <set>
+#include <string>
+#include <type_traits>
+
+#include "../../shared/oac_protocol.h"
+#include "../../shared/protocol/oac_v5.h"
+#include "../../shared/protocol/oac_validate.h"
+
+extern "C" int OacV5CProbe(void);
+
+static_assert(std::is_standard_layout_v<OAC_V5_REQUEST_HEADER>);
+static_assert(std::is_trivially_copyable_v<OAC_V5_EVENT_RECORD>);
+static_assert(offsetof(OAC_V5_STATUS_RESPONSE, ServiceProcessId) == 72);
+static_assert(offsetof(OAC_V5_REQUEST_HEADER, MessageType) == 44);
+static_assert(offsetof(OAC_V5_RESPONSE_HEADER, MessageType) == 52);
+static_assert(offsetof(OAC_V5_EVENT_RECORD, PolicySeverity) == 20);
+static_assert(offsetof(OAC_V5_EVENT_RECORD, Reserved) == 36);
+
+namespace
+{
+class TestLog
+{
+public:
+    void Expect(const std::string& name, bool passed)
+    {
+        ++total_;
+        if (passed)
+        {
+            ++passed_;
+            std::cout << "[PASS] " << name << '\n';
+        }
+        else
+        {
+            std::cerr << "[FAIL] " << name << '\n';
+        }
+    }
+
+    [[nodiscard]] int ExitCode() const
+    {
+        std::cout << "SUMMARY passed=" << passed_ << " total=" << total_ << '\n';
+        return passed_ == total_ ? 0 : 1;
+    }
+
+private:
+    unsigned total_ = 0;
+    unsigned passed_ = 0;
+};
+
+void FillOpenHeader(
+    OAC_V5_REQUEST_HEADER& header,
+    ULONG size,
+    OAC_V5_MESSAGE_TYPE messageType)
+{
+    header = {};
+    header.Version = OAC_V5_VERSION;
+    header.Size = size;
+    header.RequestId = 0x1020304050607080ULL;
+    header.MessageType = messageType;
+}
+
+void FillSessionHeader(
+    OAC_V5_REQUEST_HEADER& header,
+    ULONG size,
+    OAC_V5_MESSAGE_TYPE messageType)
+{
+    FillOpenHeader(header, size, messageType);
+    header.SessionId.High = 0x1122334455667788ULL;
+    header.SessionId.Low = 0x8877665544332211ULL;
+    header.Generation = 7;
+}
+
+void FillOpenHeader(
+    OAC_V5_RESPONSE_HEADER& header,
+    ULONG size,
+    OAC_V5_MESSAGE_TYPE messageType)
+{
+    header = {};
+    header.Version = OAC_V5_VERSION;
+    header.Size = size;
+    header.RequestId = 0x1020304050607080ULL;
+    header.Status = 0;
+    header.Reason = OAC_V5_REASON_NONE;
+    header.MessageType = messageType;
+}
+
+void FillSessionHeader(
+    OAC_V5_RESPONSE_HEADER& header,
+    ULONG size,
+    OAC_V5_MESSAGE_TYPE messageType)
+{
+    FillOpenHeader(header, size, messageType);
+    header.SessionId.High = 0x1122334455667788ULL;
+    header.SessionId.Low = 0x8877665544332211ULL;
+    header.Generation = 7;
+}
+
+OAC_V5_NEGOTIATE_REQUEST ValidNegotiateRequest()
+{
+    OAC_V5_NEGOTIATE_REQUEST request{};
+    FillOpenHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_NEGOTIATE);
+    request.MinimumVersion = OAC_V5_VERSION;
+    request.MaximumVersion = OAC_V5_VERSION;
+    return request;
+}
+
+OAC_V5_CLAIM_REQUEST ValidClaimRequest()
+{
+    OAC_V5_CLAIM_REQUEST request{};
+    FillOpenHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_CLAIM_SESSION);
+    request.Mode = OAC_V5_SESSION_PRODUCTION;
+    return request;
+}
+
+OAC_V5_STATUS_REQUEST ValidStatusRequest()
+{
+    OAC_V5_STATUS_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_GET_STATUS);
+    return request;
+}
+
+OAC_V5_NEGOTIATE_RESPONSE ValidNegotiateResponse()
+{
+    OAC_V5_NEGOTIATE_RESPONSE response{};
+    FillOpenHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_NEGOTIATE);
+    response.MinimumVersion = OAC_V5_VERSION;
+    response.SelectedVersion = OAC_V5_VERSION;
+    response.MaximumVersion = OAC_V5_VERSION;
+    response.Capabilities = OAC_V5_CAP_SESSION_CONTROL |
+        OAC_V5_CAP_TYPED_EVENTS;
+    response.MaximumInputSize = OAC_V5_MAX_INPUT_SIZE;
+    response.MaximumOutputSize = OAC_V5_MAX_OUTPUT_SIZE;
+    response.MaximumEventCount = OAC_V5_MAX_EVENT_COUNT;
+    response.ProtocolFlags = OAC_V5_PROTOCOL_STRICT_LENGTHS |
+        OAC_V5_PROTOCOL_TYPED_EVENTS;
+    return response;
+}
+
+OAC_V5_CLAIM_RESPONSE ValidClaimResponse()
+{
+    OAC_V5_CLAIM_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_CLAIM_SESSION);
+    response.State = OAC_V5_SESSION_CLAIMED;
+    response.Capabilities = OAC_V5_CAP_SESSION_CONTROL;
+    return response;
+}
+
+OAC_V5_STATUS_RESPONSE ValidStatusResponse()
+{
+    OAC_V5_STATUS_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_GET_STATUS);
+    response.State = OAC_V5_SESSION_CLAIMED;
+    response.Capabilities = OAC_V5_CAP_SESSION_CONTROL |
+        OAC_V5_CAP_DRIVER_GATE;
+    response.ConfigurationFlags = OAC_V5_CONFIG_DRIVER_GATE;
+    response.RevokeReason = OAC_V5_REVOKE_NONE;
+    response.ServiceProcessId = 100;
+    return response;
+}
+
+OAC_V5_EVENT_RECORD ValidEventRecord()
+{
+    OAC_V5_EVENT_RECORD record{};
+    record.Version = OAC_V5_VERSION;
+    record.Size = sizeof(record);
+    record.RuleId = OAC_V5_RULE_DRIVER_GATE_TRIP;
+    record.EventType = OAC_V5_EVENT_OBSERVATION;
+    record.ObservationSeverity = OAC_V5_OBSERVATION_MEDIUM;
+    record.PolicySeverity = OAC_V5_POLICY_NOT_EVALUATED;
+    record.Confidence = OAC_V5_CONFIDENCE_HIGH;
+    record.Category = OAC_V5_CATEGORY_DRIVER;
+    record.PayloadType = OAC_V5_PAYLOAD_NONE;
+    record.SessionId.High = 0x1122334455667788ULL;
+    record.SessionId.Low = 0x8877665544332211ULL;
+    record.Generation = 7;
+    record.Sequence = 11;
+    record.Timestamp100ns = 100;
+    record.OccurrenceCount = 1;
+    record.FirstOccurrence100ns = record.Timestamp100ns;
+    record.LastOccurrence100ns = record.Timestamp100ns;
+    record.EvidenceFlags = OAC_V5_EVIDENCE_KERNEL_SOURCE;
+    return record;
+}
+
+void TestCodes(TestLog& log)
+{
+    const std::array<DWORD, 14> codes =
+    {
+        IOCTL_OAC_PING,
+        IOCTL_OAC_CONFIGURE,
+        IOCTL_OAC_RUN_KERNEL_SCAN,
+        IOCTL_OAC_GET_FINDINGS,
+        IOCTL_OAC_CPU_SNAPSHOT,
+        IOCTL_OAC_GET_STATUS,
+        IOCTL_OAC_V5_NEGOTIATE,
+        IOCTL_OAC_V5_CLAIM_SESSION,
+        IOCTL_OAC_V5_SET_CONFIG,
+        IOCTL_OAC_V5_RUN_SCAN,
+        IOCTL_OAC_V5_READ_EVENTS,
+        IOCTL_OAC_V5_CPU_SNAPSHOT,
+        IOCTL_OAC_V5_GET_STATUS,
+        IOCTL_OAC_V5_REVOKE_SESSION
+    };
+    const std::set<DWORD> unique(codes.begin(), codes.end());
+    const std::array<OAC_V5_MESSAGE_TYPE, 8> messages =
+    {
+        OAC_V5_MESSAGE_NEGOTIATE,
+        OAC_V5_MESSAGE_CLAIM_SESSION,
+        OAC_V5_MESSAGE_SET_CONFIG,
+        OAC_V5_MESSAGE_RUN_SCAN,
+        OAC_V5_MESSAGE_READ_EVENTS,
+        OAC_V5_MESSAGE_CPU_SNAPSHOT,
+        OAC_V5_MESSAGE_GET_STATUS,
+        OAC_V5_MESSAGE_REVOKE_SESSION
+    };
+    bool buffered = true;
+    bool restricted = true;
+    bool messageMatch = true;
+    for (std::size_t index = 6; index < codes.size(); ++index)
+    {
+        buffered = buffered && METHOD_FROM_CTL_CODE(codes[index]) == METHOD_BUFFERED;
+        restricted = restricted &&
+            ((codes[index] >> 14) & 3UL) == OAC_V5_IOCTL_ACCESS;
+        messageMatch = messageMatch &&
+            ((codes[index] >> 2) & 0xFFFUL) == messages[index - 6];
+    }
+    log.Expect("v4 and v5 IOCTLs are distinct", unique.size() == codes.size());
+    log.Expect("v5 IOCTLs use buffered I/O", buffered);
+    log.Expect("v5 IOCTLs require read and write access", restricted);
+    log.Expect("v5 message IDs match IOCTL functions", messageMatch);
+    log.Expect("first v5 message type is valid", OacV5MessageTypeValid(
+        OAC_V5_MESSAGE_NEGOTIATE) != FALSE);
+    log.Expect("last v5 message type is valid", OacV5MessageTypeValid(
+        OAC_V5_MESSAGE_REVOKE_SESSION) != FALSE);
+    log.Expect("message below range is invalid", OacV5MessageTypeValid(
+        OAC_V5_MESSAGE_NEGOTIATE - 1) == FALSE);
+    log.Expect("message above range is invalid", OacV5MessageTypeValid(
+        OAC_V5_MESSAGE_REVOKE_SESSION + 1) == FALSE);
+}
+
+void TestBasicHelpers(TestLog& log)
+{
+    const OAC_V5_SESSION_ID zero{};
+    const OAC_V5_SESSION_ID first{1, 2};
+    const OAC_V5_SESSION_ID same{1, 2};
+    const OAC_V5_SESSION_ID other{1, 3};
+    std::array<UCHAR, 8> reserved{};
+
+    log.Expect("C translation unit accepts v5", OacV5CProbe() != 0);
+    log.Expect("zero session ID", OacV5SessionIdIsZero(&zero) != FALSE);
+    log.Expect("nonzero session ID", OacV5SessionIdIsZero(&first) == FALSE);
+    log.Expect("equal session IDs", OacV5SessionIdEqual(&first, &same) != FALSE);
+    log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
+    log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
+    log.Expect("valid exact size", OacV5ValidateSize(64, 64, 32, 64) == OAC_V5_VALID);
+    log.Expect("stated size mismatch", OacV5ValidateSize(64, 63, 32, 64) == OAC_V5_INVALID_LENGTH);
+    log.Expect("invalid size bounds", OacV5ValidateSize(64, 64, 65, 64) == OAC_V5_INVALID_LENGTH);
+    log.Expect("known flags", OacV5ValidateFlags(3, 7) == OAC_V5_VALID);
+    log.Expect("unknown flags", OacV5ValidateFlags(8, 7) == OAC_V5_INVALID_FLAGS);
+    log.Expect("zero reserved bytes", OacV5ValidateReserved(reserved.data(),
+        static_cast<ULONG>(reserved.size())) == OAC_V5_VALID);
+    reserved[7] = 1;
+    log.Expect("nonzero reserved byte", OacV5ValidateReserved(reserved.data(),
+        static_cast<ULONG>(reserved.size())) == OAC_V5_INVALID_RESERVED);
+    log.Expect("empty reserved field", OacV5ValidateReserved(nullptr, 0) == OAC_V5_VALID);
+    log.Expect("null reserved buffer", OacV5ValidateReserved(nullptr, 1) == OAC_V5_INVALID_POINTER);
+}
+
+void TestRanges(TestLog& log)
+{
+    log.Expect("valid array range", OacV5ValidateRange(96, 32, 8, 8, 32, 8) == OAC_V5_VALID);
+    log.Expect("valid empty range", OacV5ValidateRange(32, 32, 0, 8, 32, 8) == OAC_V5_VALID);
+    log.Expect("range before payload", OacV5ValidateRange(96, 24, 1, 8, 32, 8) == OAC_V5_INVALID_RANGE);
+    log.Expect("range offset outside", OacV5ValidateRange(96, 104, 0, 8, 32, 8) == OAC_V5_INVALID_RANGE);
+    log.Expect("range end outside", OacV5ValidateRange(96, 88, 2, 8, 32, 8) == OAC_V5_INVALID_RANGE);
+    log.Expect("range product overflow", OacV5ValidateRange(OAC_V5_ULONG_MAX, 32,
+        OAC_V5_ULONG_MAX, 8,
+        32, 8) == OAC_V5_INVALID_RANGE);
+    log.Expect("range misalignment", OacV5ValidateRange(96, 36, 1, 8, 32, 8) == OAC_V5_INVALID_ALIGNMENT);
+    log.Expect("range bad alignment", OacV5ValidateRange(96, 32, 1, 8, 32, 3) == OAC_V5_INVALID_VALUE);
+    log.Expect("range zero element", OacV5ValidateRange(96, 32, 1, 0, 32, 8) == OAC_V5_INVALID_VALUE);
+}
+
+void TestNegotiateRequest(TestLog& log)
+{
+    auto request = ValidNegotiateRequest();
+    log.Expect("valid negotiate request", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    log.Expect("null negotiate request", OacV5ValidateNegotiateRequest(
+        nullptr, sizeof(request)) == OAC_V5_INVALID_POINTER);
+    log.Expect("truncated negotiate request", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request) - 1) == OAC_V5_INVALID_LENGTH);
+    log.Expect("oversized negotiate request", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request) + 1) == OAC_V5_INVALID_LENGTH);
+
+    request = ValidNegotiateRequest();
+    --request.Header.Size;
+    log.Expect("negotiate stated size", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_LENGTH);
+    request = ValidNegotiateRequest();
+    request.Header.Version = OAC_PROTOCOL_VERSION;
+    log.Expect("negotiate v4 header", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VERSION);
+    request = ValidNegotiateRequest();
+    request.Header.RequestId = 0;
+    log.Expect("negotiate zero request ID", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_REQUEST_ID);
+    request = ValidNegotiateRequest();
+    request.Header.Flags = 1;
+    log.Expect("negotiate unknown flags", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_FLAGS);
+    request = ValidNegotiateRequest();
+    request.Header.MessageType = OAC_V5_MESSAGE_CLAIM_SESSION;
+    log.Expect("negotiate wrong message type", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    request = ValidNegotiateRequest();
+    request.Header.SessionId.Low = 1;
+    log.Expect("negotiate carries session", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_SESSION);
+    request = ValidNegotiateRequest();
+    request.Header.Generation = 1;
+    log.Expect("negotiate carries generation", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_GENERATION);
+    request = ValidNegotiateRequest();
+    request.MinimumVersion = OAC_V5_VERSION + 1;
+    request.MaximumVersion = OAC_V5_VERSION;
+    log.Expect("negotiate reversed range", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VERSION);
+    request = ValidNegotiateRequest();
+    request.MinimumVersion = OAC_V5_VERSION - 1;
+    request.MaximumVersion = OAC_V5_VERSION - 1;
+    log.Expect("negotiate unsupported older range", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VERSION);
+    request = ValidNegotiateRequest();
+    request.MinimumVersion = OAC_V5_VERSION + 1;
+    request.MaximumVersion = OAC_V5_VERSION + 1;
+    log.Expect("negotiate unsupported newer range", OacV5ValidateNegotiateRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VERSION);
+}
+
+void TestClaimAndStatusRequests(TestLog& log)
+{
+    auto claim = ValidClaimRequest();
+    log.Expect("valid production claim", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_VALID);
+    claim.Mode = OAC_V5_SESSION_DIAGNOSTIC;
+    log.Expect("valid diagnostic claim", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_VALID);
+    claim = ValidClaimRequest();
+    claim.Mode = 0;
+    log.Expect("claim invalid mode", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_VALUE);
+    claim = ValidClaimRequest();
+    claim.Reserved = 1;
+    log.Expect("claim reserved field", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_RESERVED);
+    claim = ValidClaimRequest();
+    claim.Header.SessionId.High = 1;
+    log.Expect("claim carries session", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_SESSION);
+    log.Expect("claim truncated", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim) - 1) == OAC_V5_INVALID_LENGTH);
+    claim = ValidClaimRequest();
+    claim.Header.MessageType = OAC_V5_MESSAGE_NEGOTIATE;
+    log.Expect("claim wrong message type", OacV5ValidateClaimRequest(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_MESSAGE_TYPE);
+
+    auto status = ValidStatusRequest();
+    log.Expect("valid status request", OacV5ValidateStatusRequest(
+        &status, sizeof(status)) == OAC_V5_VALID);
+    status.Header.SessionId = {};
+    log.Expect("status zero session", OacV5ValidateStatusRequest(
+        &status, sizeof(status)) == OAC_V5_INVALID_SESSION);
+    status = ValidStatusRequest();
+    status.Header.Generation = 0;
+    log.Expect("status zero generation", OacV5ValidateStatusRequest(
+        &status, sizeof(status)) == OAC_V5_INVALID_GENERATION);
+    status = ValidStatusRequest();
+    status.Header.Flags = 1;
+    log.Expect("status unknown flags", OacV5ValidateStatusRequest(
+        &status, sizeof(status)) == OAC_V5_INVALID_FLAGS);
+    status = ValidStatusRequest();
+    status.Header.MessageType = OAC_V5_MESSAGE_RUN_SCAN;
+    log.Expect("status wrong message type", OacV5ValidateStatusRequest(
+        &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    log.Expect("status oversized", OacV5ValidateStatusRequest(
+        &status, sizeof(status) + 8) == OAC_V5_INVALID_LENGTH);
+}
+
+void TestResponses(TestLog& log)
+{
+    auto negotiate = ValidNegotiateResponse();
+    log.Expect("valid negotiate response", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_VALID);
+    negotiate.SelectedVersion = OAC_PROTOCOL_VERSION;
+    log.Expect("negotiate selected v4", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.Capabilities = 0x80000000UL;
+    log.Expect("negotiate unknown capability", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.ProtocolFlags = 0x80000000UL;
+    log.Expect("negotiate unknown protocol flag", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.MaximumInputSize = sizeof(OAC_V5_CLAIM_REQUEST) - 1;
+    log.Expect("negotiate input limit too small", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.MaximumOutputSize = OAC_V5_MAX_OUTPUT_SIZE + 1;
+    log.Expect("negotiate output limit too large", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.MaximumEventCount = 0;
+    log.Expect("negotiate zero event limit", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.Header.SessionId.High = 1;
+    log.Expect("negotiate response carries session", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_SESSION);
+    negotiate = ValidNegotiateResponse();
+    negotiate.Header.Reason = OAC_V5_REASON_MALFORMED_REQUEST + 1;
+    log.Expect("response unknown reason", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.Header.MessageType = OAC_V5_MESSAGE_GET_STATUS;
+    log.Expect("negotiate response wrong message type",
+        OacV5ValidateNegotiateResponse(
+            &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    log.Expect("negotiate response truncated", OacV5ValidateNegotiateResponse(
+        &negotiate, sizeof(negotiate) - 1) == OAC_V5_INVALID_LENGTH);
+
+    auto claim = ValidClaimResponse();
+    log.Expect("valid claim response", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_VALID);
+    claim.Header.SessionId = {};
+    log.Expect("claim response zero session", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_SESSION);
+    claim = ValidClaimResponse();
+    claim.Header.Generation = 0;
+    log.Expect("claim response zero generation", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_GENERATION);
+    claim = ValidClaimResponse();
+    claim.State = OAC_V5_SESSION_MONITORING;
+    log.Expect("claim response wrong state", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_VALUE);
+    claim = ValidClaimResponse();
+    claim.Capabilities = 0x80000000UL;
+    log.Expect("claim response unknown capability", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_VALUE);
+    claim = ValidClaimResponse();
+    claim.Header.MessageType = OAC_V5_MESSAGE_NEGOTIATE;
+    log.Expect("claim response wrong message type", OacV5ValidateClaimResponse(
+        &claim, sizeof(claim)) == OAC_V5_INVALID_MESSAGE_TYPE);
+
+    auto status = ValidStatusResponse();
+    log.Expect("valid active status response", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_VALID);
+    status.State = OAC_V5_SESSION_REVOKED;
+    status.RevokeReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    status.Header.Flags = OAC_V5_RESPONSE_REVOKED;
+    log.Expect("valid revoked status response", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_VALID);
+    status = ValidStatusResponse();
+    status.Header.Flags = OAC_V5_RESPONSE_REVOKED;
+    log.Expect("active status rejects revoked response flag",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_REVOKED;
+    status.RevokeReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    log.Expect("revoked status requires response flag",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_UNCLAIMED;
+    log.Expect("status unclaimed with session", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_REVOKED;
+    log.Expect("revoked status without reason", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.RevokeReason = OAC_V5_REVOKE_POLICY;
+    log.Expect("active status with revoke reason", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.ConfigurationFlags = 0x80000000UL;
+    log.Expect("status unknown config flag", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.Header.Flags = OAC_V5_RESPONSE_PARTIAL;
+    log.Expect("status disallowed response flag", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_FLAGS);
+    status = ValidStatusResponse();
+    status.Header.MessageType = OAC_V5_MESSAGE_READ_EVENTS;
+    log.Expect("status response wrong message type", OacV5ValidateStatusResponse(
+        &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
+}
+
+void TestCorrelationAndIds(TestLog& log)
+{
+    auto request = ValidStatusRequest();
+    auto response = ValidStatusResponse();
+    log.Expect("valid response correlation", OacV5ValidateCorrelation(
+        &request.Header, &response.Header) == OAC_V5_VALID);
+    ++response.Header.RequestId;
+    log.Expect("request ID mismatch", OacV5ValidateCorrelation(
+        &request.Header, &response.Header) == OAC_V5_INVALID_CORRELATION);
+    response = ValidStatusResponse();
+    ++response.Header.SessionId.Low;
+    log.Expect("session ID mismatch", OacV5ValidateCorrelation(
+        &request.Header, &response.Header) == OAC_V5_INVALID_CORRELATION);
+    response = ValidStatusResponse();
+    ++response.Header.Generation;
+    log.Expect("generation mismatch", OacV5ValidateCorrelation(
+        &request.Header, &response.Header) == OAC_V5_INVALID_CORRELATION);
+    response = ValidStatusResponse();
+    response.Header.MessageType = OAC_V5_MESSAGE_RUN_SCAN;
+    log.Expect("message type mismatch", OacV5ValidateCorrelation(
+        &request.Header, &response.Header) == OAC_V5_INVALID_CORRELATION);
+    request = ValidStatusRequest();
+    response = ValidStatusResponse();
+    request.Header.MessageType = 0;
+    response.Header.MessageType = 0;
+    log.Expect("invalid equal message types do not correlate",
+        OacV5ValidateCorrelation(
+            &request.Header, &response.Header) == OAC_V5_INVALID_CORRELATION);
+
+    log.Expect("stable session rule ID", OacV5RuleIdValid(
+        OAC_V5_RULE_SESSION_LOST) != FALSE);
+    log.Expect("stable driver rule ID", OacV5RuleIdValid(
+        OAC_V5_RULE_DRIVER_GATE_TRIP) != FALSE);
+    log.Expect("CPU rule uses integrity namespace",
+        (OAC_V5_RULE_CPU_STATE & OAC_V5_RULE_GROUP_MASK) ==
+            OAC_V5_RULE_INTEGRITY_BASE);
+    log.Expect("virtualization rule uses platform namespace",
+        (OAC_V5_RULE_VIRTUALIZATION & OAC_V5_RULE_GROUP_MASK) ==
+            OAC_V5_RULE_PLATFORM_BASE);
+    log.Expect("rule zero is invalid", OacV5RuleIdValid(0) == FALSE);
+    log.Expect("rule group without code is invalid", OacV5RuleIdValid(
+        OAC_V5_RULE_MEMORY_BASE) == FALSE);
+    log.Expect("unknown rule group is invalid", OacV5RuleIdValid(
+        0x000C0001UL) == FALSE);
+    log.Expect("typed alert event", OacV5EventTypeValid(
+        OAC_V5_EVENT_POLICY_VIOLATION) != FALSE);
+    log.Expect("zero event type is invalid", OacV5EventTypeValid(0) == FALSE);
+    log.Expect("future event type is invalid", OacV5EventTypeValid(
+        OAC_V5_EVENT_REVOCATION + 1) == FALSE);
+    log.Expect("typed observation severity", OacV5ObservationSeverityValid(
+        OAC_V5_OBSERVATION_CRITICAL) != FALSE);
+    log.Expect("future observation severity is invalid",
+        OacV5ObservationSeverityValid(
+            OAC_V5_OBSERVATION_CRITICAL + 1) == FALSE);
+    log.Expect("policy may be explicitly unevaluated", OacV5PolicySeverityValid(
+        OAC_V5_POLICY_NOT_EVALUATED) != FALSE);
+    log.Expect("typed policy severity", OacV5PolicySeverityValid(
+        OAC_V5_POLICY_CRITICAL) != FALSE);
+    log.Expect("future policy severity is invalid", OacV5PolicySeverityValid(
+        OAC_V5_POLICY_CRITICAL + 1) == FALSE);
+    log.Expect("typed confidence", OacV5ConfidenceValid(
+        OAC_V5_CONFIDENCE_HIGH) != FALSE);
+    log.Expect("future confidence is invalid", OacV5ConfidenceValid(
+        OAC_V5_CONFIDENCE_HIGH + 1) == FALSE);
+    log.Expect("typed payload", OacV5PayloadTypeValid(
+        OAC_V5_PAYLOAD_BINARY) != FALSE);
+    log.Expect("future payload is invalid", OacV5PayloadTypeValid(
+        OAC_V5_PAYLOAD_UTF16 + 1) == FALSE);
+    log.Expect("typed category", OacV5CategoryValid(
+        OAC_V5_CATEGORY_HWID) != FALSE);
+    log.Expect("future category is invalid", OacV5CategoryValid(
+        OAC_V5_CATEGORY_HWID + 1) == FALSE);
+}
+
+void TestSessionTransitions(TestLog& log)
+{
+    struct Edge
+    {
+        OAC_V5_SESSION_STATE From;
+        OAC_V5_SESSION_STATE To;
+    };
+    const std::array<Edge, 12> edges =
+    {{
+        {OAC_V5_SESSION_CLAIMED, OAC_V5_SESSION_LAUNCH_PENDING},
+        {OAC_V5_SESSION_CLAIMED, OAC_V5_SESSION_REVOKED},
+        {OAC_V5_SESSION_CLAIMED, OAC_V5_SESSION_CLOSING},
+        {OAC_V5_SESSION_LAUNCH_PENDING, OAC_V5_SESSION_TARGET_BOUND},
+        {OAC_V5_SESSION_LAUNCH_PENDING, OAC_V5_SESSION_REVOKED},
+        {OAC_V5_SESSION_LAUNCH_PENDING, OAC_V5_SESSION_CLOSING},
+        {OAC_V5_SESSION_TARGET_BOUND, OAC_V5_SESSION_MONITORING},
+        {OAC_V5_SESSION_TARGET_BOUND, OAC_V5_SESSION_REVOKED},
+        {OAC_V5_SESSION_TARGET_BOUND, OAC_V5_SESSION_CLOSING},
+        {OAC_V5_SESSION_MONITORING, OAC_V5_SESSION_REVOKED},
+        {OAC_V5_SESSION_MONITORING, OAC_V5_SESSION_CLOSING},
+        {OAC_V5_SESSION_REVOKED, OAC_V5_SESSION_CLOSING}
+    }};
+    bool matrixMatches = true;
+    for (OAC_V5_SESSION_STATE from = OAC_V5_SESSION_UNCLAIMED;
+         from <= OAC_V5_SESSION_CLOSING;
+         ++from)
+    {
+        for (OAC_V5_SESSION_STATE to = OAC_V5_SESSION_UNCLAIMED;
+             to <= OAC_V5_SESSION_CLOSING;
+             ++to)
+        {
+            bool expected = false;
+            for (const auto& edge : edges)
+            {
+                expected = expected || (edge.From == from && edge.To == to);
+            }
+            matrixMatches = matrixMatches &&
+                ((OacV5SessionTransitionValid(from, to) != FALSE) == expected);
+        }
+    }
+    log.Expect("session transition matrix is exact", matrixMatches);
+    log.Expect("unclaimed is not a session-object transition",
+        OacV5SessionTransitionValid(
+            OAC_V5_SESSION_UNCLAIMED,
+            OAC_V5_SESSION_CLAIMED) == FALSE);
+    log.Expect("out-of-range source state is rejected",
+        OacV5SessionTransitionValid(
+            OAC_V5_SESSION_CLOSING + 1,
+            OAC_V5_SESSION_CLOSING) == FALSE);
+    log.Expect("out-of-range destination state is rejected",
+        OacV5SessionTransitionValid(
+            OAC_V5_SESSION_CLAIMED,
+            OAC_V5_SESSION_CLOSING + 1) == FALSE);
+}
+
+void TestEventRecords(TestLog& log)
+{
+    auto record = ValidEventRecord();
+    log.Expect("valid event without payload", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    log.Expect("null event record", OacV5ValidateEventRecord(
+        nullptr, sizeof(record)) == OAC_V5_INVALID_POINTER);
+    log.Expect("truncated event record", OacV5ValidateEventRecord(
+        &record, sizeof(record) - 1) == OAC_V5_INVALID_LENGTH);
+    log.Expect("oversized event record", OacV5ValidateEventRecord(
+        &record, sizeof(record) + 1) == OAC_V5_INVALID_LENGTH);
+
+    record = ValidEventRecord();
+    --record.Size;
+    log.Expect("event stated size", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_LENGTH);
+    record = ValidEventRecord();
+    --record.Version;
+    log.Expect("event protocol version", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VERSION);
+    record = ValidEventRecord();
+    record.RuleId = 0;
+    log.Expect("event zero rule ID", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.EventType = 0;
+    log.Expect("event unknown type", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.ObservationSeverity = OAC_V5_OBSERVATION_CRITICAL + 1;
+    log.Expect("event observation severity", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.PolicySeverity = OAC_V5_POLICY_CRITICAL + 1;
+    log.Expect("event policy severity", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.EventType = OAC_V5_EVENT_POLICY_VIOLATION;
+    log.Expect("policy violation must be evaluated", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record.PolicySeverity = OAC_V5_POLICY_HIGH;
+    log.Expect("evaluated policy violation", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    record = ValidEventRecord();
+    record.Confidence = OAC_V5_CONFIDENCE_HIGH + 1;
+    log.Expect("event confidence", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.Category = OAC_V5_CATEGORY_HWID + 1;
+    log.Expect("event category", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16 + 1;
+    log.Expect("event payload type", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.Reserved = 1;
+    log.Expect("event reserved field", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
+
+    record = ValidEventRecord();
+    record.SessionId = {};
+    log.Expect("event zero session", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_SESSION);
+    record = ValidEventRecord();
+    record.Generation = 0;
+    log.Expect("event zero generation", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_GENERATION);
+    record = ValidEventRecord();
+    record.EvidenceFlags |= 0x8000000000000000ULL;
+    log.Expect("event unknown evidence flag", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_FLAGS);
+    record = ValidEventRecord();
+    record.Flags = 1;
+    log.Expect("event unknown record flag", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_FLAGS);
+
+    record = ValidEventRecord();
+    record.Sequence = 0;
+    log.Expect("event zero sequence", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.Timestamp100ns = 0;
+    log.Expect("event zero timestamp", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.OccurrenceCount = 0;
+    log.Expect("event zero occurrence count", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.FirstOccurrence100ns = 101;
+    log.Expect("event first occurrence after source timestamp",
+        OacV5ValidateEventRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.LastOccurrence100ns = 99;
+    log.Expect("event last occurrence before source timestamp",
+        OacV5ValidateEventRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.IngestionTimestamp100ns = 101;
+    log.Expect("event incomplete service provenance", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.ServiceSequence = 1;
+    log.Expect("event service sequence without ingestion time",
+        OacV5ValidateEventRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.IngestionTimestamp100ns = 99;
+    record.ServiceSequence = 1;
+    log.Expect("event ingestion predates source", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record.IngestionTimestamp100ns = 101;
+    log.Expect("valid service provenance", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+
+    record = ValidEventRecord();
+    record.PayloadLength = 1;
+    log.Expect("none payload has zero length", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_LENGTH);
+    record = ValidEventRecord();
+    record.Text[0] = L'X';
+    log.Expect("none payload rejects hidden bytes", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
+
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_BINARY;
+    log.Expect("binary payload cannot be empty", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_LENGTH);
+    record.PayloadLength = 3;
+    auto* bytes = reinterpret_cast<UCHAR*>(record.Text);
+    bytes[0] = 0x10;
+    bytes[1] = 0x20;
+    bytes[2] = 0x30;
+    log.Expect("valid binary payload", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    bytes[3] = 0x40;
+    log.Expect("binary payload rejects dirty tail", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_BINARY;
+    record.PayloadLength = sizeof(record.Text) + 1;
+    log.Expect("binary payload bounds", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_RANGE);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_BINARY;
+    record.PayloadLength = sizeof(record.Text);
+    std::memset(record.Text, 0x5A, sizeof(record.Text));
+    log.Expect("full binary payload", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = L'O';
+    record.Text[1] = L'K';
+    record.Text[2] = L'\0';
+    record.PayloadLength = 3 * sizeof(WCHAR);
+    log.Expect("valid UTF-16 payload", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    record.PayloadLength = 3;
+    log.Expect("odd UTF-16 payload length", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_ALIGNMENT);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = L'X';
+    record.PayloadLength = sizeof(WCHAR);
+    log.Expect("UTF-16 payload requires terminator", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = L'A';
+    record.Text[1] = L'\0';
+    record.Text[2] = L'B';
+    record.Text[3] = L'\0';
+    record.PayloadLength = 4 * sizeof(WCHAR);
+    log.Expect("UTF-16 payload rejects embedded null", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = static_cast<WCHAR>(0xD800);
+    record.Text[1] = L'\0';
+    record.PayloadLength = 2 * sizeof(WCHAR);
+    log.Expect("UTF-16 payload rejects unpaired high surrogate",
+        OacV5ValidateEventRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record.Text[0] = static_cast<WCHAR>(0xDC00);
+    log.Expect("UTF-16 payload rejects unpaired low surrogate",
+        OacV5ValidateEventRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = static_cast<WCHAR>(0xD83D);
+    record.Text[1] = static_cast<WCHAR>(0xDE00);
+    record.Text[2] = L'\0';
+    record.PayloadLength = 3 * sizeof(WCHAR);
+    log.Expect("valid UTF-16 surrogate pair", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    record = ValidEventRecord();
+    record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    record.Text[0] = L'A';
+    record.Text[1] = L'\0';
+    record.Text[2] = L'X';
+    record.PayloadLength = 2 * sizeof(WCHAR);
+    log.Expect("UTF-16 payload rejects dirty tail", OacV5ValidateEventRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
+}
+} // namespace
+
+int main()
+{
+    TestLog log;
+    TestCodes(log);
+    TestBasicHelpers(log);
+    TestRanges(log);
+    TestNegotiateRequest(log);
+    TestClaimAndStatusRequests(log);
+    TestResponses(log);
+    TestCorrelationAndIds(log);
+    TestSessionTransitions(log);
+    TestEventRecords(log);
+    return log.ExitCode();
+}

@@ -204,7 +204,7 @@ std::optional<std::array<unsigned char, kSha256Bytes>> InitialChain(
     std::span<const unsigned char> runId,
     const std::wstring& challenge)
 {
-    static constexpr unsigned char domain[] = "OAC-REPORT-CHAIN-V3";
+    static constexpr unsigned char domain[] = "OAC-REPORT-CHAIN-V4";
     Sha256Hasher hasher;
     const std::string challengeUtf8 = Utf8(challenge);
     if (!hasher.Update(std::span(domain, sizeof(domain) - 1)) ||
@@ -229,6 +229,8 @@ std::optional<std::array<unsigned char, kSha256Bytes>> NextChain(
     canonical.insert(canonical.end(), previous.begin(), previous.end());
     AppendScalar(canonical, finding.sequence);
     AppendScalar(canonical, finding.timestamp100ns);
+    AppendScalar(canonical, finding.originSequence);
+    AppendScalar(canonical, finding.originTimestamp100ns);
     const ULONG severity = static_cast<ULONG>(finding.severity);
     AppendScalar(canonical, severity);
     AppendScalar(canonical, finding.processId);
@@ -340,7 +342,9 @@ void Reporter::Add(
     const std::wstring& message,
     DWORD processId,
     DWORD threadId,
-    unsigned long long address)
+    unsigned long long address,
+    unsigned long long originSequence,
+    unsigned long long originTimestamp100ns)
 {
     ClientFinding finding;
     finding.severity = severity;
@@ -349,12 +353,15 @@ void Reporter::Add(
     finding.processId = processId;
     finding.threadId = threadId;
     finding.address = address;
+    finding.originSequence = originSequence;
+    finding.originTimestamp100ns = originTimestamp100ns;
 
     std::wostringstream key;
     key << static_cast<unsigned>(finding.severity) << L'\x1f'
         << finding.category << L'\x1f' << finding.message << L'\x1f'
         << finding.processId << L'\x1f' << finding.threadId << L'\x1f'
-        << finding.address;
+        << finding.address << L'\x1f' << finding.originSequence << L'\x1f'
+        << finding.originTimestamp100ns;
     if (!findingKeys_.insert(key.str()).second) return;
 
     finding.sequence = nextSequence_++;
@@ -380,7 +387,7 @@ bool Reporter::Save(const std::filesystem::path& path) const
 
     std::ostringstream output;
     output << "OAC defensive scan report\r\n"
-           << "schema=3\r\n"
+           << "schema=4\r\n"
            << "generated_timestamp_100ns=" << CurrentTimestamp100ns() << "\r\n"
            << "deployment_mode=" << Utf8(deploymentMode_) << "\r\n"
            << "failure_threshold=" << Utf8(SeverityName(failureThreshold_)) << "\r\n"
@@ -408,6 +415,10 @@ bool Reporter::Save(const std::filesystem::path& path) const
              << L" chain=" << chainWide
              << L" [" << SeverityName(finding.severity) << L"][" << finding.category << L"] "
              << finding.message;
+        if (finding.originSequence != 0)
+            line << L" origin_seq=" << finding.originSequence;
+        if (finding.originTimestamp100ns != 0)
+            line << L" origin_timestamp_100ns=" << finding.originTimestamp100ns;
         if (finding.processId != 0) line << L" pid=" << finding.processId;
         if (finding.threadId != 0) line << L" tid=" << finding.threadId;
         if (finding.address != 0)

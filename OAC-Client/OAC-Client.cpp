@@ -401,6 +401,12 @@ int wmain(int argumentCount, wchar_t** arguments)
         if (argumentCount > 1) PrintUsage();
         return argumentCount > 1 ? 2 : 0;
     }
+    if (options.deploymentMode == DeploymentMode::Production)
+    {
+        std::wcerr << L"OAC-Client is a lab-only compatibility tool. "
+                      L"Use OAC-Launcher and OACService for production control.\n";
+        return 2;
+    }
 
     if (options.targetProcessId == 0 && !options.preflightOnly &&
         options.launchExecutable.empty())

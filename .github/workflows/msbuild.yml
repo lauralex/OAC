@@ -16,19 +16,38 @@ concurrency:
 
 env:
   SOLUTION_FILE_PATH: ./OAC.sln
-  BUILD_CONFIGURATION: Release
   PLATFORM: x64
 
 jobs:
-  build:
+  repository:
+    name: repository-validation
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 10
 
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Install pinned tooling
+      run: python -m pip install --disable-pip-version-check -r tools/requirements.txt
+
+    - name: Validate repository structure
+      shell: pwsh
+      run: .\tools\Test-OACRepository.ps1
+
+  build_matrix:
+    name: build-${{ matrix.configuration }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release]
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
     - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v3
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
       with:
         msbuild-architecture: x64
         vs-version: '[17.0,18.0)'
@@ -36,20 +55,72 @@ jobs:
     - name: Build solution
       run: |
         msbuild ${{ env.SOLUTION_FILE_PATH }} /m /t:Rebuild `
-          /p:Configuration=${{ env.BUILD_CONFIGURATION }} `
+          /nodeReuse:false `
+          /p:Configuration=${{ matrix.configuration }} `
           /p:Platform=${{ env.PLATFORM }} `
           /p:PreferredToolArchitecture=x64 `
           /p:Inf2CatUseLocalTime=true
 
+    - name: Run pure unit tests
+      shell: pwsh
+      run: |
+        & ".\${{ env.PLATFORM }}\${{ matrix.configuration }}\OAC-Protocol-Unit.exe"
+        if ($LASTEXITCODE -ne 0) {
+          throw "${{ matrix.configuration }} unit tests failed with exit code $LASTEXITCODE"
+        }
+
+    - name: Verify unsigned artifact set
+      if: matrix.configuration == 'Release'
+      shell: pwsh
+      run: |
+        $expected = @(
+          '.\x64\Release\OAC\OAC.sys'
+          '.\x64\Release\OAC\OAC.inf'
+          '.\x64\Release\OAC\oac.cat'
+          '.\x64\Release\OAC-Client.exe'
+          '.\x64\Release\OAC-Service.exe'
+          '.\x64\Release\OAC-Launcher.exe'
+          '.\x64\Release\OAC-Protocol-Unit.exe'
+          '.\x64\Release\OAC-Protocol-Test.exe'
+        )
+        $missing = @($expected | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
+        if ($missing.Count -ne 0) {
+          throw "Release artifact set is incomplete: $($missing -join ', ')"
+        }
+
     - name: Upload unsigned build artifacts
-      uses: actions/upload-artifact@v7
+      if: matrix.configuration == 'Release'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
         name: oac-release-x64-unsigned
         if-no-files-found: error
         path: |
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC.sys
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Client.exe
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC-Protocol-Test.exe
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/*.pdb
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/OAC.inf
-          ${{ env.PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OAC/oac.cat
+          ${{ env.PLATFORM }}/Release/OAC/OAC.sys
+          ${{ env.PLATFORM }}/Release/OAC-Client.exe
+          ${{ env.PLATFORM }}/Release/OAC-Service.exe
+          ${{ env.PLATFORM }}/Release/OAC-Launcher.exe
+          ${{ env.PLATFORM }}/Release/OAC-Protocol-Unit.exe
+          ${{ env.PLATFORM }}/Release/OAC-Protocol-Test.exe
+          ${{ env.PLATFORM }}/Release/OAC/OAC.inf
+          ${{ env.PLATFORM }}/Release/OAC/oac.cat
+
+  build:
+    name: build
+    if: always()
+    needs: [repository, build_matrix]
+    runs-on: windows-2022
+    timeout-minutes: 5
+
+    steps:
+    - name: Verify build matrix
+      shell: pwsh
+      env:
+        REPOSITORY_RESULT: ${{ needs.repository.result }}
+        MATRIX_RESULT: ${{ needs.build_matrix.result }}
+      run: |
+        if ($env:REPOSITORY_RESULT -ne 'success') {
+          throw "Repository validation result: $env:REPOSITORY_RESULT"
+        }
+        if ($env:MATRIX_RESULT -ne 'success') {
+          throw "Debug/Release build matrix result: $env:MATRIX_RESULT"
+        }

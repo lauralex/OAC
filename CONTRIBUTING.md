@@ -14,11 +14,17 @@ x64 toolchain. Build both supported configurations with the 64-bit MSBuild host:
 ```powershell
 & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe" `
   .\OAC.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform=x64 `
-  /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
+  /nodeReuse:false /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
 
 & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe" `
   .\OAC.sln /m /t:Rebuild /p:Configuration=Release /p:Platform=x64 `
-  /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
+  /nodeReuse:false /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
+
+& .\x64\Debug\OAC-Protocol-Unit.exe
+& .\x64\Release\OAC-Protocol-Unit.exe
+
+python -m pip install -r .\tools\requirements.txt
+.\tools\Test-OACRepository.ps1
 ```
 
 If Visual Studio is installed in another edition or location, use `vswhere.exe` as shown in
@@ -27,7 +33,8 @@ If Visual Studio is installed in another edition or location, use `vswhere.exe` 
 ## Change requirements
 
 - Keep the driver demand-start and preserve all documented protocol and kernel safety checks.
-- Update the driver, client, protocol test, size assertions, and docs together for an ABI change.
+- Update the driver, service, launcher or lab client, shared size assertions, pure unit tests,
+  driver-backed protocol test, and docs together for an ABI change.
 - Regenerate `OAC-Client/driver_hash_policy.inc` only with the pinned policy script. Review the
   archive hash, upstream policy version, rule count, and generated diff.
 - Keep current behavior and planned behavior clearly labeled. A single VM result is not a universal
@@ -38,8 +45,8 @@ Run the checks appropriate to the change:
 
 | Change | Required validation |
 |---|---|
-| Documentation or metadata | Link/schema checks and `git diff --check` |
-| C/C++ or project files | Clean x64 Debug and Release rebuilds |
+| Documentation or metadata | `tools/Test-OACRepository.ps1` and `git diff --check` |
+| C/C++ or project files | Clean x64 Debug and Release rebuilds plus both pure unit executables |
 | Driver, shared ABI, callbacks, or synchronization | PREfast, protocol tests, and Driver Verifier in a disposable VM |
 | Client scanners | Clang-Tidy and an elevated VM smoke scan |
 | INF, signing, or packaging | `InfVerif /w`, catalog/signature checks, and manifest verification |

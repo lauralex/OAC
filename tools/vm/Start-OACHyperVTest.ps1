@@ -18,214 +18,1276 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$baselineZeroTests = @(
+    'baseline-install',
+    'baseline-remove',
+    'baseline-reinstall',
+    'baseline-protocol-unit',
+    'baseline-protocol',
+    'baseline-preflight',
+    'baseline-launch',
+    'baseline-client',
+    'production-launcher-1',
+    'production-launcher-2',
+    'production-direct-open-limited',
+    'production-direct-open-administrator')
+$verifierZeroTests = @(
+    'verifier-protocol-1',
+    'verifier-protocol-2',
+    'verifier-protocol-3',
+    'verifier-preflight',
+    'verifier-launch',
+    'verifier-client-1',
+    'verifier-client-2')
+$specialTests = [ordered]@{
+    'baseline-remove-repeat-expected-refusal' = 'nonzero'
+    'baseline-driver-gate-create' = @(0)
+    'baseline-driver-gate-trigger' = 'nonzero'
+    'baseline-driver-gate-detection' = @(1)
+    'baseline-driver-gate-stop' = @(0, 1062)
+    'baseline-driver-gate-delete' = @(0)
+}
+$summaryNames = @(
+    'baseline-driver-gate-summary',
+    'production-boundary-summary',
+    'removal-boundary-summary',
+    'baseline-provenance-summary')
+$resultNamePattern = '^(baseline-(install|remove|reinstall|protocol-unit|protocol|' +
+    'preflight|launch|client|remove-repeat-expected-refusal|driver-gate-(create|' +
+    'trigger|detection|stop|delete))|production-launcher-\d+|' +
+    'production-direct-open-[a-z]+|verifier-(protocol-\d+|preflight|launch|' +
+    'client-\d+))$'
+$script:OrchestrationStartUtc = [DateTime]::UtcNow
+$script:ExpectedManifestHash = $null
+$script:ExpectedSourceCommit = $null
+$script:GuestCampaignId = $null
+$script:GuestCampaignStartUtc = [DateTime]::MinValue
+$script:BaselineCompletedUtc = [DateTime]::MinValue
+$script:HostRecord = $null
+$script:HostRecordPath = $null
+$script:HostLog = $null
+$script:VhdPath = $null
+$script:GuestCredential = $null
+$script:VmCreated = $false
+
 function Write-HostLog([string]$Message) {
     $line = "[$([DateTime]::UtcNow.ToString('o'))] $Message"
     Write-Host $line
-    Add-Content -LiteralPath $script:HostLog -Value $line -Encoding UTF8
+    if ($script:HostLog) {
+        Add-Content -LiteralPath $script:HostLog -Value $line -Encoding UTF8
+    }
 }
 
-function Get-GuestFinalStatus {
+function Write-Utf8Json([string]$Path, [object]$Value) {
+    $json = ConvertTo-Json -InputObject $Value -Depth 8
+    [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
+}
+
+function Save-HostRecord {
+    if ($null -ne $script:HostRecord -and $script:HostRecordPath) {
+        Write-Utf8Json $script:HostRecordPath $script:HostRecord
+    }
+}
+
+function Get-RequiredValue([object]$Value, [string]$Name, [string]$Context) {
+    if ($null -eq $Value) { throw "$Context is null." }
+    $property = $Value.PSObject.Properties[$Name]
+    if ($null -eq $property) { throw "$Context has no $Name field." }
+    return $property.Value
+}
+
+function Read-JsonText([string]$Text, [string]$Context) {
+    if ([string]::IsNullOrWhiteSpace($Text)) { throw "$Context is empty." }
+    try {
+        return $Text | ConvertFrom-Json
+    } catch {
+        throw "$Context is not valid JSON: $($_.Exception.Message)"
+    }
+}
+
+function Read-JsonFile([string]$Path, [string]$Context) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "$Context is missing: $Path"
+    }
+    return Read-JsonText ([IO.File]::ReadAllText($Path)) $Context
+}
+
+function ConvertTo-UtcTime([object]$Value, [string]$Context) {
+    $parsed = [DateTime]::MinValue
+    if (-not [DateTime]::TryParse(
+            [string]$Value,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::RoundtripKind,
+            [ref]$parsed)) {
+        throw "$Context is not a round-trip timestamp."
+    }
+    return $parsed.ToUniversalTime()
+}
+
+function Assert-ExactNames(
+    [string[]]$Actual,
+    [string[]]$Expected,
+    [string]$Context) {
+    $actualNames = @($Actual | Sort-Object -CaseSensitive -Unique)
+    $expectedNames = @($Expected | Sort-Object -CaseSensitive -Unique)
+    $missing = @($expectedNames | Where-Object { $actualNames -cnotcontains $_ })
+    $unexpected = @($actualNames | Where-Object { $expectedNames -cnotcontains $_ })
+    if ($missing.Count -ne 0 -or $unexpected.Count -ne 0) {
+        throw "$Context differs; missing=[$($missing -join ', ')], unexpected=[$($unexpected -join ', ')]."
+    }
+}
+
+function Assert-CampaignFields(
+    [object]$Value,
+    [string]$Context,
+    [string]$CampaignId,
+    [string]$ManifestHash,
+    [string]$SourceCommit) {
+    if ([string](Get-RequiredValue $Value 'campaign_id' $Context) -cne $CampaignId -or
+        [string](Get-RequiredValue $Value 'manifest_sha256' $Context) -cne $ManifestHash -or
+        [string](Get-RequiredValue $Value 'source_commit' $Context) -cne $SourceCommit) {
+        throw "$Context does not match the current campaign."
+    }
+}
+
+function Assert-BoundIdentity(
+    [object]$Value,
+    [string]$Context,
+    [string]$CampaignId,
+    [string]$ManifestHash,
+    [string]$SourceCommit) {
+    $schema = Get-RequiredValue $Value 'schema' $Context
+    if (($schema -isnot [int] -and $schema -isnot [long]) -or
+        [int64]$schema -ne 1) {
+        throw "$Context has an invalid schema."
+    }
+    Assert-CampaignFields $Value $Context $CampaignId $ManifestHash $SourceCommit
+}
+
+function Assert-Marker([string]$Text, [string]$Context) {
+    $marker = Read-JsonText $Text $Context
+    Assert-ExactNames @($marker.PSObject.Properties.Name) @(
+        'schema', 'campaign_id', 'manifest_sha256', 'source_commit') `
+        "$Context fields"
+    Assert-BoundIdentity $marker $Context $script:GuestCampaignId `
+        $script:ExpectedManifestHash $script:ExpectedSourceCommit
+}
+
+function Assert-Boolean([object]$Value, [string]$Name, [string]$Context) {
+    $field = Get-RequiredValue $Value $Name $Context
+    if ($field -isnot [bool] -or -not $field) {
+        throw "$Context requires $Name=true."
+    }
+}
+
+function Assert-EmptyArray([object]$Value, [string]$Name, [string]$Context) {
+    if (@(Get-RequiredValue $Value $Name $Context).Count -ne 0) {
+        throw "$Context requires an empty $Name array."
+    }
+}
+
+function Get-VolumeRoot([object]$Volume) {
+    $path = [string]$Volume.Path
+    if ([string]::IsNullOrWhiteSpace($path) -and $Volume.DriveLetter) {
+        $path = "$($Volume.DriveLetter):\"
+    }
+    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+    if (-not $path.EndsWith([IO.Path]::DirectorySeparatorChar)) {
+        $path += [IO.Path]::DirectorySeparatorChar
+    }
+    return $path
+}
+
+function Read-SeedIdentity([string]$ImagePath) {
+    $image = Get-DiskImage -ImagePath $ImagePath -ErrorAction Stop
+    if ($image.Attached) {
+        throw "Refusing to reuse an already mounted seed ISO: $ImagePath"
+    }
+
+    $mounted = $null
+    try {
+        $mounted = Mount-DiskImage -ImagePath $ImagePath -Access ReadOnly `
+            -NoDriveLetter -PassThru -ErrorAction Stop
+        $candidates = [Collections.Generic.List[string]]::new()
+        foreach ($volume in @(Get-Volume -DiskImage $mounted -ErrorAction Stop)) {
+            $root = Get-VolumeRoot $volume
+            if (-not $root) { continue }
+            $manifestPath = [IO.Path]::Combine($root, 'package-manifest.json')
+            $tagPath = [IO.Path]::Combine($root, 'OAC-VM-SEED.TAG')
+            if ((Test-Path -LiteralPath $manifestPath -PathType Leaf) -and
+                (Test-Path -LiteralPath $tagPath -PathType Leaf)) {
+                $candidates.Add($manifestPath)
+            }
+        }
+        if ($candidates.Count -ne 1) {
+            throw "The seed ISO must contain one root package manifest; found $($candidates.Count)."
+        }
+
+        $manifestPath = $candidates[0]
+        $manifest = Read-JsonFile $manifestPath 'seed package manifest'
+        if ([int](Get-RequiredValue $manifest 'schema' 'seed package manifest') -ne 1 -or
+            [string](Get-RequiredValue $manifest 'purpose' 'seed package manifest') -cne
+                'OAC disposable-VM test package; never production') {
+            throw 'The seed package manifest has an unexpected schema or purpose.'
+        }
+        $sourceCommit = [string](Get-RequiredValue $manifest 'source_commit' `
+            'seed package manifest')
+        if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'The seed package manifest has no canonical source commit.'
+        }
+        return [pscustomobject]@{
+            ManifestHash = (Get-FileHash -LiteralPath $manifestPath `
+                -Algorithm SHA256).Hash
+            SourceCommit = $sourceCommit
+        }
+    } finally {
+        if ($null -ne $mounted) {
+            Dismount-DiskImage -ImagePath $ImagePath -ErrorAction Stop | Out-Null
+        }
+    }
+}
+
+function Invoke-WithVhdRoot(
+    [string]$Path,
+    [bool]$ReadOnly,
+    [scriptblock]$Action) {
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    foreach ($hostDisk in @(Get-Disk -ErrorAction Stop)) {
+        $hostVhd = Get-VHD -DiskNumber $hostDisk.Number -ErrorAction SilentlyContinue
+        if ($null -ne $hostVhd -and
+            [IO.Path]::GetFullPath($hostVhd.Path) -ieq $fullPath) {
+            throw "Refusing to reuse a host-mounted VHD: $fullPath"
+        }
+    }
+
+    $mounted = $null
+    try {
+        $mountParameters = @{
+            Path = $fullPath
+            NoDriveLetter = $true
+            Passthru = $true
+            ErrorAction = 'Stop'
+        }
+        if ($ReadOnly) { $mountParameters.ReadOnly = $true }
+        $mounted = Mount-VHD @mountParameters
+        $disks = @($mounted | Get-Disk -ErrorAction Stop)
+        if ($disks.Count -ne 1) {
+            throw "Mounted VHD exposed $($disks.Count) disks; expected one."
+        }
+        if ($ReadOnly -and -not $disks[0].IsReadOnly) {
+            throw 'The inspection mount is not read-only.'
+        }
+
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        $roots = @()
+        do {
+            $candidateRoots = [Collections.Generic.List[string]]::new()
+            foreach ($partition in @(Get-Partition -DiskNumber $disks[0].Number `
+                    -ErrorAction SilentlyContinue)) {
+                $volume = $partition | Get-Volume -ErrorAction SilentlyContinue
+                if ($null -eq $volume) { continue }
+                $root = Get-VolumeRoot $volume
+                if (-not $root) { continue }
+                if (Test-Path -LiteralPath ([IO.Path]::Combine($root, 'OACTest')) `
+                        -PathType Container) {
+                    $candidateRoots.Add($root)
+                }
+            }
+            $roots = @($candidateRoots | Sort-Object -Unique)
+            if ($roots.Count -eq 1) { break }
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $deadline)
+
+        if ($roots.Count -ne 1) {
+            throw "Mounted VHD exposes $($roots.Count) OAC guest volumes; expected one."
+        }
+        return & $Action $roots[0]
+    } finally {
+        if ($null -ne $mounted) {
+            Dismount-VHD -Path $fullPath -ErrorAction Stop
+        }
+    }
+}
+
+function Get-CampaignMetadata([string]$GuestRoot) {
+    $root = [IO.Path]::Combine($GuestRoot, 'OACTest')
+    $requiredFiles = @(
+        'campaign-id.txt',
+        'campaign-start-utc.txt',
+        'campaign-manifest-sha256.txt',
+        'campaign-source-commit.txt',
+        'package-manifest.json')
+    foreach ($name in $requiredFiles) {
+        if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($root, $name)) `
+                -PathType Leaf)) {
+            throw "Guest campaign metadata is missing: $name"
+        }
+    }
+
+    $campaignId = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($root, 'campaign-id.txt'))).Trim()
+    $parsedId = [Guid]::Empty
+    if (-not [Guid]::TryParseExact($campaignId, 'D', [ref]$parsedId) -or
+        $parsedId -eq [Guid]::Empty -or $parsedId.ToString('D') -cne $campaignId) {
+        throw 'The guest campaign ID is not a canonical nonzero GUID.'
+    }
+    $campaignStart = ConvertTo-UtcTime ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($root, 'campaign-start-utc.txt'))) `
+        'guest campaign start'
+    $manifestHash = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($root, 'campaign-manifest-sha256.txt'))).Trim()
+    $sourceCommit = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($root, 'campaign-source-commit.txt'))).Trim()
+    $manifestPath = [IO.Path]::Combine($root, 'package-manifest.json')
+    $manifest = Read-JsonFile $manifestPath 'guest package manifest'
+
+    if ($manifestHash -cnotmatch '^[0-9A-F]{64}$' -or
+        $manifestHash -cne $script:ExpectedManifestHash -or
+        (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne
+            $script:ExpectedManifestHash) {
+        throw 'The guest package manifest hash does not match the seed ISO.'
+    }
+    if ($sourceCommit -cne $script:ExpectedSourceCommit -or
+        [string](Get-RequiredValue $manifest 'source_commit' 'guest package manifest') -cne
+            $script:ExpectedSourceCommit) {
+        throw 'The guest source commit does not match the seed ISO.'
+    }
+    $now = [DateTime]::UtcNow
+    if ($campaignStart -lt $script:OrchestrationStartUtc.AddMinutes(-5) -or
+        $campaignStart -gt $now.AddMinutes(5)) {
+        throw 'The guest campaign start is outside the fresh orchestration window.'
+    }
+    return [pscustomobject]@{
+        Root = $root
+        CampaignId = $campaignId
+        CampaignStartUtc = $campaignStart
+        ManifestHash = $manifestHash
+        SourceCommit = $sourceCommit
+    }
+}
+
+function Get-ExpectedTestNames([bool]$BaselineOnly) {
+    $names = [Collections.Generic.List[string]]::new()
+    foreach ($name in $baselineZeroTests) { $names.Add($name) }
+    if (-not $BaselineOnly) {
+        foreach ($name in $verifierZeroTests) { $names.Add($name) }
+    }
+    foreach ($name in $specialTests.Keys) { $names.Add([string]$name) }
+    return @($names)
+}
+
+function Assert-ExitValue([string]$Name, [int64]$Value) {
+    if ($baselineZeroTests -ccontains $Name -or $verifierZeroTests -ccontains $Name) {
+        if ($Value -ne 0) { throw "$Name exited with $Value; expected zero." }
+        return
+    }
+    $expectation = $specialTests[$Name]
+    if ($expectation -is [string] -and $expectation -ceq 'nonzero') {
+        if ($Value -eq 0) { throw "$Name exited with zero; expected refusal." }
+        return
+    }
+    if (@($expectation) -notcontains $Value) {
+        throw "$Name exited with $Value; expected $(@($expectation) -join ' or ')."
+    }
+}
+
+function Read-ExitCode([string]$Text, [string]$Name) {
+    $value = [int64]0
+    if (-not [int64]::TryParse(
+            $Text.Trim(),
+            [Globalization.NumberStyles]::Integer,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [ref]$value)) {
+        throw "$Name has a malformed exit-code file."
+    }
+    return $value
+}
+
+function Assert-BaselineResults([object]$Campaign) {
+    $results = [IO.Path]::Combine($Campaign.Root, 'results')
+    if (-not (Test-Path -LiteralPath $results -PathType Container)) {
+        throw 'The baseline results directory is missing.'
+    }
+    $failures = @(Get-ChildItem -LiteralPath $results -Filter '*-failure.txt' `
+        -File -Recurse)
+    if ($failures.Count -ne 0) {
+        throw "Baseline produced failure evidence: $($failures.Name -join ', ')"
+    }
+    foreach ($name in @('baseline-unexpected-reboot.txt', 'verifier-unexpected-reboot.txt')) {
+        if (Test-Path -LiteralPath ([IO.Path]::Combine($results, $name))) {
+            throw "Baseline produced unexpected restart evidence: $name"
+        }
+    }
+
+    $exitFiles = @(Get-ChildItem -LiteralPath $results -Filter '*.exitcode.txt' `
+        -File -Recurse)
+    $unexpectedExitFiles = @($exitFiles | Where-Object {
+            $_.DirectoryName -ine $results -or
+            -not $_.Name.EndsWith(
+                '.exitcode.txt',
+                [StringComparison]::Ordinal) -or
+            $_.Name.Substring(0, $_.Name.Length - '.exitcode.txt'.Length) `
+                -cnotmatch $resultNamePattern
+        })
+    if ($unexpectedExitFiles.Count -ne 0) {
+        throw "Baseline produced unexpected exit-code files: $($unexpectedExitFiles.Name -join ', ')"
+    }
+    $observed = @($exitFiles | ForEach-Object {
+            $name = $_.Name.Substring(0, $_.Name.Length - '.exitcode.txt'.Length)
+            $name
+        })
+    $expected = Get-ExpectedTestNames $true
+    Assert-ExactNames $observed $expected 'baseline test result set'
+    foreach ($name in $expected) {
+        $text = [IO.File]::ReadAllText(
+            [IO.Path]::Combine($results, "$name.exitcode.txt"))
+        Assert-ExitValue $name (Read-ExitCode $text $name)
+    }
+
+    $baselineSummary = Read-JsonFile `
+        ([IO.Path]::Combine($results, 'baseline-summary.json')) 'baseline summary'
+    Assert-CampaignFields $baselineSummary 'baseline summary' $Campaign.CampaignId `
+        $Campaign.ManifestHash $Campaign.SourceCommit
+    $summaryStart = ConvertTo-UtcTime `
+        (Get-RequiredValue $baselineSummary 'campaign_start_utc' 'baseline summary') `
+        'baseline summary campaign start'
+    if ($summaryStart -ne $Campaign.CampaignStartUtc) {
+        throw 'The baseline summary campaign start does not match the guest campaign.'
+    }
+    Assert-Boolean $baselineSummary 'pass' 'baseline summary'
+    Assert-Boolean $baselineSummary 'driver_gate_pass' 'baseline summary'
+    Assert-Boolean $baselineSummary 'production_boundary_pass' 'baseline summary'
+    Assert-Boolean $baselineSummary 'removal_boundary_pass' 'baseline summary'
+    Assert-Boolean $baselineSummary 'provenance_pass' 'baseline summary'
+    Assert-EmptyArray $baselineSummary 'exit_failures' 'baseline summary'
+    $baselineCompleted = ConvertTo-UtcTime `
+        (Get-RequiredValue $baselineSummary 'timestamp_utc' 'baseline summary') `
+        'baseline completion'
+    if ($baselineCompleted -lt $Campaign.CampaignStartUtc -or
+        $baselineCompleted -gt [DateTime]::UtcNow.AddMinutes(5)) {
+        throw 'The baseline completion timestamp is outside the campaign window.'
+    }
+
+    foreach ($name in $summaryNames) {
+        $summary = Read-JsonFile ([IO.Path]::Combine($results, "$name.json")) $name
+        Assert-Boolean $summary 'pass' $name
+    }
+    return $baselineCompleted
+}
+
+function Read-BaselineState([string]$GuestRoot) {
+    $campaign = Get-CampaignMetadata $GuestRoot
+    $phase = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($campaign.Root, 'phase.txt')) -replace "`0", '').Trim()
+    if ($phase -cne 'baseline-complete') {
+        throw "Guest phase is $phase; expected baseline-complete."
+    }
+    foreach ($name in @(
+            'verifier-authorized.json', 'containment-ready.json',
+            'final-status.json', 'results.zip')) {
+        if (Test-Path -LiteralPath ([IO.Path]::Combine($campaign.Root, $name))) {
+            throw "The safe baseline unexpectedly contains $name."
+        }
+    }
+    $completed = Assert-BaselineResults $campaign
+    return [pscustomobject]@{
+        CampaignId = $campaign.CampaignId
+        CampaignStartUtc = $campaign.CampaignStartUtc
+        ManifestHash = $campaign.ManifestHash
+        SourceCommit = $campaign.SourceCommit
+        BaselineCompletedUtc = $completed
+    }
+}
+
+function Assert-SafeCheckpointRoot([string]$GuestRoot) {
+    $campaign = Get-CampaignMetadata $GuestRoot
+    if ($campaign.CampaignId -cne $script:GuestCampaignId) {
+        throw 'Checkpoint campaign identity changed.'
+    }
+    $phase = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($campaign.Root, 'phase.txt')) -replace "`0", '').Trim()
+    if ($phase -cne 'baseline-complete') {
+        throw 'The checkpoint is not at baseline-complete.'
+    }
+    if (Test-Path -LiteralPath `
+            ([IO.Path]::Combine($campaign.Root, 'verifier-authorized.json'))) {
+        throw 'The checkpoint contains a Verifier authorization marker.'
+    }
+}
+
+function Write-NewUtf8File([string]$Path, [string]$Text) {
+    if ([IO.File]::Exists($Path)) { throw "Refusing to replace existing file: $Path" }
+    $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
+    $stream = $null
+    try {
+        $stream = [IO.FileStream]::new(
+            $temporary,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None,
+            4096,
+            [IO.FileOptions]::WriteThrough)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+        $stream.Dispose()
+        $stream = $null
+        [IO.File]::Move($temporary, $Path)
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function Write-VerifierAuthorization([string]$GuestRoot) {
+    $campaign = Get-CampaignMetadata $GuestRoot
+    if ($campaign.CampaignId -cne $script:GuestCampaignId) {
+        throw 'The active child does not contain the validated campaign.'
+    }
+    $phase = ([IO.File]::ReadAllText(
+            [IO.Path]::Combine($campaign.Root, 'phase.txt')) -replace "`0", '').Trim()
+    if ($phase -cne 'baseline-complete') {
+        throw 'The active child is not at baseline-complete.'
+    }
+    $path = [IO.Path]::Combine($campaign.Root, 'verifier-authorized.json')
+    $marker = [ordered]@{
+        schema = 1
+        campaign_id = $script:GuestCampaignId
+        manifest_sha256 = $script:ExpectedManifestHash
+        source_commit = $script:ExpectedSourceCommit
+    }
+    Write-NewUtf8File $path (ConvertTo-Json -InputObject $marker -Compress)
+}
+
+function Assert-ActiveAuthorization([string]$GuestRoot) {
+    $campaign = Get-CampaignMetadata $GuestRoot
+    if ($campaign.CampaignId -cne $script:GuestCampaignId) {
+        throw 'The active child campaign identity changed.'
+    }
+    $path = [IO.Path]::Combine($campaign.Root, 'verifier-authorized.json')
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw 'The active child has no Verifier authorization marker.'
+    }
+    Assert-Marker ([IO.File]::ReadAllText($path)) 'Verifier authorization marker'
+}
+
+function Invoke-VMDirectBounded(
+    [scriptblock]$ScriptBlock,
+    [object[]]$ArgumentList = @(),
+    [int]$TimeoutSeconds = 30) {
     $job = $null
     try {
-        $job = Invoke-Command -VMName $VMName -Credential $script:GuestCredential `
-            -ScriptBlock {
-                if (Test-Path -LiteralPath 'C:\OACTest\final-status.json') {
-                    Get-Content -LiteralPath 'C:\OACTest\final-status.json' -Raw
-                }
-            } -AsJob -ErrorAction Stop
-        $completed = Wait-Job -Job $job -Timeout 5
-        if ($completed) {
-            $candidate = Receive-Job -Job $job -ErrorAction Stop
-            if ($candidate) { return ($candidate | Out-String).Trim() }
+        $parameters = @{
+            VMName = $VMName
+            Credential = $script:GuestCredential
+            ScriptBlock = $ScriptBlock
+            AsJob = $true
+            ErrorAction = 'Stop'
         }
-    } catch { }
-    finally {
+        if ($ArgumentList.Count -ne 0) { $parameters.ArgumentList = $ArgumentList }
+        $job = Invoke-Command @parameters
+        $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds
+        if (-not $completed -or $job.State -ne 'Completed') {
+            throw "PowerShell Direct did not complete within $TimeoutSeconds seconds."
+        }
+        return Receive-Job -Job $job -ErrorAction Stop
+    } finally {
         if ($null -ne $job) {
             Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
             Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
         }
     }
-    return $null
 }
 
 function Wait-ForVMOff([TimeSpan]$Timeout, [string]$Reason) {
     $deadline = [DateTime]::UtcNow + $Timeout
-    $seenRunning = $false
     $nextProgress = [DateTime]::MinValue
-    $nextGuestProbe = [DateTime]::UtcNow.AddMinutes(5)
     while ([DateTime]::UtcNow -lt $deadline) {
         $vm = Get-VM -Name $VMName
-        if ($vm.State -eq 'Running') { $seenRunning = $true }
-        if ($seenRunning -and $vm.State -eq 'Off') {
+        if ($vm.State -eq 'Off') {
             Write-HostLog "VM powered off after $Reason."
             return
         }
         if ([DateTime]::UtcNow -ge $nextProgress) {
-            $vhdSize = if (Test-Path -LiteralPath $script:VhdPath) {
+            $vhdSize = if ($script:VhdPath -and
+                (Test-Path -LiteralPath $script:VhdPath)) {
                 (Get-Item -LiteralPath $script:VhdPath).Length
             } else { 0 }
             Write-HostLog "Waiting for $Reason; state=$($vm.State), VHDX bytes=$vhdSize."
             $nextProgress = [DateTime]::UtcNow.AddSeconds(30)
         }
-        if ($vm.State -eq 'Running' -and [DateTime]::UtcNow -ge $nextGuestProbe) {
-            $guestFinalStatus = Get-GuestFinalStatus
-            if ($guestFinalStatus) {
-                Write-HostLog "Guest produced a final result while waiting for $Reason."
-                return $guestFinalStatus
-            }
-            $nextGuestProbe = [DateTime]::UtcNow.AddSeconds(30)
-        }
-        Start-Sleep -Seconds 10
+        Start-Sleep -Seconds 5
     }
     throw "Timed out waiting for the VM to power off after $Reason."
 }
 
-function Invoke-VMDirect([scriptblock]$ScriptBlock) {
-    Invoke-Command -VMName $VMName -Credential $script:GuestCredential `
-        -ScriptBlock $ScriptBlock -ErrorAction Stop
-}
-
-function Copy-GuestFinalArtifacts([string]$FinalStatus) {
-    $FinalStatus | Out-File -LiteralPath `
-        (Join-Path $resultPath 'final-status.json') -Encoding utf8
-    $session = New-PSSession -VMName $VMName -Credential $script:GuestCredential
-    try {
-        Copy-Item -FromSession $session -LiteralPath 'C:\OACTest\results.zip' `
-            -Destination (Join-Path $resultPath 'oac-vm-results.zip') -Force
-    } finally {
-        Remove-PSSession $session
+function Get-GuestReadyProbe {
+    return Invoke-VMDirectBounded -TimeoutSeconds 45 -ScriptBlock {
+        $root = 'C:\OACTest'
+        function Get-HashInfo([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+            $item = Get-Item -LiteralPath $Path
+            if ($item.Length -gt 2GB) {
+                return [pscustomobject]@{ bytes = $item.Length; sha256 = 'TOO-LARGE' }
+            }
+            return [pscustomobject]@{
+                bytes = $item.Length
+                sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+            }
+        }
+        $phase = if (Test-Path -LiteralPath (Join-Path $root 'phase.txt')) {
+            ((Get-Content -LiteralPath (Join-Path $root 'phase.txt') -Raw) `
+                -replace "`0", '').Trim()
+        } else { $null }
+        $markerPath = Join-Path $root 'containment-ready.json'
+        $marker = if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+            Get-Content -LiteralPath $markerPath -Raw
+        } else { $null }
+        [pscustomobject]@{
+            phase = $phase
+            marker = $marker
+            marker_info = Get-HashInfo $markerPath
+            status_info = Get-HashInfo (Join-Path $root 'final-status.json')
+            archive_info = Get-HashInfo (Join-Path $root 'results.zip')
+            oac_tasks = @(Get-ScheduledTask -ErrorAction Stop |
+                Where-Object TaskName -Like 'OAC-VM-*' |
+                Select-Object -ExpandProperty TaskName -Unique)
+        }
     }
-    Write-HostLog 'Copied final guest status and result archive through PowerShell Direct.'
 }
 
-function Stop-GuestAfterResults {
+function Wait-ForStableResults([TimeSpan]$Timeout) {
+    $deadline = [DateTime]::UtcNow + $Timeout
+    $lastSignature = $null
+    $stablePolls = 0
+    $nextProgress = [DateTime]::MinValue
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $vm = Get-VM -Name $VMName
+        if ($vm.State -eq 'Off') {
+            throw 'The guest powered off before publishing stable final evidence.'
+        }
+        if ($vm.State -eq 'Running') {
+            try {
+                $probe = Get-GuestReadyProbe
+                $ready = $probe.phase -ceq 'complete' -and
+                    -not [string]::IsNullOrWhiteSpace([string]$probe.marker) -and
+                    @($probe.oac_tasks).Count -eq 0 -and
+                    $null -ne $probe.status_info -and
+                    $null -ne $probe.archive_info -and
+                    $probe.status_info.sha256 -cmatch '^[0-9A-F]{64}$' -and
+                    $probe.archive_info.sha256 -cmatch '^[0-9A-F]{64}$' -and
+                    $probe.marker_info.sha256 -cmatch '^[0-9A-F]{64}$'
+                if ($ready) {
+                    Assert-Marker ([string]$probe.marker) 'containment-ready marker'
+                    $signature = @(
+                        $probe.status_info.bytes, $probe.status_info.sha256,
+                        $probe.archive_info.bytes, $probe.archive_info.sha256,
+                        $probe.marker_info.bytes, $probe.marker_info.sha256) -join ':'
+                    if ($signature -ceq $lastSignature) {
+                        $stablePolls++
+                    } else {
+                        $lastSignature = $signature
+                        $stablePolls = 1
+                    }
+                    if ($stablePolls -ge 2) {
+                        Write-HostLog 'Guest final evidence is stable across two polls.'
+                        return $probe
+                    }
+                } else {
+                    $lastSignature = $null
+                    $stablePolls = 0
+                }
+            } catch {
+                if ($_.Exception.Message -match 'marker|campaign|source commit|manifest') {
+                    throw
+                }
+            }
+        }
+        if ([DateTime]::UtcNow -ge $nextProgress) {
+            Write-HostLog "Waiting for stable final evidence; state=$($vm.State)."
+            $nextProgress = [DateTime]::UtcNow.AddSeconds(30)
+        }
+        Start-Sleep -Seconds 10
+    }
+    throw 'Timed out waiting for stable, campaign-bound final evidence.'
+}
+
+function Copy-GuestEvidence([object]$Probe, [string]$Destination) {
+    if (Test-Path -LiteralPath $Destination) {
+        throw "Refusing to reuse an evidence directory: $Destination"
+    }
+    New-Item -ItemType Directory -Path $Destination | Out-Null
+    if (@(Get-ChildItem -LiteralPath $Destination -Force).Count -ne 0) {
+        throw 'The new evidence directory is not empty.'
+    }
+
+    $session = $null
     try {
-        Invoke-VMDirect { & shutdown.exe /s /t 0 /f | Out-Null } | Out-Null
-    } catch { }
-    $offDeadline = [DateTime]::UtcNow.AddMinutes(5)
-    while ((Get-VM -Name $VMName).State -ne 'Off' -and
-           [DateTime]::UtcNow -lt $offDeadline) {
-        Start-Sleep -Seconds 5
+        $options = New-PSSessionOption -OpenTimeout 15000 `
+            -OperationTimeout 300000 -IdleTimeout 300000
+        $session = New-PSSession -VMName $VMName -Credential $script:GuestCredential `
+            -SessionOption $options -ErrorAction Stop
+        $copies = [ordered]@{
+            'C:\OACTest\final-status.json' = 'final-status.json'
+            'C:\OACTest\results.zip' = 'oac-vm-results.zip'
+            'C:\OACTest\containment-ready.json' = 'containment-ready.json'
+        }
+        foreach ($entry in $copies.GetEnumerator()) {
+            Copy-Item -FromSession $session -LiteralPath $entry.Key `
+                -Destination (Join-Path $Destination $entry.Value) -ErrorAction Stop
+        }
+    } finally {
+        if ($null -ne $session) { Remove-PSSession $session }
+    }
+
+    $statusPath = Join-Path $Destination 'final-status.json'
+    $archivePath = Join-Path $Destination 'oac-vm-results.zip'
+    $markerPath = Join-Path $Destination 'containment-ready.json'
+    if ((Get-Item -LiteralPath $statusPath).Length -ne [int64]$Probe.status_info.bytes -or
+        (Get-FileHash -LiteralPath $statusPath -Algorithm SHA256).Hash -cne
+            [string]$Probe.status_info.sha256 -or
+        (Get-Item -LiteralPath $archivePath).Length -ne [int64]$Probe.archive_info.bytes -or
+        (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne
+            [string]$Probe.archive_info.sha256 -or
+        (Get-Item -LiteralPath $markerPath).Length -ne [int64]$Probe.marker_info.bytes -or
+        (Get-FileHash -LiteralPath $markerPath -Algorithm SHA256).Hash -cne
+            [string]$Probe.marker_info.sha256) {
+        throw 'Copied evidence does not match the stable guest artifacts.'
+    }
+    Assert-Marker ([IO.File]::ReadAllText($markerPath)) 'copied containment-ready marker'
+}
+
+function Read-ZipEntryBytes([object]$Entry, [int64]$Limit) {
+    if ($Entry.Length -gt $Limit) {
+        throw "ZIP entry is too large to parse: $($Entry.FullName)"
+    }
+    $memory = [IO.MemoryStream]::new()
+    $stream = $null
+    try {
+        $stream = $Entry.Open()
+        $stream.CopyTo($memory)
+        return $memory.ToArray()
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        $memory.Dispose()
+    }
+}
+
+function Convert-ZipText([byte[]]$Bytes) {
+    $text = [Text.Encoding]::UTF8.GetString($Bytes)
+    if ($text.Length -ne 0 -and $text[0] -eq [char]0xFEFF) {
+        $text = $text.Substring(1)
+    }
+    return $text
+}
+
+function Assert-FinalStatus([object]$Status) {
+    Assert-BoundIdentity $Status 'final status' $script:GuestCampaignId `
+        $script:ExpectedManifestHash $script:ExpectedSourceCommit
+    $campaignStart = ConvertTo-UtcTime `
+        (Get-RequiredValue $Status 'campaign_start_utc' 'final status') `
+        'final status campaign start'
+    $completed = ConvertTo-UtcTime `
+        (Get-RequiredValue $Status 'completed_utc' 'final status') `
+        'final status completion'
+    if ($campaignStart -ne $script:GuestCampaignStartUtc -or
+        $completed -lt $script:BaselineCompletedUtc -or
+        $completed -gt [DateTime]::UtcNow.AddMinutes(5)) {
+        throw 'Final status freshness or campaign start is invalid.'
+    }
+
+    $expectedCount = @(Get-ExpectedTestNames $false).Count
+    if ([int](Get-RequiredValue $Status 'required_test_count' 'final status') -ne
+            $expectedCount -or
+        [int](Get-RequiredValue $Status 'protocol_test_count' 'final status') -ne 5 -or
+        [int](Get-RequiredValue $Status 'client_scan_count' 'final status') -ne 9 -or
+        [int](Get-RequiredValue $Status 'minidump_count' 'final status') -ne 0 -or
+        [int](Get-RequiredValue $Status 'crash_event_count' 'final status') -ne 0) {
+        throw 'Final status result counts do not match the host contract.'
+    }
+    foreach ($name in @(
+            'exact_result_set_pass', 'verifier_reset_pass', 'verifier_inactive',
+            'system_export_success', 'system_query_success',
+            'code_integrity_export_success', 'code_integrity_query_success',
+            'driver_gate_pass', 'production_boundary_pass', 'removal_boundary_pass',
+            'kernel_provenance_pass', 'baseline_identity_pass', 'manifest_current',
+            'services_contained', 'driver_gate_contained',
+            'interactive_staging_removed', 'auto_logon_cleared',
+            'recovery_task_present', 'tasks_contained_except_recovery',
+            'containment_ready', 'overall_pass')) {
+        Assert-Boolean $Status $name 'final status'
+    }
+    foreach ($name in @(
+            'missing_test_results', 'unexpected_test_results',
+            'malformed_test_results', 'wrong_test_results', 'summary_errors',
+            'crash_event_ids', 'temporary_oac_tasks', 'containment_errors',
+            'fatal_failure_files')) {
+        Assert-EmptyArray $Status $name 'final status'
+    }
+    $archivedTasks = @(Get-RequiredValue $Status 'remaining_oac_tasks' 'final status')
+    Assert-ExactNames @($archivedTasks | ForEach-Object { [string]$_ }) `
+        @('OAC-VM-Test') 'archived recovery task set'
+    foreach ($name in @('baseline_unexpected_restart', 'verifier_unexpected_restart')) {
+        $value = Get-RequiredValue $Status $name 'final status'
+        if ($value -isnot [bool] -or $value) {
+            throw "Final status requires $name=false."
+        }
+    }
+    $states = Get-RequiredValue $Status 'service_states' 'final status'
+    if ([string](Get-RequiredValue $states 'OACService' 'service states') -cne 'Stopped' -or
+        [string](Get-RequiredValue $states 'OAC' 'service states') -cne 'Stopped') {
+        throw 'Final status does not contain both OAC services.'
+    }
+}
+
+function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $statusPath = Join-Path $EvidenceDirectory 'final-status.json'
+    $archivePath = Join-Path $EvidenceDirectory 'oac-vm-results.zip'
+    $rootStatusBytes = [IO.File]::ReadAllBytes($statusPath)
+    $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        if ($archive.Entries.Count -eq 0 -or $archive.Entries.Count -gt 4096) {
+            throw "ZIP entry count is unsafe: $($archive.Entries.Count)"
+        }
+        $entries = [Collections.Generic.Dictionary[string, object]]::new(
+            [StringComparer]::Ordinal)
+        $namesIgnoreCase = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        $buffer = New-Object byte[] (1024 * 1024)
+        [int64]$totalBytes = 0
+        foreach ($entry in $archive.Entries) {
+            $name = [string]$entry.FullName
+            $parts = @($name.Split('/'))
+            if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or
+                $name.StartsWith('/') -or $name.Contains(':') -or
+                $parts -contains '..' -or -not $namesIgnoreCase.Add($name)) {
+                throw "ZIP contains an unsafe or duplicate path: $name"
+            }
+            $entries.Add($name, $entry)
+            if ($entry.Length -gt 1GB) {
+                throw "ZIP entry is unreasonably large: $name"
+            }
+            $totalBytes += $entry.Length
+            if ($totalBytes -gt 2GB) { throw 'ZIP expands beyond the evidence limit.' }
+            if ($name.EndsWith('/')) { continue }
+            $stream = $null
+            try {
+                $stream = $entry.Open()
+                [int64]$readTotal = 0
+                do {
+                    $read = $stream.Read($buffer, 0, $buffer.Length)
+                    $readTotal += $read
+                } while ($read -ne 0)
+                if ($readTotal -ne $entry.Length) {
+                    throw "ZIP entry length changed while reading: $name"
+                }
+            } finally {
+                if ($null -ne $stream) { $stream.Dispose() }
+            }
+        }
+
+        if (-not $entries.ContainsKey('final-status.json')) {
+            throw 'The ZIP has no archived final-status.json.'
+        }
+        $archivedStatusBytes = Read-ZipEntryBytes $entries['final-status.json'] 1MB
+        if ([Convert]::ToBase64String($rootStatusBytes) -cne
+            [Convert]::ToBase64String($archivedStatusBytes)) {
+            throw 'Root and archived final status bytes differ.'
+        }
+        $status = Read-JsonText (Convert-ZipText $rootStatusBytes) 'final status'
+        Assert-FinalStatus $status
+
+        $expected = Get-ExpectedTestNames $false
+        $exitEntries = @($entries.Keys | Where-Object {
+                $_.EndsWith(
+                    '.exitcode.txt',
+                    [StringComparison]::OrdinalIgnoreCase)
+            })
+        $unexpectedExitEntries = @($exitEntries | Where-Object {
+                $_ -match '/' -or
+                -not $_.EndsWith(
+                    '.exitcode.txt',
+                    [StringComparison]::Ordinal) -or
+                $_.Substring(0, $_.Length - '.exitcode.txt'.Length) `
+                    -cnotmatch $resultNamePattern
+            })
+        if ($unexpectedExitEntries.Count -ne 0) {
+            throw "The ZIP contains unexpected exit-code entries: $($unexpectedExitEntries -join ', ')"
+        }
+        $observed = @($exitEntries | ForEach-Object {
+                $_.Substring(0, $_.Length - '.exitcode.txt'.Length)
+            })
+        Assert-ExactNames $observed $expected 'archived test result set'
+        foreach ($name in $expected) {
+            $entryName = "$name.exitcode.txt"
+            $text = Convert-ZipText (Read-ZipEntryBytes $entries[$entryName] 128)
+            Assert-ExitValue $name (Read-ExitCode $text $name)
+        }
+
+        foreach ($name in $summaryNames) {
+            $entryName = "$name.json"
+            if (-not $entries.ContainsKey($entryName)) {
+                throw "The ZIP has no $entryName."
+            }
+            $summary = Read-JsonText `
+                (Convert-ZipText (Read-ZipEntryBytes $entries[$entryName] 1MB)) $name
+            Assert-Boolean $summary 'pass' $name
+        }
+        if (-not $entries.ContainsKey('baseline-summary.json')) {
+            throw 'The ZIP has no baseline-summary.json.'
+        }
+        $baselineSummary = Read-JsonText (Convert-ZipText `
+            (Read-ZipEntryBytes $entries['baseline-summary.json'] 1MB)) `
+            'archived baseline summary'
+        Assert-CampaignFields $baselineSummary 'archived baseline summary' `
+            $script:GuestCampaignId $script:ExpectedManifestHash `
+            $script:ExpectedSourceCommit
+        Assert-Boolean $baselineSummary 'pass' 'archived baseline summary'
+        Assert-EmptyArray $baselineSummary 'exit_failures' 'archived baseline summary'
+        $failureEntries = @($entries.Keys | Where-Object {
+                [IO.Path]::GetFileName($_) -like '*-failure.txt'
+            })
+        if ($failureEntries.Count -ne 0) {
+            throw "The ZIP contains failure evidence: $($failureEntries -join ', ')"
+        }
+    } finally {
+        $archive.Dispose()
+    }
+
+    $tarErrorPath = Join-Path $EvidenceDirectory `
+        ".zip-crc-$([Guid]::NewGuid().ToString('N')).txt"
+    try {
+        & tar.exe -xOf $archivePath 1>$null 2>$tarErrorPath
+        $tarExit = $LASTEXITCODE
+        if ($tarExit -ne 0) {
+            $detail = if (Test-Path -LiteralPath $tarErrorPath) {
+                ([IO.File]::ReadAllText($tarErrorPath)).Trim()
+            } else { 'no diagnostic output' }
+            throw "ZIP CRC validation failed with exit code ${tarExit}: $detail"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $tarErrorPath) {
+            Remove-Item -LiteralPath $tarErrorPath -Force
+        }
+    }
+
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    if ($archiveHash -cne [string]$StableProbe.archive_info.sha256) {
+        throw 'The validated ZIP hash changed after retrieval.'
+    }
+    [IO.File]::WriteAllText(
+        (Join-Path $EvidenceDirectory 'oac-vm-results.sha256'),
+        "$archiveHash  oac-vm-results.zip`r`n",
+        [Text.Encoding]::ASCII)
+    return [pscustomobject]@{
+        Status = Read-JsonText ([IO.File]::ReadAllText($statusPath)) 'final status'
+        ArchiveHash = $archiveHash
+    }
+}
+
+function Assert-LiveContainment([object]$StableProbe) {
+    $probe = Invoke-VMDirectBounded -TimeoutSeconds 45 -ScriptBlock {
+        $root = 'C:\OACTest'
+        $verifierText = & verifier.exe /querysettings 2>&1 | Out-String
+        $verifierExit = $LASTEXITCODE
+        $states = [ordered]@{}
+        foreach ($name in @('OACService', 'OAC')) {
+            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+            $states[$name] = if ($null -eq $service) { 'missing' } else {
+                [string]$service.Status
+            }
+        }
+        [pscustomobject]@{
+            phase = ((Get-Content -LiteralPath (Join-Path $root 'phase.txt') -Raw) `
+                -replace "`0", '').Trim()
+            marker = Get-Content -LiteralPath `
+                (Join-Path $root 'containment-ready.json') -Raw
+            authorization_present = Test-Path -LiteralPath `
+                (Join-Path $root 'verifier-authorized.json')
+            tasks = @(Get-ScheduledTask -ErrorAction Stop |
+                Where-Object TaskName -Like 'OAC-VM-*' |
+                Select-Object -ExpandProperty TaskName -Unique)
+            service_states = $states
+            gate_service_present = $null -ne `
+                (Get-Service -Name 'OACGateProbe' -ErrorAction SilentlyContinue)
+            gate_image_present = Test-Path -LiteralPath `
+                (Join-Path $root 'OAC-Gate-Probe.sys')
+            verifier_exit = $verifierExit
+            verifier_text = $verifierText
+            status_sha256 = (Get-FileHash -LiteralPath `
+                (Join-Path $root 'final-status.json') -Algorithm SHA256).Hash
+            archive_sha256 = (Get-FileHash -LiteralPath `
+                (Join-Path $root 'results.zip') -Algorithm SHA256).Hash
+        }
+    }
+
+    Assert-Marker ([string]$probe.marker) 'live containment-ready marker'
+    if ($probe.phase -cne 'complete' -or $probe.authorization_present -or
+        @($probe.tasks).Count -ne 0 -or $probe.gate_service_present -or
+        $probe.gate_image_present -or
+        [string]$probe.service_states.OACService -cne 'Stopped' -or
+        [string]$probe.service_states.OAC -cne 'Stopped' -or
+        [int]$probe.verifier_exit -notin @(0, 2) -or
+        [string]$probe.status_sha256 -cne [string]$StableProbe.status_info.sha256 -or
+        [string]$probe.archive_sha256 -cne [string]$StableProbe.archive_info.sha256) {
+        throw 'The live guest failed its final containment contract.'
+    }
+    $targets = @([regex]::Matches(
+            [string]$probe.verifier_text,
+            '(?im)^\s*([^\s]+\.sys)\s*$') |
+        ForEach-Object { $_.Groups[1].Value.ToLowerInvariant() } |
+        Sort-Object -Unique)
+    if ($targets.Count -ne 0) {
+        throw "Driver Verifier still names drivers: $($targets -join ', ')"
+    }
+}
+
+function Assert-ZeroNetworkAdapters {
+    $adapters = @(Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop)
+    if ($adapters.Count -ne 0) {
+        throw "The disposable VM has $($adapters.Count) network adapters; expected zero."
+    }
+}
+
+function Stop-TestVM([bool]$AllowTurnOff) {
+    $vm = Get-VM -Name $VMName -ErrorAction Stop
+    if ($vm.State -eq 'Off') { return }
+    if ($vm.State -eq 'Running') {
+        try {
+            Invoke-VMDirectBounded -TimeoutSeconds 15 -ScriptBlock {
+                & shutdown.exe /s /t 0 /f | Out-Null
+            } | Out-Null
+        } catch { }
+        $deadline = [DateTime]::UtcNow.AddMinutes(5)
+        while ((Get-VM -Name $VMName).State -ne 'Off' -and
+            [DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Seconds 5
+        }
+    }
+    if ((Get-VM -Name $VMName).State -ne 'Off' -and $AllowTurnOff) {
+        Stop-VM -Name $VMName -TurnOff -Force -Confirm:$false
     }
     if ((Get-VM -Name $VMName).State -ne 'Off') {
-        throw 'The guest result was copied, but the VM did not shut down within five minutes.'
+        throw 'The disposable VM could not be left powered off.'
     }
 }
 
+if ([string]::IsNullOrWhiteSpace($VMName) -or
+    [IO.Path]::GetFileName($VMName) -cne $VMName -or
+    $VMName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
+    throw 'VMName must be a nonempty file-safe leaf name.'
+}
+if ($InstallTimeout -le [TimeSpan]::Zero -or $TestTimeout -le [TimeSpan]::Zero) {
+    throw 'InstallTimeout and TestTimeout must be positive.'
+}
 foreach ($path in @($WindowsIso, $SeedIso)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required ISO does not exist: $path"
     }
+    if ([IO.Path]::GetExtension($path) -cne '.iso') {
+        throw "Expected an .iso image: $path"
+    }
 }
-if (-not (Get-Command New-VM -ErrorAction SilentlyContinue)) {
-    throw 'The Hyper-V PowerShell module is unavailable. Enable Microsoft-Hyper-V-All and reboot.'
+$requiredCommands = @(
+    'New-VM', 'Get-VMHost', 'Get-VHD', 'Mount-VHD', 'Dismount-VHD',
+    'Get-Disk', 'Get-Partition', 'Get-Volume', 'Get-DiskImage',
+    'Mount-DiskImage', 'Dismount-DiskImage', 'Checkpoint-VM', 'tar.exe')
+foreach ($name in $requiredCommands) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
+        throw "Required Windows virtualization command is unavailable: $name"
+    }
 }
 try { $null = Get-VMHost } catch {
-    throw 'This account cannot manage Hyper-V. Add it to Hyper-V Administrators or run elevated.'
+    throw 'This account cannot manage Hyper-V. Run elevated as a Hyper-V administrator.'
 }
 if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
     throw "Refusing to replace an existing VM: $VMName"
 }
 
+$windowsIsoPath = [IO.Path]::GetFullPath($WindowsIso)
+$seedIsoPath = [IO.Path]::GetFullPath($SeedIso)
 $vmRootPath = [IO.Path]::GetFullPath($VMRoot)
 $resultPath = [IO.Path]::GetFullPath($ResultDirectory)
-New-Item -ItemType Directory -Path $vmRootPath, $resultPath -Force | Out-Null
-$script:HostLog = Join-Path $resultPath 'hyperv-orchestrator.log'
-$script:VhdPath = Join-Path $vmRootPath "$VMName.vhdx"
+$script:VhdPath = [IO.Path]::Combine($vmRootPath, "$VMName.vhdx")
 if (Test-Path -LiteralPath $script:VhdPath) {
     throw "Refusing to overwrite an existing VHDX: $script:VhdPath"
 }
+if (Test-Path -LiteralPath $resultPath) {
+    throw "ResultDirectory must be new; refusing existing path: $resultPath"
+}
+if ($resultPath.TrimEnd('\') -ieq $vmRootPath.TrimEnd('\')) {
+    throw 'ResultDirectory and VMRoot must be different directories.'
+}
+
+$seedIdentity = Read-SeedIdentity $seedIsoPath
+$script:ExpectedManifestHash = $seedIdentity.ManifestHash
+$script:ExpectedSourceCommit = $seedIdentity.SourceCommit
+
+New-Item -ItemType Directory -Path $vmRootPath -Force | Out-Null
+New-Item -ItemType Directory -Path $resultPath | Out-Null
+if (@(Get-ChildItem -LiteralPath $resultPath -Force).Count -ne 0) {
+    throw 'The newly created result directory is not empty.'
+}
+$script:HostLog = Join-Path $resultPath 'hyperv-orchestrator.log'
+$script:HostRecordPath = Join-Path $resultPath 'hyperv-vm-manifest.json'
+$script:HostRecord = [ordered]@{
+    schema = 2
+    orchestration_started_utc = $script:OrchestrationStartUtc.ToString('o')
+    state = 'preflight-complete'
+    vm_name = $VMName
+    windows_iso = $windowsIsoPath
+    windows_iso_sha256 = (Get-FileHash -LiteralPath $windowsIsoPath `
+        -Algorithm SHA256).Hash
+    seed_iso = $seedIsoPath
+    seed_iso_sha256 = (Get-FileHash -LiteralPath $seedIsoPath -Algorithm SHA256).Hash
+    expected_manifest_sha256 = $script:ExpectedManifestHash
+    expected_source_commit = $script:ExpectedSourceCommit
+    vhdx = $script:VhdPath
+}
+Save-HostRecord
 
 $guestPassword = ConvertTo-SecureString 'OacTest!2026' -AsPlainText -Force
 $script:GuestCredential = [Management.Automation.PSCredential]::new(
     'OAC-HV\OACAdmin', $guestPassword)
 
-Write-HostLog 'Creating isolated Generation 2 Hyper-V VM.'
-$vm = New-VM -Name $VMName -Generation 2 -Path $vmRootPath `
-    -MemoryStartupBytes 8GB -NewVHDPath $script:VhdPath -NewVHDSizeBytes 80GB
-Set-VM -VM $vm -AutomaticCheckpointsEnabled $false -CheckpointType Standard `
-    -AutomaticStartAction Nothing -AutomaticStopAction TurnOff
-Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes 8GB
-Set-VMProcessor -VMName $VMName -Count 2 -ExposeVirtualizationExtensions $false
-Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue |
-    Remove-VMNetworkAdapter -Confirm:$false
+try {
+    Write-HostLog 'Creating isolated Generation 2 Hyper-V VM.'
+    $vm = New-VM -Name $VMName -Generation 2 -Path $vmRootPath `
+        -MemoryStartupBytes 8GB -NewVHDPath $script:VhdPath `
+        -NewVHDSizeBytes 80GB
+    $script:VmCreated = $true
+    Set-VM -VM $vm -AutomaticCheckpointsEnabled $false -CheckpointType Standard `
+        -AutomaticStartAction Nothing -AutomaticStopAction TurnOff
+    Set-VMMemory -VMName $VMName -DynamicMemoryEnabled $false -StartupBytes 8GB
+    Set-VMProcessor -VMName $VMName -Count 2 -ExposeVirtualizationExtensions $false
+    Get-VMNetworkAdapter -VMName $VMName -ErrorAction SilentlyContinue |
+        Remove-VMNetworkAdapter -Confirm:$false
+    Assert-ZeroNetworkAdapters
 
-$windowsDvd = Add-VMDvdDrive -VMName $VMName -Path ([IO.Path]::GetFullPath($WindowsIso)) `
-    -Passthru
-$seedDvd = Add-VMDvdDrive -VMName $VMName -Path ([IO.Path]::GetFullPath($SeedIso)) `
-    -Passthru
-$hardDrive = Get-VMHardDiskDrive -VMName $VMName
-Set-VMFirmware -VMName $VMName -EnableSecureBoot Off `
-    -BootOrder @($hardDrive, $windowsDvd, $seedDvd)
+    $windowsDvd = Add-VMDvdDrive -VMName $VMName -Path $windowsIsoPath -Passthru
+    $seedDvd = Add-VMDvdDrive -VMName $VMName -Path $seedIsoPath -Passthru
+    $hardDrives = @(Get-VMHardDiskDrive -VMName $VMName)
+    if ($hardDrives.Count -ne 1) { throw 'The fresh VM must have exactly one VHD.' }
+    Set-VMFirmware -VMName $VMName -EnableSecureBoot Off `
+        -BootOrder @($hardDrives[0], $windowsDvd, $seedDvd)
+    if (@(Get-VMSnapshot -VMName $VMName -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw 'The fresh VM unexpectedly has a checkpoint.'
+    }
+    $script:HostRecord['state'] = 'vm-created'
+    $script:HostRecord['vm_created_utc'] = [DateTime]::UtcNow.ToString('o')
+    $script:HostRecord['generation'] = 2
+    $script:HostRecord['processors'] = 2
+    $script:HostRecord['memory_bytes'] = 8GB
+    $script:HostRecord['network_adapters'] = 0
+    $script:HostRecord['secure_boot'] = $false
+    Save-HostRecord
 
-[ordered]@{
-    schema = 1
-    created_utc = [DateTime]::UtcNow.ToString('o')
-    vm_name = $VMName
-    generation = 2
-    processors = 2
-    memory_bytes = 8GB
-    network_adapters = @(Get-VMNetworkAdapter -VMName $VMName).Count
-    secure_boot = $false
-    windows_iso = [IO.Path]::GetFullPath($WindowsIso)
-    windows_iso_sha256 = (Get-FileHash -LiteralPath $WindowsIso -Algorithm SHA256).Hash
-    seed_iso = [IO.Path]::GetFullPath($SeedIso)
-    seed_iso_sha256 = (Get-FileHash -LiteralPath $SeedIso -Algorithm SHA256).Hash
-    vhdx = $script:VhdPath
-} | ConvertTo-Json -Depth 4 | Out-File -LiteralPath `
-    (Join-Path $resultPath 'hyperv-vm-manifest.json') -Encoding utf8
+    Write-HostLog 'Starting unattended Windows installation and baseline tests.'
+    Start-VM -Name $VMName | Out-Null
+    Wait-ForVMOff -Timeout $InstallTimeout -Reason 'installation and baseline tests'
+    Assert-ZeroNetworkAdapters
+    $vhd = Get-VHD -Path $script:VhdPath
+    if ($vhd.FileSize -lt 5GB) {
+        throw "Windows installation is implausibly small: $($vhd.FileSize) bytes."
+    }
 
-Write-HostLog 'Starting unattended Windows installation.'
-Start-VM -Name $VMName | Out-Null
-$earlyFinalStatus = Wait-ForVMOff -Timeout $InstallTimeout `
-    -Reason 'baseline installation and driver smoke tests'
-if ($earlyFinalStatus) {
-    Copy-GuestFinalArtifacts $earlyFinalStatus
-    Stop-GuestAfterResults
-    throw 'The guest finalized a failed result before the baseline checkpoint; see copied VM evidence.'
-}
+    Write-HostLog 'Validating the powered-off baseline through a read-only VHD mount.'
+    $baseline = Invoke-WithVhdRoot $script:VhdPath $true ${function:Read-BaselineState}
+    $script:GuestCampaignId = $baseline.CampaignId
+    $script:GuestCampaignStartUtc = $baseline.CampaignStartUtc
+    $script:BaselineCompletedUtc = $baseline.BaselineCompletedUtc
+    $script:HostRecord['campaign_id'] = $script:GuestCampaignId
+    $script:HostRecord['campaign_start_utc'] = `
+        $script:GuestCampaignStartUtc.ToString('o')
+    $script:HostRecord['baseline_completed_utc'] = `
+        $script:BaselineCompletedUtc.ToString('o')
+    $script:HostRecord['baseline_result_count'] = `
+        @(Get-ExpectedTestNames $true).Count
+    $script:HostRecord['state'] = 'baseline-validated'
+    Save-HostRecord
 
-$vhd = Get-VHD -Path $script:VhdPath
-if ($vhd.FileSize -lt 5GB) {
-    throw "The VM powered off before a plausible Windows installation completed; VHDX file size=$($vhd.FileSize)."
-}
-Write-HostLog 'Creating clean pre-Verifier checkpoint.'
-Checkpoint-VM -Name $VMName -SnapshotName 'OAC-Baseline-Pre-Verifier' | Out-Null
+    Write-HostLog 'Creating the safe pre-Verifier checkpoint.'
+    $checkpointName = 'OAC-Baseline-Pre-Verifier'
+    $checkpoint = Checkpoint-VM -Name $VMName -SnapshotName $checkpointName -Passthru
+    $checkpoints = @(Get-VMSnapshot -VMName $VMName)
+    if ($checkpoints.Count -ne 1 -or $checkpoint.Id -ne $checkpoints[0].Id) {
+        throw 'The VM checkpoint set is not the expected single safe baseline.'
+    }
+    $safeDrives = @(Get-VMHardDiskDrive -VMSnapshot $checkpoint)
+    $activeDrives = @(Get-VMHardDiskDrive -VMName $VMName)
+    if ($safeDrives.Count -ne 1 -or $activeDrives.Count -ne 1) {
+        throw 'Checkpoint disk topology is not one safe parent and one active child.'
+    }
+    $safePath = [IO.Path]::GetFullPath($safeDrives[0].Path)
+    $activePath = [IO.Path]::GetFullPath($activeDrives[0].Path)
+    if ($safePath -ieq $activePath) {
+        throw 'Checkpoint creation did not produce a distinct active child disk.'
+    }
+    $activeVhd = Get-VHD -Path $activePath
+    if ([string]$activeVhd.VhdType -cne 'Differencing' -or
+        [IO.Path]::GetFullPath($activeVhd.ParentPath) -ine $safePath) {
+        throw 'The active VHD is not a child of the safe baseline checkpoint.'
+    }
+    Invoke-WithVhdRoot $safePath $true ${function:Assert-SafeCheckpointRoot}
 
-Write-HostLog 'Starting Driver Verifier phase.'
-Start-VM -Name $VMName | Out-Null
-$deadline = [DateTime]::UtcNow + $TestTimeout
-$nextProgress = [DateTime]::MinValue
-$finalStatus = $null
-while ([DateTime]::UtcNow -lt $deadline) {
-    $vm = Get-VM -Name $VMName
-    if ($vm.State -eq 'Running') {
+    Write-HostLog 'Writing one-use Verifier authorization only to the active child.'
+    Invoke-WithVhdRoot $activePath $false ${function:Write-VerifierAuthorization}
+    Invoke-WithVhdRoot $activePath $true ${function:Assert-ActiveAuthorization}
+    Invoke-WithVhdRoot $safePath $true ${function:Assert-SafeCheckpointRoot}
+    $script:HostRecord['checkpoint_name'] = $checkpointName
+    $script:HostRecord['checkpoint_id'] = [string]$checkpoint.Id
+    $script:HostRecord['checkpoint_vhd'] = $safePath
+    $script:HostRecord['active_child_vhd'] = $activePath
+    $script:HostRecord['verifier_authorized_utc'] = [DateTime]::UtcNow.ToString('o')
+    $script:HostRecord['state'] = 'verifier-authorized'
+    Save-HostRecord
+
+    Write-HostLog 'Starting the bounded Driver Verifier campaign.'
+    Start-VM -Name $VMName | Out-Null
+    $stableProbe = Wait-ForStableResults $TestTimeout
+    $evidencePath = Join-Path $resultPath 'evidence'
+    Copy-GuestEvidence $stableProbe $evidencePath
+    $validated = Test-EvidenceArchive $evidencePath $stableProbe
+    Assert-LiveContainment $stableProbe
+    Assert-ZeroNetworkAdapters
+
+    Write-HostLog 'Final containment validated; shutting down the guest.'
+    Stop-TestVM $false
+    Assert-ZeroNetworkAdapters
+    if ((Get-VM -Name $VMName).State -ne 'Off') {
+        throw 'The completed disposable VM is not powered off.'
+    }
+    $script:HostRecord['state'] = 'complete'
+    $script:HostRecord['completed_utc'] = [DateTime]::UtcNow.ToString('o')
+    $script:HostRecord['evidence_directory'] = $evidencePath
+    $script:HostRecord['results_zip_sha256'] = $validated.ArchiveHash
+    $script:HostRecord['overall_pass'] = $true
+    $script:HostRecord['final_vm_state'] = 'Off'
+    $script:HostRecord['final_network_adapters'] = 0
+    Save-HostRecord
+    Write-HostLog 'Hyper-V campaign completed; evidence is validated and the VM is off.'
+    $validated.Status | ConvertTo-Json -Depth 8
+} catch {
+    $failure = $_
+    Write-HostLog "Campaign failed: $($failure.Exception.Message)"
+    if ($script:VmCreated) {
+        try { Stop-TestVM $true } catch {
+            Write-HostLog "Containment shutdown also failed: $($_.Exception.Message)"
+        }
         try {
-            $candidate = Invoke-VMDirect {
-                if (Test-Path -LiteralPath 'C:\OACTest\final-status.json') {
-                    Get-Content -LiteralPath 'C:\OACTest\final-status.json' -Raw
-                }
-            }
-            if ($candidate) {
-                $finalStatus = ($candidate | Out-String).Trim()
-                if ($finalStatus) { break }
-            }
-        } catch { }
+            Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop |
+                Remove-VMNetworkAdapter -Confirm:$false
+        } catch {
+            Write-HostLog "Network-adapter removal also failed: $($_.Exception.Message)"
+        }
+        try { Assert-ZeroNetworkAdapters } catch {
+            Write-HostLog "Final network containment failed: $($_.Exception.Message)"
+        }
     }
-    if ([DateTime]::UtcNow -ge $nextProgress) {
-        Write-HostLog "Waiting for final guest result; state=$($vm.State)."
-        $nextProgress = [DateTime]::UtcNow.AddSeconds(30)
-    }
-    Start-Sleep -Seconds 10
+    $script:HostRecord['state'] = 'failed'
+    $script:HostRecord['failed_utc'] = [DateTime]::UtcNow.ToString('o')
+    $script:HostRecord['failure'] = $failure.Exception.Message
+    try { Save-HostRecord } catch { }
+    throw $failure
 }
-if (-not $finalStatus) { throw 'Timed out waiting for the guest final-status.json.' }
-
-Copy-GuestFinalArtifacts $finalStatus
-Stop-GuestAfterResults
-
-Write-HostLog 'Hyper-V driver test orchestration completed; VM is off and baseline checkpoint is retained.'
-$statusObject = $finalStatus | ConvertFrom-Json
-if (-not $statusObject.overall_pass) {
-    throw 'The Hyper-V driver test completed with overall_pass=false; see copied VM evidence.'
-}
-$finalStatus

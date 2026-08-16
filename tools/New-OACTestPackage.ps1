@@ -52,6 +52,26 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     }
 }
 
+function Get-CleanSourceCommit([string]$RepositoryRoot) {
+    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+        throw 'Git is required to bind the test package to an exact source commit.'
+    }
+    $commit = (& git.exe -C $RepositoryRoot rev-parse --verify 'HEAD^{commit}' 2>&1 |
+        Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $commit -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'The repository HEAD is not a canonical Git commit.'
+    }
+    $status = @(& git.exe -C $RepositoryRoot status --porcelain=v1 `
+        --untracked-files=all --ignore-submodules=none 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Git could not verify the repository worktree state.'
+    }
+    if ($status.Count -ne 0) {
+        throw 'Refusing to package a dirty worktree; commit the reviewed source first.'
+    }
+    return $commit
+}
+
 function Invoke-SelfSignedVerification(
     [string]$SignTool,
     [string]$FilePath,
@@ -89,12 +109,19 @@ $solution = Join-Path $repoRoot 'OAC.sln'
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
     throw "Repository solution was not found at $solution"
 }
+$sourceCommit = Get-CleanSourceCommit $repoRoot
 
 if (-not $OutputDirectory) {
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
     $OutputDirectory = Join-Path ([IO.Path]::GetTempPath()) "OAC-TestPackage-$stamp"
 }
 $output = [IO.Path]::GetFullPath($OutputDirectory)
+$repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) +
+    [IO.Path]::DirectorySeparatorChar
+if ($output -ieq $repoRoot -or
+    $output.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The generated package directory must be outside the source worktree.'
+}
 if (Test-Path -LiteralPath $output) {
     if (Get-ChildItem -LiteralPath $output -Force | Select-Object -First 1) {
         throw "Output directory is not empty: $output"
@@ -112,19 +139,30 @@ $signTool = Get-WindowsSdkTool 'signtool.exe' @('x64', 'x86')
 $inf2Cat = Get-WindowsSdkTool 'inf2cat.exe' @('x86', 'x64')
 $infVerif = Get-WindowsSdkTool 'infverif.exe' @('x64', 'x86')
 Invoke-Checked $msbuild @(
-    $solution, '/m', '/t:Rebuild', "/p:Configuration=$Configuration", '/p:Platform=x64',
+    $solution, '/m', '/nodeReuse:false', '/t:Rebuild',
+    "/p:Configuration=$Configuration", '/p:Platform=x64',
     '/p:PreferredToolArchitecture=x64', '/p:SkipPackageVerification=true',
     '/p:Inf2CatUseLocalTime=true'
 )
+$postBuildCommit = Get-CleanSourceCommit $repoRoot
+if ($postBuildCommit -cne $sourceCommit) {
+    throw 'The source commit changed while the package was being built.'
+}
 
 $builtPackage = Join-Path $repoRoot "x64\$Configuration\OAC"
 $client = Join-Path $repoRoot "x64\$Configuration\OAC-Client.exe"
+$service = Join-Path $repoRoot "x64\$Configuration\OAC-Service.exe"
+$launcher = Join-Path $repoRoot "x64\$Configuration\OAC-Launcher.exe"
 $protocolTest = Join-Path $repoRoot "x64\$Configuration\OAC-Protocol-Test.exe"
+$protocolUnit = Join-Path $repoRoot "x64\$Configuration\OAC-Protocol-Unit.exe"
 foreach ($required in @(
     (Join-Path $builtPackage 'OAC.sys'),
     (Join-Path $builtPackage 'OAC.inf'),
     $client,
-    $protocolTest
+    $service,
+    $launcher,
+    $protocolTest,
+    $protocolUnit
 )) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Expected build artifact is missing: $required"
@@ -132,6 +170,13 @@ foreach ($required in @(
 }
 Copy-Item -LiteralPath (Join-Path $builtPackage 'OAC.sys') -Destination $package
 Copy-Item -LiteralPath (Join-Path $builtPackage 'OAC.inf') -Destination $package
+Copy-Item -LiteralPath $client -Destination $package
+Copy-Item -LiteralPath $service -Destination $package
+Copy-Item -LiteralPath $launcher -Destination $package
+$protocolTestOutput = Join-Path $output 'OAC-Protocol-Test.exe'
+$protocolUnitOutput = Join-Path $output 'OAC-Protocol-Unit.exe'
+Copy-Item -LiteralPath $protocolTest -Destination $protocolTestOutput
+Copy-Item -LiteralPath $protocolUnit -Destination $protocolUnitOutput
 Invoke-Checked $infVerif @('/w', '/v', (Join-Path $package 'OAC.inf'))
 
 if ($PfxPassword -and -not $ExportPrivateKey) {
@@ -169,10 +214,19 @@ try {
             Out-Null
     }
     $driver = Join-Path $package 'OAC.sys'
-    Invoke-Checked $signTool @(
-        'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
-        '/s', 'My', $driver
+    $signedExecutables = @(
+        (Join-Path $package 'OAC-Client.exe'),
+        (Join-Path $package 'OAC-Service.exe'),
+        (Join-Path $package 'OAC-Launcher.exe'),
+        $protocolTestOutput,
+        $protocolUnitOutput
     )
+    foreach ($signedFile in @($driver) + $signedExecutables) {
+        Invoke-Checked $signTool @(
+            'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
+            '/s', 'My', $signedFile
+        )
+    }
 
     Invoke-Checked $inf2Cat @("/driver:$package", '/os:10_X64', '/uselocaltime')
     $catalog = Join-Path $package 'OAC.cat'
@@ -183,14 +237,16 @@ try {
         'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
         '/s', 'My', $catalog
     )
-    Invoke-SelfSignedVerification `
-        $signTool $driver $certificate.Thumbprint
-    Invoke-SelfSignedVerification `
-        $signTool $catalog $certificate.Thumbprint
+    foreach ($signedFile in @($driver, $catalog) + $signedExecutables) {
+        Invoke-SelfSignedVerification `
+            $signTool $signedFile $certificate.Thumbprint
+    }
 
-    Copy-Item -LiteralPath $client -Destination $package
-    $protocolTestOutput = Join-Path $output 'OAC-Protocol-Test.exe'
-    Copy-Item -LiteralPath $protocolTest -Destination $protocolTestOutput
+    $finalSourceCommit = Get-CleanSourceCommit $repoRoot
+    if ($finalSourceCommit -cne $sourceCommit) {
+        throw 'The source commit changed while the package was being signed.'
+    }
+
     $files = Get-ChildItem -LiteralPath $package -File | Sort-Object Name | ForEach-Object {
         [ordered]@{
             name = $_.Name
@@ -198,17 +254,22 @@ try {
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
         }
     }
-    $testFiles = @([ordered]@{
-        name = 'OAC-Protocol-Test.exe'
-        bytes = (Get-Item -LiteralPath $protocolTestOutput).Length
-        sha256 = (Get-FileHash -LiteralPath $protocolTestOutput -Algorithm SHA256).Hash
-    })
+    $testFiles = @($protocolTestOutput, $protocolUnitOutput) | ForEach-Object {
+        $item = Get-Item -LiteralPath $_
+        [ordered]@{
+            name = $item.Name
+            bytes = $item.Length
+            sha256 = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash
+        }
+    }
     $manifest = [ordered]@{
         schema = 1
         purpose = 'OAC disposable-VM test package; never production'
         created_utc = [DateTime]::UtcNow.ToString('o')
+        source_commit = $sourceCommit
         configuration = $Configuration
-        protocol_version = '0x00040000'
+        protocol_version = '0x00050000'
+        legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
         certificate_thumbprint = $certificate.Thumbprint
         certificate_not_after_utc = $certificate.NotAfter.ToUniversalTime().ToString('o')

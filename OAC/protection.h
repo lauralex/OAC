@@ -2,6 +2,7 @@
 
 #include <ntifs.h>
 #include "..\shared\oac_protocol.h"
+#include "session.h"
 
 #define OAC_PROCESS_VM_READ_ACCESS 0x0010UL
 
@@ -14,8 +15,11 @@ VOID OacProtectionShutdown(VOID);
 
 NTSTATUS OacConfigureProtection(
     _In_ const OAC_CONFIG_REQUEST* Request,
-    _In_ HANDLE RequestorProcessId
+    _In_ HANDLE RequestorProcessId,
+    _In_ const OAC_SESSION_LEASE* SessionLease
 );
+
+VOID OacProtectionRevokeController(_In_ PEPROCESS Controller);
 
 HANDLE OacProtectedProcessId(VOID);
 HANDLE OacTrustedClientProcessId(VOID);

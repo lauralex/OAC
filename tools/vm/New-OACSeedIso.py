@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 
 import pycdlib
@@ -17,14 +18,18 @@ REQUIRED_FILES = {
     "Run-OACVmTests.ps1",
     "Install-OACTestDriver.ps1",
     "OAC-Protocol-Test.exe",
+    "OAC-Protocol-Unit.exe",
     "OAC-VM-SEED.TAG",
     "package-manifest.json",
     "package/OAC.sys",
     "package/OAC.inf",
     "package/OAC.cat",
     "package/OAC-Client.exe",
+    "package/OAC-Service.exe",
+    "package/OAC-Launcher.exe",
     "certificate/OAC-Local-Test.cer",
 }
+SOURCE_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 
 def iso_extension(path: Path) -> str:
@@ -51,7 +56,21 @@ def validate_manifest(source: Path) -> None:
         "OAC disposable-VM test package; never production"
     ):
         raise SystemExit("package manifest has an unexpected schema or purpose")
+    source_commit = manifest.get("source_commit")
+    if not isinstance(source_commit, str) or not SOURCE_COMMIT.fullmatch(source_commit):
+        raise SystemExit("package manifest has no canonical source commit")
 
+    expected = {
+        "package": {
+            "OAC.sys",
+            "OAC.inf",
+            "OAC.cat",
+            "OAC-Client.exe",
+            "OAC-Service.exe",
+            "OAC-Launcher.exe",
+        },
+        "": {"OAC-Protocol-Test.exe", "OAC-Protocol-Unit.exe"},
+    }
     groups = (("package", manifest.get("files")), ("", manifest.get("test_files")))
     for prefix, entries in groups:
         if not isinstance(entries, list) or not entries:
@@ -69,6 +88,9 @@ def validate_manifest(source: Path) -> None:
                 raise SystemExit(f"manifest-covered seed file is missing: {path}")
             if path.stat().st_size != entry.get("bytes") or sha256(path) != entry.get("sha256"):
                 raise SystemExit(f"manifest mismatch for seed file: {path}")
+        missing = sorted(expected[prefix] - seen)
+        if missing:
+            raise SystemExit(f"package manifest does not hash required files: {missing}")
 
 
 def main() -> int:
@@ -83,12 +105,21 @@ def main() -> int:
         raise SystemExit(f"seed source is not a directory: {source}")
     if output.exists():
         raise SystemExit(f"refusing to overwrite existing output: {output}")
+    if output.is_relative_to(source):
+        raise SystemExit("the output ISO must be outside the seed source")
 
-    files = sorted(path for path in source.rglob("*") if path.is_file())
+    entries = list(source.rglob("*"))
+    links = sorted(path for path in entries if path.is_symlink())
+    if links:
+        raise SystemExit(f"refusing symbolic links in the seed source: {links}")
+    files = sorted(path for path in entries if path.is_file())
     relative_files = {path.relative_to(source).as_posix() for path in files}
     missing = sorted(REQUIRED_FILES - relative_files)
     if missing:
         raise SystemExit(f"seed is missing required files: {missing}")
+    unexpected = sorted(relative_files - REQUIRED_FILES)
+    if unexpected:
+        raise SystemExit(f"seed contains unexpected files: {unexpected}")
     private_keys = [path for path in files if path.suffix.lower() in {".pfx", ".p12", ".key"}]
     if private_keys:
         raise SystemExit(f"refusing to include private-key material: {private_keys}")

@@ -9,6 +9,12 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OAC-Client", "OAC-Client\OA
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OAC-Protocol-Test", "tools\OAC-Protocol-Test.vcxproj", "{C4FCE3D2-69DD-4AE1-9AA2-8F3D48A72EF1}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OAC-Service", "OAC-Service\OAC-Service.vcxproj", "{BA9B78D1-6E74-450A-944B-712298B05CDA}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OAC-Launcher", "OAC-Launcher\OAC-Launcher.vcxproj", "{A375F35C-9D01-4902-9861-C3C676893535}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "OAC-Protocol-Unit", "tests\unit\OAC-Protocol-Unit.vcxproj", "{6AF2B10C-7412-4B56-9733-BECF5780E095}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -29,6 +35,18 @@ Global
 		{C4FCE3D2-69DD-4AE1-9AA2-8F3D48A72EF1}.Debug|x64.Build.0 = Debug|x64
 		{C4FCE3D2-69DD-4AE1-9AA2-8F3D48A72EF1}.Release|x64.ActiveCfg = Release|x64
 		{C4FCE3D2-69DD-4AE1-9AA2-8F3D48A72EF1}.Release|x64.Build.0 = Release|x64
+		{BA9B78D1-6E74-450A-944B-712298B05CDA}.Debug|x64.ActiveCfg = Debug|x64
+		{BA9B78D1-6E74-450A-944B-712298B05CDA}.Debug|x64.Build.0 = Debug|x64
+		{BA9B78D1-6E74-450A-944B-712298B05CDA}.Release|x64.ActiveCfg = Release|x64
+		{BA9B78D1-6E74-450A-944B-712298B05CDA}.Release|x64.Build.0 = Release|x64
+		{A375F35C-9D01-4902-9861-C3C676893535}.Debug|x64.ActiveCfg = Debug|x64
+		{A375F35C-9D01-4902-9861-C3C676893535}.Debug|x64.Build.0 = Debug|x64
+		{A375F35C-9D01-4902-9861-C3C676893535}.Release|x64.ActiveCfg = Release|x64
+		{A375F35C-9D01-4902-9861-C3C676893535}.Release|x64.Build.0 = Release|x64
+		{6AF2B10C-7412-4B56-9733-BECF5780E095}.Debug|x64.ActiveCfg = Debug|x64
+		{6AF2B10C-7412-4B56-9733-BECF5780E095}.Debug|x64.Build.0 = Debug|x64
+		{6AF2B10C-7412-4B56-9733-BECF5780E095}.Release|x64.ActiveCfg = Release|x64
+		{6AF2B10C-7412-4B56-9733-BECF5780E095}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

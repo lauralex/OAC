@@ -5,6 +5,11 @@
 > an agent task list. Imperative language below records proposed work. Only an active, scoped
 > request authorizes implementation. See the root README and source for current behavior.
 
+> [!NOTE]
+> The current working tree implements the source foundations for WP-00 through WP-03, including
+> status-only service control and per-file sessions. Their acceptance state is tracked in
+> `../PROGRESS.md`; this roadmap is not updated in place to imply that later deliverables exist.
+
 **Document status:** Proposed target architecture and roadmap
 **Target repository:** `lauralex/OAC`
 **Reviewed baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
@@ -20,13 +25,13 @@ This specification converts the current OAC project from a broad endpoint-integr
 
 The current code contains valuable engineering:
 
-- A signed demand-start WDM driver.
+- An unsigned-by-default, signable demand-start WDM driver.
 - Process/thread handle filtering through object callbacks.
 - Referenced process-object identities rather than PID-only identity.
 - Bounded kernel scans and dynamic processor handling.
 - Driver, module, process, handle, thread, memory, debugger, platform, service, device, and HWID observations.
 - Exact-build gating for private kernel profiles.
-- Suspended-process launch and production revocation.
+- A legacy suspended diagnostic launch and report gate.
 - A protocol test and disposable-VM/Driver-Verifier harness.
 - Careful documentation of limitations.
 
