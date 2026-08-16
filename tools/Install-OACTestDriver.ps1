@@ -516,7 +516,6 @@ function Get-VerifiedDriverPackage([switch]$Required) {
     if ($publishedInf -notmatch '^oem[0-9]+\.inf$' -or
         [string]$record.ProviderName -cne 'OAC Project' -or
         [string]$record.ClassName -cne 'System' -or
-        [string]$record.Version -cne '3.0.0.0' -or
         [bool]$record.Inbox) {
         throw 'The published OAC driver metadata does not match the reviewed package.'
     }

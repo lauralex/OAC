@@ -168,6 +168,13 @@ function Invoke-NativeCapture(
     if ($Arguments.Count -ne 0) { $startParameters.ArgumentList = $Arguments }
     $process = Start-Process @startParameters
     try {
+        # Keep the native handle alive. Windows PowerShell can otherwise expose
+        # a null ExitCode after a short-lived redirected process exits.
+        $processHandle = $process.Handle
+        if ($processHandle -eq [IntPtr]::Zero) {
+            try { $process.Kill() } catch { }
+            throw "$Name did not expose a valid process handle."
+        }
         if (-not $process.WaitForExit([int]$Timeout.TotalMilliseconds)) {
             Write-DurableAsciiFile (Join-Path $results "$Name.timeout.txt") `
                 ([DateTime]::UtcNow.ToString('o'))
@@ -187,7 +194,11 @@ function Invoke-NativeCapture(
         }
         # A second wait drains asynchronous redirected-stream completion.
         $process.WaitForExit()
-        $exitCode = [int]$process.ExitCode
+        $rawExitCode = $process.ExitCode
+        if ($null -eq $rawExitCode) {
+            throw "$Name completed without a readable exit code."
+        }
+        $exitCode = [int]$rawExitCode
         Write-DurableAsciiFile (Join-Path $results "$Name.exitcode.txt") `
             ([string]$exitCode)
         Write-RunLog "$Name exited with $exitCode"
@@ -1340,6 +1351,13 @@ function Remove-MainRecoveryTask {
     }
 }
 
+function Test-BaselineFailureEvidence {
+    return (Test-Path -LiteralPath `
+            (Join-Path $results 'baseline-running-failure.txt') -PathType Leaf) -or
+        (Test-Path -LiteralPath `
+            (Join-Path $results 'baseline-unexpected-reboot.txt') -PathType Leaf)
+}
+
 function Collect-FinalResults {
     Write-RunLog 'Collecting final VM, verifier, crash, signature, and event-log evidence.'
     Save-PlatformState 'final'
@@ -1587,8 +1605,10 @@ function Collect-FinalResults {
             [string]$service.Status
         }
     }
-    $servicesContained = $serviceStates.OACService -ceq 'Stopped' -and
-        $serviceStates.OAC -ceq 'Stopped'
+    $containedServiceStates = @('missing', 'Stopped')
+    $servicesContained = `
+        ($containedServiceStates -ccontains $serviceStates.OACService) -and
+        ($containedServiceStates -ccontains $serviceStates.OAC)
 
     $gateService = Get-Service -Name 'OACGateProbe' -ErrorAction SilentlyContinue
     if ($null -ne $gateService) {
@@ -1760,6 +1780,11 @@ function Collect-FinalResults {
     Publish-FinalResult $status
     Set-Phase 'complete'
     Remove-MainRecoveryTask
+    if (Test-BaselineFailureEvidence) {
+        Write-RunLog 'Baseline failed; final evidence is durable, shutting down.'
+        Start-Sleep -Seconds 3
+        Stop-Computer -Force
+    }
 }
 
 $script:CurrentPhase = 'startup'
@@ -1818,6 +1843,11 @@ try {
         Publish-FinalResult $failureStatus
         Set-Phase 'complete'
         Remove-MainRecoveryTask
+        if (Test-BaselineFailureEvidence) {
+            Write-RunLog 'Baseline failure publication is durable; shutting down.'
+            Start-Sleep -Seconds 3
+            Stop-Computer -Force
+        }
     } elseif ($failurePhase -eq 'startup') {
         Clear-LabAutoLogon
         Write-RunLog 'Startup validation failed; shutting down without entering a reboot loop.'

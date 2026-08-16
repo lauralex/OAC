@@ -140,8 +140,19 @@ try {
     Start-Sleep -Seconds 3
     Restart-Computer -Force
 } catch {
-    Clear-LabAutoLogon
-    Write-BootstrapLog "FATAL: $($_.Exception.Message)"
-    $_ | Out-String | Out-File -LiteralPath (Join-Path $results 'bootstrap-failure.txt') -Encoding utf8
-    throw
+    $fatalError = $_
+    try { Clear-LabAutoLogon } catch { }
+    try { Write-BootstrapLog "FATAL: $($fatalError.Exception.Message)" } catch { }
+    try {
+        $fatalError | Out-String | Out-File -LiteralPath `
+            (Join-Path $results 'bootstrap-failure.txt') -Encoding utf8
+    } catch { }
+    try {
+        Write-BootstrapLog 'Bootstrap failed; shutting down the disposable guest.'
+    } catch { }
+    try {
+        Start-Sleep -Seconds 3
+        Stop-Computer -Force
+    } catch { }
+    throw $fatalError
 }

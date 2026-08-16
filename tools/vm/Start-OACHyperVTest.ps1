@@ -12,6 +12,8 @@ param(
 
     [TimeSpan]$InstallTimeout = '01:00:00',
 
+    [TimeSpan]$BaselineTimeout = '01:00:00',
+
     [TimeSpan]$TestTimeout = '00:45:00'
 )
 
@@ -599,26 +601,103 @@ function Invoke-VMDirectBounded(
     }
 }
 
-function Wait-ForVMOff([TimeSpan]$Timeout, [string]$Reason) {
-    $deadline = [DateTime]::UtcNow + $Timeout
+function Wait-ForBaselineOff(
+    [TimeSpan]$InstallBound,
+    [TimeSpan]$BaselineBound) {
+    $installDeadline = [DateTime]::UtcNow + $InstallBound
+    $baselineDeadline = $null
+    $nextProbe = [DateTime]::MinValue
     $nextProgress = [DateTime]::MinValue
-    while ([DateTime]::UtcNow -lt $deadline) {
+    $baselinePhases = @(
+        'post-testsigning', 'baseline-running', 'baseline-complete',
+        'finalize', 'complete')
+    while ($true) {
+        $now = [DateTime]::UtcNow
         $vm = Get-VM -Name $VMName
         if ($vm.State -eq 'Off') {
-            Write-HostLog "VM powered off after $Reason."
+            Write-HostLog 'VM powered off after installation and baseline tests.'
             return
         }
-        if ([DateTime]::UtcNow -ge $nextProgress) {
+        $activeDeadline = if ($null -eq $baselineDeadline) {
+            $installDeadline
+        } else {
+            $baselineDeadline
+        }
+        if ($now -ge $activeDeadline) {
+            $stage = if ($null -eq $baselineDeadline) {
+                'unattended Windows installation'
+            } else {
+                'baseline tests'
+            }
+            throw "Timed out waiting for the VM to power off after $stage."
+        }
+        if ($vm.State -eq 'Running' -and $now -ge $nextProbe) {
+            $probe = $null
+            try { $probe = Get-GuestReadyProbe } catch { }
+            $now = [DateTime]::UtcNow
+            $nextProbe = $now.AddSeconds(15)
+            if ($null -ne $probe -and
+                -not [string]::IsNullOrWhiteSpace([string]$probe.phase)) {
+                Assert-LiveCampaignProbe $probe
+                if ($baselinePhases -cnotcontains [string]$probe.phase) {
+                    throw "Guest reported an invalid baseline phase: $($probe.phase)"
+                }
+                if ($null -eq $baselineDeadline) {
+                    if ($script:GuestCampaignStartUtc -gt $installDeadline) {
+                        throw 'Guest campaign started after the installation deadline.'
+                    }
+                    $baselineDeadline = `
+                        $script:GuestCampaignStartUtc + $BaselineBound
+                    Write-HostLog `
+                        "Guest campaign entered phase $($probe.phase); baseline deadline started."
+                }
+                if ([string]$probe.phase -ceq 'complete') {
+                    $status = Read-LiveStatus $probe 'terminal baseline status'
+                    if ($null -eq $status) {
+                        throw 'Guest completed before the baseline snapshot without a final status.'
+                    }
+                    $message = Get-LiveFailureMessage $probe $status `
+                        'baseline did not reach the safe snapshot boundary'
+                    throw "Guest published terminal baseline failure: $message"
+                }
+            }
+        }
+
+        $vm = Get-VM -Name $VMName
+        if ($vm.State -eq 'Off') {
+            Write-HostLog 'VM powered off after installation and baseline tests.'
+            return
+        }
+        $now = [DateTime]::UtcNow
+        $activeDeadline = if ($null -eq $baselineDeadline) {
+            $installDeadline
+        } else {
+            $baselineDeadline
+        }
+        if ($now -ge $activeDeadline) {
+            $stage = if ($null -eq $baselineDeadline) {
+                'unattended Windows installation'
+            } else {
+                'baseline tests'
+            }
+            throw "Timed out waiting for the VM to power off after $stage."
+        }
+        if ($now -ge $nextProgress) {
             $vhdSize = if ($script:VhdPath -and
                 (Test-Path -LiteralPath $script:VhdPath)) {
                 (Get-Item -LiteralPath $script:VhdPath).Length
             } else { 0 }
-            Write-HostLog "Waiting for $Reason; state=$($vm.State), VHDX bytes=$vhdSize."
-            $nextProgress = [DateTime]::UtcNow.AddSeconds(30)
+            $stage = if ($null -eq $baselineDeadline) {
+                'installation'
+            } else {
+                'baseline tests'
+            }
+            Write-HostLog `
+                "Waiting for $stage; state=$($vm.State), VHDX bytes=$vhdSize."
+            $nextProgress = $now.AddSeconds(30)
         }
         Start-Sleep -Seconds 5
     }
-    throw "Timed out waiting for the VM to power off after $Reason."
 }
 
 function Get-GuestReadyProbe {
@@ -635,6 +714,12 @@ function Get-GuestReadyProbe {
                 sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
             }
         }
+        function Get-SmallText([string]$Path) {
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+            $item = Get-Item -LiteralPath $Path
+            if ($item.Length -gt 64KB) { throw "Probe text is too large: $Path" }
+            return Get-Content -LiteralPath $Path -Raw
+        }
         $phase = if (Test-Path -LiteralPath (Join-Path $root 'phase.txt')) {
             ((Get-Content -LiteralPath (Join-Path $root 'phase.txt') -Raw) `
                 -replace "`0", '').Trim()
@@ -645,7 +730,19 @@ function Get-GuestReadyProbe {
         } else { $null }
         [pscustomobject]@{
             phase = $phase
+            campaign_id = Get-SmallText (Join-Path $root 'campaign-id.txt')
+            campaign_start_utc = Get-SmallText `
+                (Join-Path $root 'campaign-start-utc.txt')
+            manifest_sha256 = Get-SmallText `
+                (Join-Path $root 'campaign-manifest-sha256.txt')
+            source_commit = Get-SmallText `
+                (Join-Path $root 'campaign-source-commit.txt')
+            baseline_failure = Get-SmallText `
+                (Join-Path $root 'results\baseline-running-failure.txt')
+            baseline_restart = Get-SmallText `
+                (Join-Path $root 'results\baseline-unexpected-reboot.txt')
             marker = $marker
+            status = Get-SmallText (Join-Path $root 'final-status.json')
             marker_info = Get-HashInfo $markerPath
             status_info = Get-HashInfo (Join-Path $root 'final-status.json')
             archive_info = Get-HashInfo (Join-Path $root 'results.zip')
@@ -654,6 +751,80 @@ function Get-GuestReadyProbe {
                 Select-Object -ExpandProperty TaskName -Unique)
         }
     }
+}
+
+function Assert-LiveCampaignProbe([object]$Probe) {
+    $campaignId = ([string]$Probe.campaign_id).Trim()
+    $parsedId = [Guid]::Empty
+    if (-not [Guid]::TryParseExact($campaignId, 'D', [ref]$parsedId) -or
+        $parsedId -eq [Guid]::Empty -or $parsedId.ToString('D') -cne $campaignId) {
+        throw 'Live guest campaign ID is invalid.'
+    }
+    $manifestHash = ([string]$Probe.manifest_sha256).Trim()
+    $sourceCommit = ([string]$Probe.source_commit).Trim()
+    if ($manifestHash -cne $script:ExpectedManifestHash -or
+        $sourceCommit -cne $script:ExpectedSourceCommit) {
+        throw 'Live guest campaign identity does not match the seed.'
+    }
+    $campaignStart = ConvertTo-UtcTime ([string]$Probe.campaign_start_utc) `
+        'live guest campaign start'
+    $now = [DateTime]::UtcNow
+    if ($campaignStart -lt $script:OrchestrationStartUtc.AddMinutes(-5) -or
+        $campaignStart -gt $now.AddMinutes(5)) {
+        throw 'Live guest campaign start is outside the orchestration window.'
+    }
+    if ($null -ne $script:GuestCampaignId -and
+        $script:GuestCampaignId -cne $campaignId) {
+        throw 'Live guest campaign ID changed during orchestration.'
+    }
+    if ($script:GuestCampaignStartUtc -ne [DateTime]::MinValue -and
+        $script:GuestCampaignStartUtc -ne $campaignStart) {
+        throw 'Live guest campaign start changed during orchestration.'
+    }
+    $script:GuestCampaignId = $campaignId
+    $script:GuestCampaignStartUtc = $campaignStart
+}
+
+function Read-LiveStatus([object]$Probe, [string]$Purpose) {
+    if ([string]::IsNullOrWhiteSpace([string]$Probe.status)) { return $null }
+    try {
+        $status = [string]$Probe.status | ConvertFrom-Json
+    } catch {
+        throw "$Purpose is malformed."
+    }
+    Assert-BoundIdentity $status $Purpose $script:GuestCampaignId `
+        $script:ExpectedManifestHash $script:ExpectedSourceCommit
+    $statusStart = ConvertTo-UtcTime `
+        (Get-RequiredValue $status 'campaign_start_utc' $Purpose) `
+        "$Purpose campaign start"
+    if ($statusStart -ne $script:GuestCampaignStartUtc) {
+        throw "$Purpose has the wrong campaign start."
+    }
+    $overallPass = Get-RequiredValue $status 'overall_pass' $Purpose
+    if ($overallPass -isnot [bool]) {
+        throw "$Purpose has a non-Boolean result."
+    }
+    return $status
+}
+
+function Get-LiveFailureMessage(
+    [object]$Probe,
+    [object]$Status,
+    [string]$Fallback) {
+    $failureText = if (-not [string]::IsNullOrWhiteSpace(
+            [string]$Probe.baseline_failure)) {
+        [string]$Probe.baseline_failure
+    } elseif (-not [string]::IsNullOrWhiteSpace(
+            [string]$Probe.baseline_restart)) {
+        'baseline restarted unexpectedly'
+    } elseif ($Status.PSObject.Properties.Name -ccontains 'fatal_message') {
+        [string]$Status.fatal_message
+    } else {
+        $Fallback
+    }
+    $message = ($failureText -replace '[\r\n]+', ' ').Trim()
+    if ($message.Length -gt 512) { $message = $message.Substring(0, 512) }
+    return $message
 }
 
 function Wait-ForStableResults([TimeSpan]$Timeout) {
@@ -667,22 +838,42 @@ function Wait-ForStableResults([TimeSpan]$Timeout) {
             throw 'The guest powered off before publishing stable final evidence.'
         }
         if ($vm.State -eq 'Running') {
-            try {
-                $probe = Get-GuestReadyProbe
-                $ready = $probe.phase -ceq 'complete' -and
-                    -not [string]::IsNullOrWhiteSpace([string]$probe.marker) -and
+            $probe = $null
+            try { $probe = Get-GuestReadyProbe } catch { }
+            if ($null -ne $probe) {
+                Assert-LiveCampaignProbe $probe
+                $status = $null
+                if ([string]$probe.phase -ceq 'complete') {
+                    $status = Read-LiveStatus $probe 'live final status'
+                }
+                $artifactsReady = $probe.phase -ceq 'complete' -and
                     @($probe.oac_tasks).Count -eq 0 -and
                     $null -ne $probe.status_info -and
                     $null -ne $probe.archive_info -and
                     $probe.status_info.sha256 -cmatch '^[0-9A-F]{64}$' -and
-                    $probe.archive_info.sha256 -cmatch '^[0-9A-F]{64}$' -and
+                    $probe.archive_info.sha256 -cmatch '^[0-9A-F]{64}$'
+                $ready = $artifactsReady -and
+                    -not [string]::IsNullOrWhiteSpace([string]$probe.marker) -and
+                    $null -ne $probe.marker_info -and
                     $probe.marker_info.sha256 -cmatch '^[0-9A-F]{64}$'
-                if ($ready) {
-                    Assert-Marker ([string]$probe.marker) 'containment-ready marker'
+                $fatalReady = $artifactsReady -and $null -ne $status -and
+                    -not [bool]$status.overall_pass -and
+                    [string]::IsNullOrWhiteSpace([string]$probe.marker) -and
+                    ($status.PSObject.Properties.Name -ccontains 'fatal_message')
+                if ($ready -or $fatalReady) {
+                    $mode = if ($fatalReady) { 'failure' } else { 'complete' }
+                    $markerSignature = if ($ready) {
+                        Assert-Marker ([string]$probe.marker) `
+                            'containment-ready marker'
+                        "$($probe.marker_info.bytes):$($probe.marker_info.sha256)"
+                    } else {
+                        'no-marker'
+                    }
                     $signature = @(
+                        $mode,
                         $probe.status_info.bytes, $probe.status_info.sha256,
                         $probe.archive_info.bytes, $probe.archive_info.sha256,
-                        $probe.marker_info.bytes, $probe.marker_info.sha256) -join ':'
+                        $markerSignature) -join ':'
                     if ($signature -ceq $lastSignature) {
                         $stablePolls++
                     } else {
@@ -690,16 +881,20 @@ function Wait-ForStableResults([TimeSpan]$Timeout) {
                         $stablePolls = 1
                     }
                     if ($stablePolls -ge 2) {
+                        if ($fatalReady) {
+                            $failureEvidencePath = Join-Path $resultPath `
+                                'failed-evidence'
+                            Copy-GuestEvidence $probe $failureEvidencePath $false
+                            $message = Get-LiveFailureMessage $probe $status `
+                                'final VM validation failed'
+                            throw "Guest published terminal final failure: $message"
+                        }
                         Write-HostLog 'Guest final evidence is stable across two polls.'
                         return $probe
                     }
                 } else {
                     $lastSignature = $null
                     $stablePolls = 0
-                }
-            } catch {
-                if ($_.Exception.Message -match 'marker|campaign|source commit|manifest') {
-                    throw
                 }
             }
         }
@@ -712,7 +907,10 @@ function Wait-ForStableResults([TimeSpan]$Timeout) {
     throw 'Timed out waiting for stable, campaign-bound final evidence.'
 }
 
-function Copy-GuestEvidence([object]$Probe, [string]$Destination) {
+function Copy-GuestEvidence(
+    [object]$Probe,
+    [string]$Destination,
+    [bool]$RequireMarker = $true) {
     if (Test-Path -LiteralPath $Destination) {
         throw "Refusing to reuse an evidence directory: $Destination"
     }
@@ -730,7 +928,9 @@ function Copy-GuestEvidence([object]$Probe, [string]$Destination) {
         $copies = [ordered]@{
             'C:\OACTest\final-status.json' = 'final-status.json'
             'C:\OACTest\results.zip' = 'oac-vm-results.zip'
-            'C:\OACTest\containment-ready.json' = 'containment-ready.json'
+        }
+        if ($RequireMarker) {
+            $copies['C:\OACTest\containment-ready.json'] = 'containment-ready.json'
         }
         foreach ($entry in $copies.GetEnumerator()) {
             Copy-Item -FromSession $session -LiteralPath $entry.Key `
@@ -748,13 +948,19 @@ function Copy-GuestEvidence([object]$Probe, [string]$Destination) {
             [string]$Probe.status_info.sha256 -or
         (Get-Item -LiteralPath $archivePath).Length -ne [int64]$Probe.archive_info.bytes -or
         (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne
-            [string]$Probe.archive_info.sha256 -or
-        (Get-Item -LiteralPath $markerPath).Length -ne [int64]$Probe.marker_info.bytes -or
-        (Get-FileHash -LiteralPath $markerPath -Algorithm SHA256).Hash -cne
-            [string]$Probe.marker_info.sha256) {
+            [string]$Probe.archive_info.sha256) {
         throw 'Copied evidence does not match the stable guest artifacts.'
     }
-    Assert-Marker ([IO.File]::ReadAllText($markerPath)) 'copied containment-ready marker'
+    if ($RequireMarker) {
+        if ((Get-Item -LiteralPath $markerPath).Length -ne
+                [int64]$Probe.marker_info.bytes -or
+            (Get-FileHash -LiteralPath $markerPath -Algorithm SHA256).Hash -cne
+                [string]$Probe.marker_info.sha256) {
+            throw 'Copied containment marker does not match the stable guest artifact.'
+        }
+        Assert-Marker ([IO.File]::ReadAllText($markerPath)) `
+            'copied containment-ready marker'
+    }
 }
 
 function Read-ZipEntryBytes([object]$Entry, [int64]$Limit) {
@@ -1078,8 +1284,10 @@ if ([string]::IsNullOrWhiteSpace($VMName) -or
     $VMName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0) {
     throw 'VMName must be a nonempty file-safe leaf name.'
 }
-if ($InstallTimeout -le [TimeSpan]::Zero -or $TestTimeout -le [TimeSpan]::Zero) {
-    throw 'InstallTimeout and TestTimeout must be positive.'
+if ($InstallTimeout -le [TimeSpan]::Zero -or
+    $BaselineTimeout -le [TimeSpan]::Zero -or
+    $TestTimeout -le [TimeSpan]::Zero) {
+    throw 'InstallTimeout, BaselineTimeout, and TestTimeout must be positive.'
 }
 foreach ($path in @($WindowsIso, $SeedIso)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
@@ -1185,7 +1393,8 @@ try {
 
     Write-HostLog 'Starting unattended Windows installation and baseline tests.'
     Start-VM -Name $VMName | Out-Null
-    Wait-ForVMOff -Timeout $InstallTimeout -Reason 'installation and baseline tests'
+    Wait-ForBaselineOff -InstallBound $InstallTimeout `
+        -BaselineBound $BaselineTimeout
     Assert-ZeroNetworkAdapters
     $vhd = Get-VHD -Path $script:VhdPath
     if ($vhd.FileSize -lt 5GB) {
@@ -1193,7 +1402,15 @@ try {
     }
 
     Write-HostLog 'Validating the powered-off baseline through a read-only VHD mount.'
+    $liveCampaignId = $script:GuestCampaignId
+    $liveCampaignStartUtc = $script:GuestCampaignStartUtc
     $baseline = Invoke-WithVhdRoot $script:VhdPath $true ${function:Read-BaselineState}
+    if (($null -ne $liveCampaignId -and
+            $liveCampaignId -cne $baseline.CampaignId) -or
+        ($liveCampaignStartUtc -ne [DateTime]::MinValue -and
+            $liveCampaignStartUtc -ne $baseline.CampaignStartUtc)) {
+        throw 'Powered-off baseline identity changed after the live guest probe.'
+    }
     $script:GuestCampaignId = $baseline.CampaignId
     $script:GuestCampaignStartUtc = $baseline.CampaignStartUtc
     $script:BaselineCompletedUtc = $baseline.BaselineCompletedUtc
