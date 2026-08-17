@@ -11,7 +11,7 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050001`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050002`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
@@ -25,7 +25,7 @@ claim, status, arm, cancel, and confirm are available:
 | `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
 | `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 120-byte status response | Returns correlated session state, identity, capability, and counter data |
-| `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 1088-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
+| `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2112-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
 | `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
@@ -35,11 +35,13 @@ advertised. `OAC_V5_CAP_TYPED_EVENTS` therefore remains clear.
 
 ### Launch transaction
 
-One production session may arm one ticket with a 100 ms to 10 second lifetime and one canonical
-`\Device\...` image path. The driver generates a nonzero 128-bit launch ID and a boot-relative
+One production session may arm one ticket with a 100 ms to 10 second lifetime and two exact Windows
+namespace spellings resolved from the same locked executable handle: the volume-device
+`\Device\...` path and its DOS-device `\??\C:\...` path. The driver generates a nonzero 128-bit
+launch ID and a boot-relative
 `KeQueryInterruptTime` expiration value. The process-creation callback ignores unrelated creators;
 for the exact referenced service process and creating-process ID it requires an available,
-case-insensitively equal canonical NT image path before atomically consuming the ticket, referencing
+case-insensitively equal resolved image path before atomically consuming the ticket, referencing
 the new process object, and entering
 `LAUNCH_PENDING -> TARGET_BOUND`. The service must then present a real user-mode process handle with
 the same launch ID. The driver resolves that handle to an exact process object before entering

@@ -461,6 +461,8 @@ NTSTATUS OacDeviceControl(
                 request.TimeToLiveMilliseconds,
                 request.CanonicalNtPath,
                 request.CanonicalNtPathLength,
+                request.CanonicalDosDevicePath,
+                request.CanonicalDosDevicePathLength,
                 &launchId,
                 &expirationInterruptTime100ns,
                 &snapshot);

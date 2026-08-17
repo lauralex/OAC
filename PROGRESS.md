@@ -90,7 +90,7 @@ revoke, signed-manifest, signed-policy, and backend capabilities remain unavaila
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Debug and Release `OAC-Protocol-Unit.exe` | Passed; `277/277` in each configuration |
+| Debug and Release `OAC-Protocol-Unit.exe` | Passed; `280/280` in each configuration |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
 | `tools/Test-OACRepository.ps1` (seven PowerShell, eleven XML, five YAML, one Python) | Passed |

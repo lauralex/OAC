@@ -65,7 +65,8 @@ and authorization checks, not cryptographic backend authentication.
 
 The IPC surface contains hello, status, and one absolute executable launch request. The service
 opens and resolves the executable under client impersonation, keeps the file locked against writes
-and deletion, arms a bounded kernel ticket for the canonical NT path, creates the process suspended
+and deletion, arms a bounded kernel ticket for the exact volume-device and DOS-device path spellings,
+creates the process suspended
 under the client's primary token, confirms the exact process handle, validates monitoring state,
 and resumes the initial thread. There is no argument transport, policy transfer, signed manifest,
 evidence upload, backend lease, job ownership, or service-session reuse after the target exits.

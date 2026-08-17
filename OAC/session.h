@@ -103,6 +103,9 @@ NTSTATUS OacSessionArmLaunch(
     _In_ ULONG TimeToLiveMilliseconds,
     _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
     _In_ ULONG CanonicalNtPathLength,
+    _In_reads_(CanonicalDosDevicePathLength)
+        const WCHAR* CanonicalDosDevicePath,
+    _In_ ULONG CanonicalDosDevicePathLength,
     _Out_ POAC_LAUNCH_ID LaunchId,
     _Out_ PULONGLONG ExpirationInterruptTime100ns,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot);

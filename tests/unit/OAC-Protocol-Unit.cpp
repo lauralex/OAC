@@ -27,8 +27,10 @@ static_assert(offsetof(OAC_V5_EVENT_RECORD, PolicySeverity) == 20);
 static_assert(offsetof(OAC_V5_EVENT_RECORD, Reserved) == 36);
 static_assert(std::is_standard_layout_v<OAC_ARM_LAUNCH_REQUEST>);
 static_assert(std::is_trivially_copyable_v<OAC_CONFIRM_TARGET_REQUEST>);
-static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 1088);
+static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2112);
 static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST, CanonicalNtPath) == 64);
+static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalDosDevicePath) == 1088);
 static_assert(sizeof(OAC_ARM_LAUNCH_RESPONSE) == 88);
 static_assert(sizeof(OAC_CANCEL_LAUNCH_REQUEST) == 64);
 static_assert(sizeof(OAC_CANCEL_LAUNCH_RESPONSE) == 64);
@@ -214,8 +216,23 @@ void SetCanonicalPath(
     std::memcpy(request.CanonicalNtPath, path, sizeof(path));
 }
 
+template <std::size_t Length>
+void SetCanonicalDosDevicePath(
+    OAC_ARM_LAUNCH_REQUEST& request,
+    const WCHAR (&path)[Length])
+{
+    static_assert(Length <= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS);
+    std::memset(
+        request.CanonicalDosDevicePath,
+        0,
+        sizeof(request.CanonicalDosDevicePath));
+    request.CanonicalDosDevicePathLength = static_cast<ULONG>(Length - 1);
+    std::memcpy(request.CanonicalDosDevicePath, path, sizeof(path));
+}
+
 constexpr WCHAR kValidLaunchPath[] =
     L"\\Device\\HarddiskVolume3\\Games\\OAC.exe";
+constexpr WCHAR kValidLaunchDosDevicePath[] = L"\\??\\C:\\Games\\OAC.exe";
 
 OAC_ARM_LAUNCH_REQUEST ValidArmLaunchRequest()
 {
@@ -226,6 +243,7 @@ OAC_ARM_LAUNCH_REQUEST ValidArmLaunchRequest()
         OAC_MESSAGE_ARM_LAUNCH);
     request.TimeToLiveMilliseconds = 2000;
     SetCanonicalPath(request, kValidLaunchPath);
+    SetCanonicalDosDevicePath(request, kValidLaunchDosDevicePath);
     return request;
 }
 
@@ -394,7 +412,7 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050001UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050002UL);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -894,6 +912,23 @@ void TestLaunchRequests(TestLog& log)
     arm = ValidArmLaunchRequest();
     arm.CanonicalNtPath[std::size(kValidLaunchPath) - 1] = L'X';
     log.Expect("canonical path rejects nonzero unused tail",
+        OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
+
+    arm = ValidArmLaunchRequest();
+    SetCanonicalDosDevicePath(arm, L"\\?\\C:\\Games\\OAC.exe");
+    log.Expect("DOS-device path requires canonical prefix",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalDosDevicePath(arm, L"\\??\\C:\\Games\\..\\OAC.exe");
+    log.Expect("DOS-device path rejects dot-dot component",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalDosDevicePath[
+        std::size(kValidLaunchDosDevicePath) - 1] = L'X';
+    log.Expect("DOS-device path rejects nonzero unused tail",
         OacValidateArmLaunchRequest(
             &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
 

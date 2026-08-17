@@ -328,7 +328,7 @@ try {
         created_utc = [DateTime]::UtcNow.ToString('o')
         source_commit = $sourceCommit
         configuration = $Configuration
-        protocol_version = '0x00050001'
+        protocol_version = '0x00050002'
         legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
         certificate_thumbprint = $certificateThumbprint

@@ -193,6 +193,85 @@ static __inline OAC_V5_VALIDATION OacValidateCanonicalNtPath(
         (OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS - PathLength) * sizeof(WCHAR));
 }
 
+static __inline OAC_V5_VALIDATION OacValidateCanonicalDosDevicePath(
+    const WCHAR* Path,
+    ULONG PathLength)
+{
+    ULONG componentStart = 7;
+    ULONG index;
+
+    if (Path == NULL) return OAC_V5_INVALID_POINTER;
+    if (PathLength <= componentStart ||
+        PathLength >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
+    {
+        return OAC_V5_INVALID_RANGE;
+    }
+    if (Path[0] != L'\\' || Path[1] != L'?' || Path[2] != L'?' ||
+        Path[3] != L'\\' ||
+        !((Path[4] >= L'A' && Path[4] <= L'Z') ||
+          (Path[4] >= L'a' && Path[4] <= L'z')) ||
+        Path[5] != L':' || Path[6] != L'\\' ||
+        Path[PathLength - 1] == L'\\')
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+
+    for (index = componentStart; index < PathLength; ++index)
+    {
+        const WCHAR value = Path[index];
+
+        if (value == L'\0' || value < 0x20 || value == 0x7f ||
+            value == L'/' || value == L':' || value == L'"' ||
+            value == L'*' || value == L'?' || value == L'<' ||
+            value == L'>' || value == L'|')
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+        if (value == L'\\')
+        {
+            ULONG componentLength;
+
+            if (index == componentStart) return OAC_V5_INVALID_VALUE;
+            componentLength = index - componentStart;
+            if (Path[index - 1] == L'.' || Path[index - 1] == L' ' ||
+                (componentLength == 1 && Path[componentStart] == L'.') ||
+                (componentLength == 2 && Path[componentStart] == L'.' &&
+                 Path[componentStart + 1] == L'.'))
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            componentStart = index + 1;
+            continue;
+        }
+        if (value >= 0xd800 && value <= 0xdbff)
+        {
+            if (index + 1 >= PathLength ||
+                Path[index + 1] < 0xdc00 || Path[index + 1] > 0xdfff)
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            ++index;
+        }
+        else if (value >= 0xdc00 && value <= 0xdfff)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+
+    if (Path[PathLength - 1] == L'.' || Path[PathLength - 1] == L' ' ||
+        (PathLength - componentStart == 1 &&
+         Path[componentStart] == L'.') ||
+        (PathLength - componentStart == 2 &&
+         Path[componentStart] == L'.' &&
+         Path[componentStart + 1] == L'.'))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OacV5ValidateReserved(
+        &Path[PathLength],
+        (OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS - PathLength) * sizeof(WCHAR));
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateSession(
     const OAC_V5_SESSION_ID* SessionId,
     ULONGLONG Generation,
@@ -658,9 +737,13 @@ static __inline OAC_V5_VALIDATION OacValidateArmLaunchRequest(
         return OAC_V5_INVALID_RANGE;
     }
     if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
-    return OacValidateCanonicalNtPath(
+    result = OacValidateCanonicalNtPath(
         Request->CanonicalNtPath,
         Request->CanonicalNtPathLength);
+    if (result != OAC_V5_VALID) return result;
+    return OacValidateCanonicalDosDevicePath(
+        Request->CanonicalDosDevicePath,
+        Request->CanonicalDosDevicePathLength);
 }
 
 static __inline OAC_V5_VALIDATION OacValidateCancelLaunchRequest(

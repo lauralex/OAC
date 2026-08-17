@@ -12,7 +12,7 @@
 #include <winioctl.h>
 #endif
 
-#define OAC_PRODUCTION_PROTOCOL_VERSION 0x00050001UL
+#define OAC_PRODUCTION_PROTOCOL_VERSION 0x00050002UL
 #define OAC_V5_VERSION OAC_PRODUCTION_PROTOCOL_VERSION
 #define OAC_V5_ULONG_MAX 0xFFFFFFFFUL
 #define OAC_V5_MAX_INPUT_SIZE (64UL * 1024UL)
@@ -332,15 +332,20 @@ typedef struct OAC_V5_STATUS_RESPONSE_TAG
     ULONGLONG DriverGateTrips;
 } OAC_V5_STATUS_RESPONSE, *POAC_V5_STATUS_RESPONSE;
 
-/* CanonicalNtPathLength counts WCHARs and excludes the null terminator. The
- * unused portion of CanonicalNtPath, including the terminator, must be zero. */
+/* Path lengths count WCHARs and exclude the null terminator. The service
+ * resolves both names from one locked executable handle. CanonicalNtPath uses
+ * the volume-device form (\Device\...), while CanonicalDosDevicePath uses the
+ * DOS-device form (\??\C:\...). Unused path storage, including each
+ * terminator, must be zero. */
 typedef struct OAC_ARM_LAUNCH_REQUEST_TAG
 {
     OAC_V5_REQUEST_HEADER Header;
     ULONG TimeToLiveMilliseconds;
     ULONG CanonicalNtPathLength;
-    ULONGLONG Reserved;
+    ULONG CanonicalDosDevicePathLength;
+    ULONG Reserved;
     WCHAR CanonicalNtPath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
+    WCHAR CanonicalDosDevicePath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
 } OAC_ARM_LAUNCH_REQUEST, *POAC_ARM_LAUNCH_REQUEST;
 
 typedef struct OAC_ARM_LAUNCH_RESPONSE_TAG
@@ -504,16 +509,22 @@ OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_STATUS_RESPONSE, ServiceProcessId) == 7
     "OAC_V5_STATUS_RESPONSE identities moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_STATUS_RESPONSE, DriverGateTrips) == 112,
     "OAC_V5_STATUS_RESPONSE counters moved");
-OAC_V5_STATIC_ASSERT(sizeof(OAC_ARM_LAUNCH_REQUEST) == 1088,
+OAC_V5_STATIC_ASSERT(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2112,
     "OAC_ARM_LAUNCH_REQUEST layout changed");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
     TimeToLiveMilliseconds) == 48, "arm-launch TTL moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
     CanonicalNtPathLength) == 52, "arm-launch path length moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
-    Reserved) == 56, "arm-launch reserved field moved");
+    CanonicalDosDevicePathLength) == 56,
+    "arm-launch DOS-device path length moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    Reserved) == 60, "arm-launch reserved field moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
     CanonicalNtPath) == 64, "arm-launch path moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalDosDevicePath) == 1088,
+    "arm-launch DOS-device path moved");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_ARM_LAUNCH_RESPONSE) == 88,
     "OAC_ARM_LAUNCH_RESPONSE layout changed");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_RESPONSE,

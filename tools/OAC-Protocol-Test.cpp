@@ -495,7 +495,11 @@ OAC_ARM_LAUNCH_REQUEST ValidArmLaunch(
 {
     constexpr wchar_t path[] =
         L"\\Device\\HarddiskVolume1\\Windows\\System32\\whoami.exe";
+    constexpr wchar_t dosDevicePath[] =
+        L"\\??\\C:\\Windows\\System32\\whoami.exe";
     static_assert(std::size(path) < OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS);
+    static_assert(
+        std::size(dosDevicePath) < OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS);
 
     OAC_ARM_LAUNCH_REQUEST request{};
     request.Header.Version = OAC_V5_VERSION;
@@ -511,6 +515,12 @@ OAC_ARM_LAUNCH_REQUEST ValidArmLaunch(
         request.CanonicalNtPath,
         path,
         sizeof(path) - sizeof(path[0]));
+    request.CanonicalDosDevicePathLength =
+        static_cast<ULONG>(std::size(dosDevicePath) - 1);
+    std::memcpy(
+        request.CanonicalDosDevicePath,
+        dosDevicePath,
+        sizeof(dosDevicePath) - sizeof(dosDevicePath[0]));
     return request;
 }
 
@@ -2284,6 +2294,20 @@ void RunV5Tests(TestLog& log)
         log,
         device,
         L"production launch rejects dirty path tail",
+        IOCTL_OAC_ARM_LAUNCH,
+        &badArmLaunch,
+        sizeof(badArmLaunch),
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    badArmLaunch = ValidArmLaunch(claimResponse);
+    badArmLaunch.CanonicalDosDevicePath[
+        badArmLaunch.CanonicalDosDevicePathLength + 1] = L'X';
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production launch rejects dirty DOS-device path tail",
         IOCTL_OAC_ARM_LAUNCH,
         &badArmLaunch,
         sizeof(badArmLaunch),

@@ -14,10 +14,13 @@ _Static_assert(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Text) == 176,
     "C event prefix layout changed");
 _Static_assert(sizeof(OAC_V5_EVENT_RECORD) == 560,
     "C event-record layout changed");
-_Static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 1088,
+_Static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2112,
     "C arm-launch request layout changed");
 _Static_assert(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
     CanonicalNtPath) == 64, "C arm-launch path moved");
+_Static_assert(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalDosDevicePath) == 1088,
+    "C arm-launch DOS-device path moved");
 _Static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72,
     "C confirm-target request layout changed");
 _Static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,

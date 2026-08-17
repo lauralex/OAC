@@ -28,7 +28,9 @@ typedef struct OAC_PENDING_LAUNCH_TAG
     OAC_LAUNCH_ID LaunchId;
     ULONGLONG ExpirationInterruptTime100ns;
     ULONG CanonicalNtPathLength;
+    ULONG CanonicalDosDevicePathLength;
     WCHAR CanonicalNtPath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
+    WCHAR CanonicalDosDevicePath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
 } OAC_PENDING_LAUNCH, *POAC_PENDING_LAUNCH;
 
 struct OAC_SESSION_TAG
@@ -833,6 +835,9 @@ NTSTATUS OacSessionArmLaunch(
     _In_ ULONG TimeToLiveMilliseconds,
     _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
     _In_ ULONG CanonicalNtPathLength,
+    _In_reads_(CanonicalDosDevicePathLength)
+        const WCHAR* CanonicalDosDevicePath,
+    _In_ ULONG CanonicalDosDevicePathLength,
     _Out_ POAC_LAUNCH_ID LaunchId,
     _Out_ PULONGLONG ExpirationInterruptTime100ns,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot)
@@ -847,10 +852,14 @@ NTSTATUS OacSessionArmLaunch(
     if (Lease == NULL || LaunchId == NULL ||
         ExpirationInterruptTime100ns == NULL ||
         Snapshot == NULL || CanonicalNtPath == NULL ||
+        CanonicalDosDevicePath == NULL ||
         TimeToLiveMilliseconds < OAC_LAUNCH_MIN_TTL_MS ||
         TimeToLiveMilliseconds > OAC_LAUNCH_MAX_TTL_MS ||
         CanonicalNtPathLength == 0 ||
-        CanonicalNtPathLength >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
+        CanonicalNtPathLength >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS ||
+        CanonicalDosDevicePathLength == 0 ||
+        CanonicalDosDevicePathLength >=
+            OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -898,10 +907,16 @@ NTSTATUS OacSessionArmLaunch(
             expirationInterruptTime100ns;
         session->PendingLaunch.CanonicalNtPathLength =
             CanonicalNtPathLength;
+        session->PendingLaunch.CanonicalDosDevicePathLength =
+            CanonicalDosDevicePathLength;
         RtlCopyMemory(
             session->PendingLaunch.CanonicalNtPath,
             CanonicalNtPath,
             CanonicalNtPathLength * sizeof(WCHAR));
+        RtlCopyMemory(
+            session->PendingLaunch.CanonicalDosDevicePath,
+            CanonicalDosDevicePath,
+            CanonicalDosDevicePathLength * sizeof(WCHAR));
         session->State = OAC_V5_SESSION_LAUNCH_PENDING;
         *LaunchId = generatedId;
         *ExpirationInterruptTime100ns = expirationInterruptTime100ns;
@@ -1035,30 +1050,88 @@ NTSTATUS OacSessionConfirmTarget(
     return status;
 }
 
-static BOOLEAN OacPendingPathMatches(
-    _In_ const OAC_SESSION* Session,
-    _In_opt_ PCUNICODE_STRING ImageFileName)
+static BOOLEAN OacStoredPathMatches(
+    _In_reads_(ExpectedPathLength) const WCHAR* ExpectedPath,
+    _In_ ULONG ExpectedPathLength,
+    _In_ PCUNICODE_STRING ImageFileName)
 {
     UNICODE_STRING expectedPath;
-    ULONG expectedLength;
+    ULONG expectedLength = ExpectedPathLength * sizeof(WCHAR);
 
-    if (ImageFileName == NULL || ImageFileName->Buffer == NULL)
-    {
-        return FALSE;
-    }
-    expectedLength = Session->PendingLaunch.CanonicalNtPathLength *
-        sizeof(WCHAR);
     if (expectedLength > MAXUSHORT ||
         ImageFileName->Length != (USHORT)expectedLength)
     {
         return FALSE;
     }
-    expectedPath.Buffer = (PWCH)Session->PendingLaunch.CanonicalNtPath;
+    expectedPath.Buffer = (PWCH)ExpectedPath;
     expectedPath.Length = (USHORT)expectedLength;
     expectedPath.MaximumLength = (USHORT)expectedLength;
-    /* Windows executable paths are case-insensitive. Both values are resolved
-     * canonical NT paths, so only casing may legitimately differ. */
     return RtlEqualUnicodeString(&expectedPath, ImageFileName, TRUE);
+}
+
+static BOOLEAN OacDosDevicePathMatches(
+    _In_ const OAC_SESSION* Session,
+    _In_ PCUNICODE_STRING ImageFileName)
+{
+    const WCHAR* expected = Session->PendingLaunch.CanonicalDosDevicePath;
+    ULONG expectedCharacters =
+        Session->PendingLaunch.CanonicalDosDevicePathLength;
+    ULONG observedCharacters = ImageFileName->Length / sizeof(WCHAR);
+    UNICODE_STRING expectedSuffix;
+    UNICODE_STRING observedSuffix;
+
+    if (OacStoredPathMatches(
+            expected,
+            expectedCharacters,
+            ImageFileName))
+    {
+        return TRUE;
+    }
+    if ((ImageFileName->Length % sizeof(WCHAR)) != 0 ||
+        expectedCharacters <= 4)
+    {
+        return FALSE;
+    }
+
+    expectedSuffix.Buffer = (PWCH)&expected[4];
+    expectedSuffix.Length = (USHORT)(
+        (expectedCharacters - 4) * sizeof(WCHAR));
+    expectedSuffix.MaximumLength = expectedSuffix.Length;
+    observedSuffix = *ImageFileName;
+    if (observedCharacters == expectedCharacters &&
+        ImageFileName->Buffer[0] == L'\\' &&
+        ImageFileName->Buffer[1] == L'\\' &&
+        ImageFileName->Buffer[2] == L'?' &&
+        ImageFileName->Buffer[3] == L'\\')
+    {
+        observedSuffix.Buffer = &ImageFileName->Buffer[4];
+        observedSuffix.Length = (USHORT)(
+            (observedCharacters - 4) * sizeof(WCHAR));
+        observedSuffix.MaximumLength = observedSuffix.Length;
+    }
+    else if (observedCharacters != expectedCharacters - 4)
+    {
+        return FALSE;
+    }
+    return RtlEqualUnicodeString(&expectedSuffix, &observedSuffix, TRUE);
+}
+
+static BOOLEAN OacPendingPathMatches(
+    _In_ const OAC_SESSION* Session,
+    _In_opt_ PCUNICODE_STRING ImageFileName)
+{
+    if (ImageFileName == NULL || ImageFileName->Buffer == NULL)
+    {
+        return FALSE;
+    }
+    /* PS_CREATE_NOTIFY_INFO may expose the exact image-open name in either
+     * volume-device or DOS-device form. Both expected spellings come from the
+     * same service-locked file handle and are compared case-insensitively. */
+    return OacStoredPathMatches(
+            Session->PendingLaunch.CanonicalNtPath,
+            Session->PendingLaunch.CanonicalNtPathLength,
+            ImageFileName) ||
+        OacDosDevicePathMatches(Session, ImageFileName);
 }
 
 OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(

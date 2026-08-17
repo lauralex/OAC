@@ -703,6 +703,9 @@ DWORD OpenClientExecutable(
     std::wstring& finalDosPath,
     std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>& finalNtPath,
     ULONG& finalNtPathLength,
+    std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>&
+        canonicalDosDevicePath,
+    ULONG& canonicalDosDevicePathLength,
     bool& revertFailed)
 {
     static_assert(sizeof(wchar_t) == sizeof(uint16_t));
@@ -749,6 +752,7 @@ DWORD OpenClientExecutable(
         finalDosPath);
     if (error != ERROR_SUCCESS) return error;
     if (finalDosPath.size() < 7 || finalDosPath.rfind(L"\\\\?\\", 0) != 0 ||
+        finalDosPath.size() >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS ||
         !((finalDosPath[4] >= L'A' && finalDosPath[4] <= L'Z') ||
           (finalDosPath[4] >= L'a' && finalDosPath[4] <= L'z')) ||
         finalDosPath[5] != L':' || finalDosPath[6] != L'\\')
@@ -761,6 +765,21 @@ DWORD OpenClientExecutable(
     };
     if (GetDriveTypeW(driveRoot) != DRIVE_FIXED)
         return ERROR_NOT_SUPPORTED;
+
+    canonicalDosDevicePath.fill(L'\0');
+    canonicalDosDevicePath[0] = L'\\';
+    canonicalDosDevicePath[1] = L'?';
+    canonicalDosDevicePath[2] = L'?';
+    canonicalDosDevicePath[3] = L'\\';
+    for (size_t index = 4; index < finalDosPath.size(); ++index)
+        canonicalDosDevicePath[index] = finalDosPath[index];
+    canonicalDosDevicePathLength = static_cast<ULONG>(finalDosPath.size());
+    if (OacValidateCanonicalDosDevicePath(
+            canonicalDosDevicePath.data(),
+            canonicalDosDevicePathLength) != OAC_V5_VALID)
+    {
+        return ERROR_BAD_PATHNAME;
+    }
 
     std::wstring ntPath;
     error = ReadFinalPath(
@@ -807,6 +826,9 @@ DWORD ArmLaunch(
     ULONGLONG generation,
     const std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>& ntPath,
     ULONG ntPathLength,
+    const std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>&
+        dosDevicePath,
+    ULONG dosDevicePathLength,
     OAC_ARM_LAUNCH_RESPONSE& response)
 {
     OAC_ARM_LAUNCH_REQUEST request{};
@@ -821,10 +843,15 @@ DWORD ArmLaunch(
     }
     request.TimeToLiveMilliseconds = kLaunchTimeToLiveMs;
     request.CanonicalNtPathLength = ntPathLength;
+    request.CanonicalDosDevicePathLength = dosDevicePathLength;
     CopyMemory(
         request.CanonicalNtPath,
         ntPath.data(),
         static_cast<SIZE_T>(ntPathLength) * sizeof(WCHAR));
+    CopyMemory(
+        request.CanonicalDosDevicePath,
+        dosDevicePath.data(),
+        static_cast<SIZE_T>(dosDevicePathLength) * sizeof(WCHAR));
 
     DWORD returned = 0;
     if (!DeviceIoControl(
@@ -1020,6 +1047,9 @@ DWORD LaunchTarget(
     std::wstring finalDosPath;
     std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS> finalNtPath{};
     ULONG finalNtPathLength = 0;
+    std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>
+        canonicalDosDevicePath{};
+    ULONG canonicalDosDevicePathLength = 0;
     DWORD error = OpenClientExecutable(
         pipe,
         request,
@@ -1027,6 +1057,8 @@ DWORD LaunchTarget(
         finalDosPath,
         finalNtPath,
         finalNtPathLength,
+        canonicalDosDevicePath,
+        canonicalDosDevicePathLength,
         client.revertFailed);
     if (error != ERROR_SUCCESS) return error;
 
@@ -1041,6 +1073,8 @@ DWORD LaunchTarget(
         generation,
         finalNtPath,
         finalNtPathLength,
+        canonicalDosDevicePath,
+        canonicalDosDevicePathLength,
         armed);
     if (error != ERROR_SUCCESS) return error;
     driverSessionChanged = true;
