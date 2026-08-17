@@ -4,7 +4,8 @@ OAC accepts defensive engineering work that improves safety, correctness, compat
 observability, privacy, or test coverage. Contributions that add kernel exploitation, vulnerable
 driver loading, security-control bypasses, hiding, or anti-forensics are out of scope.
 
-Read `AGENTS.md` for the repository invariants and `docs/README.md` for the documentation map.
+Read `AGENTS.md` for repository invariants, `docs/README.md` for the public technical map, and
+`docs/development/README.md` for progress, evidence, decisions, and roadmap records.
 
 ## Development setup
 

@@ -35,12 +35,17 @@
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, and event-schema tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
-| `docs/` | Current procedures, reviewed research evidence, and explicitly labeled plans |
+| `docs/` | Public technical references, current procedures, reviewed research, and separated maintainer records |
 
 `OAC-Client/driver_hash_policy.inc` is generated. Never edit it by hand.
 
 ## Engineering workflow
 
+- Treat the root `README.md` as the public landing page. Keep it concise, readable, and focused on
+  the project purpose, implemented user-visible scope, safe evaluation path, and honest limitations.
+  Put the complete scanner matrix in `docs/CAPABILITIES.md` and route exact campaign evidence,
+  work-package bookkeeping, decisions, baselines, and roadmap material through
+  `docs/development/README.md` instead of expanding the public overview.
 - Prioritize implementation work that advances an identified security capability. Test-harness
   work should stay proportional to the evidence it provides and must not displace product work
   unless it blocks safety, correctness, or reproducible acceptance.
