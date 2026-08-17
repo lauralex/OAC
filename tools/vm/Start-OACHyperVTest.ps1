@@ -1281,6 +1281,38 @@ function Read-ZipEntryBytes([object]$Entry, [int64]$Limit) {
     }
 }
 
+function ConvertTo-SafeZipEntryName([string]$Name, [string]$Context) {
+    if ([string]::IsNullOrWhiteSpace($Name) -or
+        $Name -match '[\x00-\x1F\x7F]') {
+        throw "$Context contains an unsafe entry path."
+    }
+
+    $canonical = $Name.Replace([char]0x5C, [char]0x2F)
+    if ($canonical.StartsWith('/') -or $canonical.Contains(':')) {
+        throw "$Context contains an unsafe entry path: $Name"
+    }
+
+    $isDirectory = $canonical.EndsWith('/')
+    $path = if ($isDirectory) {
+        $canonical.Substring(0, $canonical.Length - 1)
+    } else {
+        $canonical
+    }
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        throw "$Context contains an unsafe entry path: $Name"
+    }
+
+    foreach ($part in $path.Split([char]0x2F)) {
+        if ([string]::IsNullOrWhiteSpace($part) -or
+            $part -cne $part.Trim() -or
+            $part -ceq '.' -or $part -ceq '..' -or
+            $part.EndsWith('.')) {
+            throw "$Context contains an unsafe entry path: $Name"
+        }
+    }
+    return $canonical
+}
+
 function Convert-ZipText([byte[]]$Bytes) {
     $text = [Text.Encoding]::UTF8.GetString($Bytes)
     if ($text.Length -ne 0 -and $text[0] -eq [char]0xFEFF) {
@@ -1398,12 +1430,10 @@ function Save-OffFailureEvidence([object]$Campaign) {
         $buffer = New-Object byte[] (1024 * 1024)
         [int64]$totalBytes = 0
         foreach ($entry in $archive.Entries) {
-            $name = [string]$entry.FullName
-            $parts = @($name.Split('/'))
-            if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or
-                $name.StartsWith('/') -or $name.Contains(':') -or
-                $parts -contains '..' -or -not $namesIgnoreCase.Add($name)) {
-                throw "Failure ZIP contains an unsafe or duplicate path: $name"
+            $name = ConvertTo-SafeZipEntryName ([string]$entry.FullName) `
+                'Failure ZIP'
+            if (-not $namesIgnoreCase.Add($name)) {
+                throw "Failure ZIP contains a duplicate path: $name"
             }
             if ($entry.Length -gt 1GB) {
                 throw "Failure ZIP entry is unreasonably large: $name"
@@ -1635,12 +1665,9 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
         $buffer = New-Object byte[] (1024 * 1024)
         [int64]$totalBytes = 0
         foreach ($entry in $archive.Entries) {
-            $name = [string]$entry.FullName
-            $parts = @($name.Split('/'))
-            if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or
-                $name.StartsWith('/') -or $name.Contains(':') -or
-                $parts -contains '..' -or -not $namesIgnoreCase.Add($name)) {
-                throw "ZIP contains an unsafe or duplicate path: $name"
+            $name = ConvertTo-SafeZipEntryName ([string]$entry.FullName) 'ZIP'
+            if (-not $namesIgnoreCase.Add($name)) {
+                throw "ZIP contains a duplicate path: $name"
             }
             $entries.Add($name, $entry)
             if ($entry.Length -gt 1GB) {
