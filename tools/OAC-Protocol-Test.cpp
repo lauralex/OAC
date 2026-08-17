@@ -8,8 +8,10 @@
 #include <initializer_list>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <new>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "..\shared\oac_protocol.h"
@@ -133,6 +135,185 @@ OAC_CONFIG_REQUEST TargetConfiguration(DWORD processId)
     request.ProtectedProcessId = processId;
     request.Flags |= OAC_CONFIG_PROTECT_PROCESS;
     return request;
+}
+
+bool ReadLegacyStatus(
+    HANDLE device,
+    OAC_STATUS_RESPONSE& status,
+    std::wstring& detail)
+{
+    DWORD returned = 0;
+    status = {};
+    SetLastError(ERROR_SUCCESS);
+    const BOOL succeeded = DeviceIoControl(
+        device,
+        IOCTL_OAC_GET_STATUS,
+        nullptr,
+        0,
+        &status,
+        sizeof(status),
+        &returned,
+        nullptr);
+    const DWORD error = GetLastError();
+    if (!succeeded)
+    {
+        detail = L"transport failure: " + ErrorText(error);
+        return false;
+    }
+    if (returned != sizeof(status) ||
+        status.Version != OAC_PROTOCOL_VERSION ||
+        status.Size != sizeof(status))
+    {
+        detail = L"malformed response: returned=" + std::to_wstring(returned) +
+            L" version=" + std::to_wstring(status.Version) +
+            L" size=" + std::to_wstring(status.Size);
+        return false;
+    }
+    return true;
+}
+
+bool ValidateDriverGateStatus(
+    const OAC_STATUS_RESPONSE& status,
+    ULONGLONG expectedLoads,
+    ULONGLONG expectedTrips,
+    std::wstring& detail)
+{
+    const ULONG expectedFlags = OAC_CONFIG_ENABLE_IMAGE_LOG |
+        OAC_CONFIG_DRIVER_GATE;
+    const ULONG expectedCapabilities = OAC_CAP_IMAGE_TELEMETRY |
+        OAC_CAP_DRIVER_GATE;
+    if ((status.Capabilities & expectedCapabilities) != expectedCapabilities ||
+        status.ConfigurationFlags != expectedFlags ||
+        status.ProtectedProcessId != 0 ||
+        status.ClientProcessId != GetCurrentProcessId() ||
+        status.FindingsDropped != 0 ||
+        status.PostStartLoads != expectedLoads ||
+        status.DriverGateTrips != expectedTrips)
+    {
+        detail = L"capabilities=" + std::to_wstring(status.Capabilities) +
+            L" flags=" + std::to_wstring(status.ConfigurationFlags) +
+            L" protected=" + std::to_wstring(status.ProtectedProcessId) +
+            L" client=" + std::to_wstring(status.ClientProcessId) +
+            L" dropped=" + std::to_wstring(status.FindingsDropped) +
+            L" loads=" + std::to_wstring(status.PostStartLoads) +
+            L" trips=" + std::to_wstring(status.DriverGateTrips);
+        return false;
+    }
+    return true;
+}
+
+int RunDriverGateProbe()
+{
+    constexpr wchar_t serviceName[] = L"OACGateProbe";
+    using UniqueServiceHandle = std::unique_ptr<
+        std::remove_pointer_t<SC_HANDLE>,
+        decltype(&CloseServiceHandle)>;
+    const auto fail = [](const std::wstring& operation, const std::wstring& detail)
+    {
+        std::wcerr << L"[FAIL] driver-gate probe " << operation
+                   << L" - " << detail << L'\n';
+        return 1;
+    };
+
+    const HANDLE rawDevice = OpenDevice();
+    if (rawDevice == INVALID_HANDLE_VALUE)
+        return fail(L"open", ErrorText(GetLastError()));
+    const std::unique_ptr<void, decltype(&CloseHandle)> device(
+        rawDevice,
+        &CloseHandle);
+
+    {
+        OAC_CONFIG_REQUEST configuration = ValidConfiguration();
+        DWORD returned = 0;
+        const BOOL configured = DeviceIoControl(
+                device.get(),
+                IOCTL_OAC_CONFIGURE,
+                &configuration,
+                sizeof(configuration),
+                nullptr,
+                0,
+                &returned,
+                nullptr);
+        if (!configured)
+            return fail(L"configure", ErrorText(GetLastError()));
+        if (returned != 0)
+            return fail(
+                L"configure",
+                L"unexpected output bytes=" + std::to_wstring(returned));
+    }
+
+    {
+        OAC_STATUS_RESPONSE before{};
+        std::wstring detail;
+        if (!ReadLegacyStatus(device.get(), before, detail))
+            return fail(L"pre-status", detail);
+        if (!ValidateDriverGateStatus(before, 0, 0, detail))
+            return fail(L"pre-status", detail);
+    }
+
+    const SC_HANDLE rawManager = OpenSCManagerW(
+        nullptr,
+        nullptr,
+        SC_MANAGER_CONNECT);
+    if (rawManager == nullptr)
+        return fail(L"SCM open", ErrorText(GetLastError()));
+    const UniqueServiceHandle manager(
+        rawManager,
+        &CloseServiceHandle);
+
+    const SC_HANDLE rawService = OpenServiceW(
+        manager.get(),
+        serviceName,
+        SERVICE_QUERY_STATUS | SERVICE_START);
+    if (rawService == nullptr)
+        return fail(L"service open", ErrorText(GetLastError()));
+    const UniqueServiceHandle service(
+        rawService,
+        &CloseServiceHandle);
+
+    {
+        SERVICE_STATUS_PROCESS serviceStatus{};
+        DWORD needed = 0;
+        if (!QueryServiceStatusEx(
+                service.get(),
+                SC_STATUS_PROCESS_INFO,
+                reinterpret_cast<LPBYTE>(&serviceStatus),
+                sizeof(serviceStatus),
+                &needed))
+        {
+            return fail(L"service query", ErrorText(GetLastError()));
+        }
+        if (serviceStatus.dwServiceType != SERVICE_KERNEL_DRIVER ||
+            serviceStatus.dwCurrentState != SERVICE_STOPPED)
+            return fail(
+                L"service precondition",
+                L"type=" + std::to_wstring(serviceStatus.dwServiceType) +
+                    L" state=" + std::to_wstring(serviceStatus.dwCurrentState));
+    }
+
+    {
+        SetLastError(ERROR_SUCCESS);
+        const BOOL started = StartServiceW(service.get(), 0, nullptr);
+        const DWORD startError = GetLastError();
+        if (started || startError != ERROR_ALREADY_EXISTS)
+            return fail(
+                L"start result",
+                L"success=" + std::to_wstring(started) + L" " +
+                    ErrorText(startError));
+
+        OAC_STATUS_RESPONSE after{};
+        std::wstring detail;
+        if (!ReadLegacyStatus(device.get(), after, detail))
+            return fail(L"post-status", detail);
+        if (!ValidateDriverGateStatus(after, 1, 1, detail))
+            return fail(L"post-status", detail);
+
+        std::wcout
+            << L"DRIVER_GATE_PROBE validated=1 start_error=" << startError
+            << L" before_post_start=0 before_gate_trips=0"
+               L" after_post_start=1 after_gate_trips=1\n";
+    }
+    return 0;
 }
 
 int RunContender()
@@ -2562,6 +2743,8 @@ int RunTests()
 
 int wmain(int argc, wchar_t** argv)
 {
+    if (argc == 2 && std::wstring(argv[1]) == L"--driver-gate-probe")
+        return RunDriverGateProbe();
     if (argc >= 2 && std::wstring(argv[1]) == L"--v4-target")
         return RunV4Target(argc, argv);
     if (argc >= 2 && std::wstring(argv[1]) == L"--v5-contender")
@@ -2574,7 +2757,8 @@ int wmain(int argc, wchar_t** argv)
         return RunContender();
     if (argc != 1)
     {
-        std::wcerr << L"Usage: OAC-Protocol-Test.exe [--contender]\n";
+        std::wcerr << L"Usage: OAC-Protocol-Test.exe "
+                      L"[--contender|--driver-gate-probe]\n";
         return 64;
     }
     return RunTests();

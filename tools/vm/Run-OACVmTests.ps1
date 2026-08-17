@@ -42,6 +42,8 @@ $baselineZeroTests = @($requiredZeroTests | Where-Object {
 $auxiliaryExitValues = [ordered]@{
     'baseline-bcd' = @(0)
     'baseline-sc-query' = @(0)
+    'baseline-driver-gate-oac-stop' = @(0)
+    'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
@@ -77,6 +79,8 @@ $auxiliaryExitValues = [ordered]@{
 $baselineAuxiliaryRequired = @(
     'baseline-bcd',
     'baseline-sc-query',
+    'baseline-driver-gate-oac-stop',
+    'baseline-driver-gate-oac-start',
     'production-launcher-started-service',
     'production-legacy-driver-start',
     'baseline-sc-stop',
@@ -1223,28 +1227,63 @@ function Test-DriverGate {
     $reportDirectory = Join-Path $results 'baseline-driver-gate-report'
     $reportPath = Join-Path $reportDirectory 'oac-report.txt'
     $summaryPath = Join-Path $results 'baseline-driver-gate-summary.json'
-    Copy-Item -LiteralPath (Join-Path $root 'package\OAC.sys') `
-        -Destination $probePath -Force
-
-    $createExit = Invoke-ConsoleCapture 'baseline-driver-gate-create' 'sc.exe' @(
-        'create', $serviceName, 'type=', 'kernel', 'start=', 'demand',
-        'binPath=', $probePath)
-    if ($createExit -ne 0) {
-        throw "Could not create the transient gate probe; exit code $createExit."
-    }
-
     $startExit = -1
     $detectionExit = -1
     $gateFinding = $false
     $callbackFinding = $false
+    $preSessionFinding = $false
+    $summary = $null
+    $primaryError = $null
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
     try {
-        # The renamed, signed copy maps far enough to notify the already-running
-        # OAC instance, then its own DriverEntry fails on OAC's existing device.
-        $startExit = Invoke-ConsoleCapture 'baseline-driver-gate-trigger' 'sc.exe' @(
-            'start', $serviceName)
-        if ($startExit -eq 0) {
-            throw 'The transient gate probe unexpectedly completed DriverEntry.'
+        Copy-Item -LiteralPath (Join-Path $root 'package\OAC.sys') `
+            -Destination $probePath -Force
+        $createExit = Invoke-ConsoleCapture `
+            'baseline-driver-gate-create' 'sc.exe' @(
+                'create', $serviceName, 'type=', 'kernel', 'start=', 'demand',
+                'binPath=', $probePath)
+        if ($createExit -ne 0) {
+            throw "Could not create the transient gate probe; exit code $createExit."
         }
+
+        # Reset OAC immediately before the controlled load. Any intervening
+        # kernel image makes the helper's exact 0/0 precondition fail closed.
+        $boundaryStop = Invoke-ConsoleCapture `
+            'baseline-driver-gate-oac-stop' 'sc.exe' @('stop', 'OAC')
+        if ($boundaryStop -ne 0) {
+            throw "Could not establish the gate lifetime boundary; stop exit=$boundaryStop."
+        }
+        Wait-TestServiceState OAC `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        $boundaryStart = Invoke-ConsoleCapture `
+            'baseline-driver-gate-oac-start' 'sc.exe' @('start', 'OAC')
+        if ($boundaryStart -ne 0) {
+            throw "Could not establish the gate lifetime boundary; start exit=$boundaryStart."
+        }
+        Wait-TestServiceState OAC `
+            ([ServiceProcess.ServiceControllerStatus]::Running)
+
+        # A purpose-built targetless protocol holder configures the gate, keeps
+        # that exact file session alive across the SCM start, and verifies the
+        # immutable 0/0 to 1/1 counter transition before closing it. With no
+        # target binding, cleanup retires the session without a tombstone.
+        $startExit = Invoke-ConsoleCapture 'baseline-driver-gate-trigger' `
+            (Join-Path $root 'OAC-Protocol-Test.exe') @('--driver-gate-probe')
+        $triggerPath = Join-Path $results 'baseline-driver-gate-trigger.txt'
+        $triggerLines = @(
+            if (Test-Path -LiteralPath $triggerPath -PathType Leaf) {
+                Get-Content -LiteralPath $triggerPath | Where-Object {
+                    $_ -clike 'DRIVER_GATE_PROBE *'
+                }
+            }
+        )
+        $triggerValidated = $startExit -eq 0 -and
+            $triggerLines.Count -eq 1 -and
+            $triggerLines[0] -ceq (
+                'DRIVER_GATE_PROBE validated=1 start_error=183 ' +
+                'before_post_start=0 before_gate_trips=0 ' +
+                'after_post_start=1 after_gate_trips=1')
+        $startError = if ($triggerValidated) { 183 } else { -1 }
 
         $detectionExit = Invoke-NativeCapture 'baseline-driver-gate-detection' `
             (Join-Path $root 'package\OAC-Client.exe') @(
@@ -1252,51 +1291,95 @@ function Test-DriverGate {
                 '--output', $reportDirectory)
         if (Test-Path -LiteralPath $reportPath -PathType Leaf) {
             $report = Get-Content -LiteralPath $reportPath -Raw
-            $gateFinding = $report -match `
-                '(?im)\[critical\]\[driver/load-gate\].*observed=[1-9][0-9]*'
-            $callbackFinding = $report -match `
-                '(?im)\[critical\]\[kernel/driver\].*Driver-load gate tripped.*OAC-Gate-Probe\.sys'
+            $gateMatches = [regex]::Matches(
+                $report,
+                '(?im)^.*Fail-closed post-start driver-load latch is set:.*$')
+            $gateFinding = $gateMatches.Count -eq 1 -and
+                $gateMatches[0].Value -match (
+                    '(?i)\[critical\]\[driver/load-gate\].*' +
+                    'observed=1, gate-trips=1')
+            $callbackMatches = [regex]::Matches(
+                $report,
+                '(?im)^.*Driver-load gate tripped.*$')
+            $callbackFinding = $callbackMatches.Count -eq 1 -and
+                $callbackMatches[0].Value -match (
+                    '(?i)\[critical\]\[kernel/driver\].*' +
+                    'OAC-Gate-Probe\.sys')
+            $preSessionFinding = [regex]::Matches(
+                $report,
+                ('(?im)Kernel driver image loaded after OAC started and before ' +
+                'session configuration:.*OAC-Gate-Probe\.sys')
+            ).Count -ne 0
         }
 
-        $passed = $detectionExit -eq 1 -and $gateFinding -and $callbackFinding
+        $passed = $triggerValidated -and $detectionExit -eq 1 -and
+            $gateFinding -and $callbackFinding -and -not $preSessionFinding
         $summary = [ordered]@{
             timestamp_utc = [DateTime]::UtcNow.ToString('o')
             trigger_exit = $startExit
+            start_error = $startError
+            armed_probe_validation = $triggerValidated
             detection_exit = $detectionExit
             persistent_gate_finding = $gateFinding
             callback_finding = $callbackFinding
+            pre_session_callback = $preSessionFinding
             pass = $passed
         }
         $summary | ConvertTo-Json | Out-File -LiteralPath $summaryPath -Encoding utf8
         if (-not $passed) {
             throw "Post-start driver gate probe failed; see $summaryPath."
         }
-        Write-RunLog 'Transient renamed-driver load was retained by the fail-closed gate.'
-        return [pscustomobject]$summary
+    } catch {
+        $primaryError = $_
+        throw
     } finally {
-        $stopExit = Invoke-ConsoleCapture 'baseline-driver-gate-stop' 'sc.exe' @(
-            'stop', $serviceName)
-        if ($stopExit -notin @(0, 1062)) {
-            throw "Could not stop the transient gate probe; exit code $stopExit."
+        try {
+            $stopExit = Invoke-ConsoleCapture `
+                'baseline-driver-gate-stop' 'sc.exe' @('stop', $serviceName)
+            if ($stopExit -notin @(0, 1062)) {
+                throw "stop exit=$stopExit"
+            }
+        } catch {
+            $cleanupErrors.Add("gate stop: $($_.Exception.Message)")
         }
-        $deleteExit = Invoke-ConsoleCapture 'baseline-driver-gate-delete' 'sc.exe' @(
-            'delete', $serviceName)
-        if ($deleteExit -ne 0) {
-            throw "Could not delete the transient gate probe; exit code $deleteExit."
+        try {
+            $deleteExit = Invoke-ConsoleCapture `
+                'baseline-driver-gate-delete' 'sc.exe' @('delete', $serviceName)
+            if ($deleteExit -ne 0) {
+                throw "delete exit=$deleteExit"
+            }
+        } catch {
+            $cleanupErrors.Add("gate delete: $($_.Exception.Message)")
         }
-        $deadline = [DateTime]::UtcNow.AddSeconds(20)
-        while ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and
-            [DateTime]::UtcNow -lt $deadline) {
-            Start-Sleep -Milliseconds 250
+        try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(20)
+            while ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and
+                [DateTime]::UtcNow -lt $deadline) {
+                Start-Sleep -Milliseconds 250
+            }
+            if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+                throw 'service remained present after bounded wait'
+            }
+        } catch {
+            $cleanupErrors.Add("gate retirement: $($_.Exception.Message)")
         }
-        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-            throw 'The transient gate-probe service was not removed.'
+        try {
+            Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $probePath) {
+                throw 'image remained present after removal'
+            }
+        } catch {
+            $cleanupErrors.Add("gate image: $($_.Exception.Message)")
         }
-        Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
-        if (Test-Path -LiteralPath $probePath) {
-            throw 'The transient gate-probe image was not removed.'
+        foreach ($cleanupError in $cleanupErrors) {
+            try { Write-RunLog "Driver-gate cleanup error: $cleanupError" } catch { }
+        }
+        if ($null -eq $primaryError -and $cleanupErrors.Count -ne 0) {
+            throw "Driver-gate cleanup failed: $($cleanupErrors -join '; ')"
         }
     }
+    Write-RunLog 'Transient renamed-driver load was retained by the fail-closed gate.'
+    return [pscustomobject]$summary
 }
 
 function Install-And-RunBaseline {
@@ -1379,8 +1462,8 @@ function Install-And-RunBaseline {
     if ((Read-CapturedExit 'baseline-driver-gate-create') -ne 0) {
         $baselineExitFailures.Add('baseline-driver-gate-create')
     }
-    if ((Read-CapturedExit 'baseline-driver-gate-trigger') -eq 0) {
-        $baselineExitFailures.Add('baseline-driver-gate-trigger=0')
+    if ((Read-CapturedExit 'baseline-driver-gate-trigger') -ne 0) {
+        $baselineExitFailures.Add('baseline-driver-gate-trigger')
     }
     if ((Read-CapturedExit 'baseline-driver-gate-detection') -ne 1) {
         $baselineExitFailures.Add('baseline-driver-gate-detection')
@@ -1776,15 +1859,14 @@ function Collect-FinalResults {
             $wrongResultValues.Add("$name=$($exitValues[$name])")
         }
     }
-    foreach ($name in @(
-            'baseline-remove-repeat-expected-refusal',
-            'baseline-driver-gate-trigger')) {
+    foreach ($name in @('baseline-remove-repeat-expected-refusal')) {
         if ($exitValues.ContainsKey($name) -and $exitValues[$name] -eq 0) {
             $wrongResultValues.Add("$name=0")
         }
     }
     $specialExpectedValues = [ordered]@{
         'baseline-driver-gate-create' = @(0)
+        'baseline-driver-gate-trigger' = @(0)
         'baseline-driver-gate-detection' = @(1)
         'baseline-driver-gate-stop' = @(0, 1062)
         'baseline-driver-gate-delete' = @(0)

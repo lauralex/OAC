@@ -68,7 +68,7 @@ $verifierZeroTests = @(
 $specialTests = [ordered]@{
     'baseline-remove-repeat-expected-refusal' = 'nonzero'
     'baseline-driver-gate-create' = @(0)
-    'baseline-driver-gate-trigger' = 'nonzero'
+    'baseline-driver-gate-trigger' = @(0)
     'baseline-driver-gate-detection' = @(1)
     'baseline-driver-gate-stop' = @(0, 1062)
     'baseline-driver-gate-delete' = @(0)
@@ -81,6 +81,8 @@ $summaryNames = @(
 $auxiliaryExitValues = [ordered]@{
     'baseline-bcd' = @(0)
     'baseline-sc-query' = @(0)
+    'baseline-driver-gate-oac-stop' = @(0)
+    'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
@@ -116,6 +118,8 @@ $auxiliaryExitValues = [ordered]@{
 $baselineAuxiliaryRequired = @(
     'baseline-bcd',
     'baseline-sc-query',
+    'baseline-driver-gate-oac-stop',
+    'baseline-driver-gate-oac-start',
     'production-launcher-started-service',
     'production-legacy-driver-start',
     'baseline-sc-stop',
@@ -635,6 +639,26 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
     }
 }
 
+function Assert-DriverGateSummary([object]$Summary, [string]$Context) {
+    Assert-Boolean $Summary 'pass' $Context
+    Assert-IntegerValue (Get-RequiredValue $Summary 'trigger_exit' $Context) 0 `
+        "$Context trigger_exit"
+    Assert-IntegerValue (Get-RequiredValue $Summary 'start_error' $Context) 183 `
+        "$Context start_error"
+    Assert-IntegerValue (Get-RequiredValue $Summary 'detection_exit' $Context) 1 `
+        "$Context detection_exit"
+    foreach ($name in @(
+            'armed_probe_validation',
+            'persistent_gate_finding',
+            'callback_finding')) {
+        Assert-Boolean $Summary $name $Context
+    }
+    $preSession = Get-RequiredValue $Summary 'pre_session_callback' $Context
+    if ($preSession -isnot [bool] -or $preSession) {
+        throw "$Context requires pre_session_callback=false."
+    }
+}
+
 function Assert-BaselineResults([object]$Campaign) {
     $results = [IO.Path]::Combine($Campaign.Root, 'results')
     $resultsItem = Get-Item -LiteralPath $results -Force `
@@ -715,6 +739,8 @@ function Assert-BaselineResults([object]$Campaign) {
         $summary = Read-JsonFile ([IO.Path]::Combine($results, "$name.json")) $name
         if ($name -ceq 'production-boundary-summary') {
             Assert-ProductionBoundarySummary $summary $name
+        } elseif ($name -ceq 'baseline-driver-gate-summary') {
+            Assert-DriverGateSummary $summary $name
         } else {
             Assert-Boolean $summary 'pass' $name
         }
@@ -1750,6 +1776,8 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
                 (Convert-ZipText (Read-ZipEntryBytes $entries[$entryName] 1MB)) $name
             if ($name -ceq 'production-boundary-summary') {
                 Assert-ProductionBoundarySummary $summary $name
+            } elseif ($name -ceq 'baseline-driver-gate-summary') {
+                Assert-DriverGateSummary $summary $name
             } else {
                 Assert-Boolean $summary 'pass' $name
             }
