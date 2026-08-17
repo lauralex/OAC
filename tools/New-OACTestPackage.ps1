@@ -104,6 +104,32 @@ function Invoke-SelfSignedVerification(
     Write-Host "Verified signature and signer for $(Split-Path -Leaf $FilePath); trust is intentionally deferred to the disposable VM."
 }
 
+function Remove-CurrentUserCertificate(
+    [ValidateSet('My', 'CA')]
+    [string]$StoreName,
+    [string]$Thumbprint,
+    [switch]$DeletePrivateKey
+) {
+    if ($Thumbprint -cnotmatch '^[0-9A-Fa-f]{40}$') {
+        throw 'The generated certificate thumbprint is invalid.'
+    }
+    if ($DeletePrivateKey -and $StoreName -cne 'My') {
+        throw 'Private-key deletion is restricted to the CurrentUser My store.'
+    }
+
+    $path = "Cert:\CurrentUser\$StoreName\$Thumbprint"
+    if (Test-Path -LiteralPath $path) {
+        if ($DeletePrivateKey) {
+            Remove-Item -Path $path -DeleteKey -Confirm:$false
+        } else {
+            Remove-Item -Path $path -Confirm:$false
+        }
+    }
+    if (Test-Path -LiteralPath $path) {
+        throw "The generated certificate remains in CurrentUser\$StoreName."
+    }
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $solution = Join-Path $repoRoot 'OAC.sln'
 if (-not (Test-Path -LiteralPath $solution -PathType Leaf)) {
@@ -187,6 +213,8 @@ if ($ExportPrivateKey -and -not $PfxPassword) {
 }
 
 $certificate = $null
+$certificateThumbprint = $null
+$packageError = $null
 try {
     $keyExportPolicy = if ($ExportPrivateKey) { 'Exportable' } else { 'NonExportable' }
     Write-Host 'Generating an ephemeral RSA-3072 local-test certificate.'
@@ -201,6 +229,10 @@ try {
         -KeyExportPolicy $keyExportPolicy `
         -NotAfter (Get-Date).AddDays(30) `
         -TextExtension @('2.5.29.19={text}CA=FALSE', '2.5.29.37={text}1.3.6.1.5.5.7.3.3')
+    $certificateThumbprint = $certificate.Thumbprint.ToUpperInvariant()
+    if ($certificateThumbprint -cnotmatch '^[0-9A-F]{40}$') {
+        throw 'The generated certificate has an invalid thumbprint.'
+    }
 
     $cerPath = Join-Path $certificateDirectory 'OAC-Local-Test.cer'
     [IO.File]::WriteAllBytes(
@@ -223,7 +255,7 @@ try {
     )
     foreach ($signedFile in @($driver) + $signedExecutables) {
         Invoke-Checked $signTool @(
-            'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
+            'sign', '/v', '/fd', 'SHA256', '/sha1', $certificateThumbprint,
             '/s', 'My', $signedFile
         )
     }
@@ -262,12 +294,12 @@ try {
     }
     $catalog = Join-Path $package 'OAC.cat'
     Invoke-Checked $signTool @(
-        'sign', '/v', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint,
+        'sign', '/v', '/fd', 'SHA256', '/sha1', $certificateThumbprint,
         '/s', 'My', $catalog
     )
     foreach ($signedFile in @($driver, $catalog) + $signedExecutables) {
         Invoke-SelfSignedVerification `
-            $signTool $signedFile $certificate.Thumbprint
+            $signTool $signedFile $certificateThumbprint
     }
 
     $finalSourceCommit = Get-CleanSourceCommit $repoRoot
@@ -299,7 +331,7 @@ try {
         protocol_version = '0x00050000'
         legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
-        certificate_thumbprint = $certificate.Thumbprint
+        certificate_thumbprint = $certificateThumbprint
         certificate_not_after_utc = $certificate.NotAfter.ToUniversalTime().ToString('o')
         files = @($files)
         test_files = $testFiles
@@ -310,28 +342,61 @@ try {
         $manifestJson,
         [Text.UTF8Encoding]::new($false))
 
-    Write-Host "Test package created: $output"
-    Write-Host 'The certificate is self-signed, expires in 30 days, and is only for a disposable VM.'
-    if (-not $ExportPrivateKey) {
-        Write-Host 'No private-key file was exported.'
-    }
+} catch {
+    $packageError = $_
+    throw
 } finally {
-    if ($certificate -and -not $KeepCertificateInCurrentUserStore) {
-        $myStore = [Security.Cryptography.X509Certificates.X509Store]::new(
-            'My',
-            [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-        try {
-            $myStore.Open(
-                [Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-            $matches = $myStore.Certificates.Find(
-                [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                $certificate.Thumbprint,
-                $false)
-            foreach ($match in $matches) {
-                $myStore.Remove($match)
+    if ($certificate) {
+        $cleanupErrors = [Collections.Generic.List[string]]::new()
+        $stores = @(
+            [pscustomobject]@{
+                Name = 'CA'
+                DeletePrivateKey = $false
+            })
+        if (-not $KeepCertificateInCurrentUserStore) {
+            $stores += [pscustomobject]@{
+                Name = 'My'
+                DeletePrivateKey = $true
             }
-        } finally {
-            $myStore.Close()
+        }
+        foreach ($storeToClean in $stores) {
+            try {
+                Remove-CurrentUserCertificate `
+                    $storeToClean.Name `
+                    $certificateThumbprint `
+                    -DeletePrivateKey:$storeToClean.DeletePrivateKey
+            } catch {
+                $cleanupErrors.Add(
+                    "CurrentUser\$($storeToClean.Name)`: $($_.Exception.Message)")
+            }
+        }
+        try {
+            $certificate.Dispose()
+        } catch {
+            $cleanupErrors.Add("Certificate handle: $($_.Exception.Message)")
+        }
+        if ($cleanupErrors.Count -ne 0) {
+            $cleanupMessage = 'Test certificate cleanup failed: ' +
+                [string]::Join('; ', $cleanupErrors)
+            if ($packageError) {
+                try {
+                    [Console]::Error.WriteLine($cleanupMessage)
+                } catch {
+                }
+            } else {
+                throw $cleanupMessage
+            }
         }
     }
+}
+
+Write-Host "Test package created: $output"
+Write-Host 'The certificate is self-signed, expires in 30 days, and is only for a disposable VM.'
+if ($KeepCertificateInCurrentUserStore) {
+    Write-Host 'The exact CurrentUser\My certificate and private key were retained by request; the incidental CurrentUser\CA copy was removed.'
+} else {
+    Write-Host 'The temporary CurrentUser\My certificate and private key, plus the incidental CurrentUser\CA copy, were removed.'
+}
+if (-not $ExportPrivateKey) {
+    Write-Host 'No private-key file was exported.'
 }

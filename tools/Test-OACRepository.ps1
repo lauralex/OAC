@@ -57,16 +57,16 @@ try {
     $pythonFiles = @($files | Where-Object { $_.EndsWith('.py') })
     foreach ($file in $pythonFiles) {
         & python.exe -c `
-            'import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))' `
-            (Join-Path $root $file)
+            'import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding=sys.argv[2]))' `
+            (Join-Path $root $file) 'utf-8-sig'
         if ($LASTEXITCODE -ne 0) { throw "Python parse failed for $file" }
     }
 
     $yamlFiles = @($files | Where-Object { $_ -match '\.ya?ml$' })
     foreach ($file in $yamlFiles) {
         & python.exe -c `
-            'import pathlib,sys,yaml; yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))' `
-            (Join-Path $root $file)
+            'import pathlib,sys,yaml; yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding=sys.argv[2]))' `
+            (Join-Path $root $file) 'utf-8-sig'
         if ($LASTEXITCODE -ne 0) { throw "YAML parse failed for $file" }
     }
 

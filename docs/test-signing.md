@@ -26,8 +26,10 @@ campaign explicitly requires a recoverable key. The script:
    self-signed certificate;
 4. packages `OAC-Client`, `OAC-Service`, `OAC-Launcher`, and both protocol tests and writes a
    SHA-256 manifest that distinguishes protocol v5 from legacy v4; and
-5. leaves the host trust stores unchanged and removes that exact certificate from CurrentUser `My`
-   unless retaining it was explicitly requested for repeat test builds.
+5. leaves the host trust anchors unchanged, always removes the exact incidental CurrentUser `CA`
+   cache entry, and by default deletes the exact CurrentUser `My` certificate and its private key.
+   `-KeepCertificateInCurrentUserStore` retains only that `My` certificate and key when explicitly
+   requested for repeat test builds.
 
 If `-ExportPrivateKey` is explicitly used, treat the resulting PFX as a secret, store its password
 outside the package, and delete both after the isolated campaign. The default workflow emits no

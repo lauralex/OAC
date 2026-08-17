@@ -236,10 +236,10 @@ only and is not a production signing path. On the build machine:
 
 The script creates a 30-day RSA-3072 certificate named `OAC LOCAL TEST ONLY - NOT FOR PRODUCTION`,
 signs the driver package and user-mode binaries, verifies their signatures, hashes both protocol
-tests, writes a manifest, and removes the exact temporary certificate from the build machine's
-trust stores. Its default output is a timestamped directory under the system temporary directory,
-outside the source tree. Copy the printed result directory to a disposable VM and run a 64-bit
-elevated terminal there to enable test-signing mode:
+tests, writes a manifest, deletes the exact temporary CurrentUser `My` certificate and private key,
+and scrubs the exact incidental CurrentUser `CA` cache entry. Its default output is a timestamped
+directory under the system temporary directory, outside the source tree. Copy the printed result
+directory to a disposable VM and run a 64-bit elevated terminal there to enable test-signing mode:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
