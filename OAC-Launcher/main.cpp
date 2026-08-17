@@ -230,6 +230,52 @@ const wchar_t* ServiceStageText(OAC_SERVICE_FAILURE_STAGE stage) noexcept
     }
 }
 
+const wchar_t* LaunchStageText(uint32_t stage) noexcept
+{
+    switch (stage)
+    {
+    case OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT:
+        return L"client authorization";
+    case OAC_IPC_LAUNCH_STAGE_OPEN_EXECUTABLE:
+        return L"executable validation";
+    case OAC_IPC_LAUNCH_STAGE_CREATE_ENVIRONMENT:
+        return L"environment creation";
+    case OAC_IPC_LAUNCH_STAGE_ARM_TICKET:
+        return L"launch authorization";
+    case OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS:
+        return L"target creation";
+    case OAC_IPC_LAUNCH_STAGE_CONFIRM_TARGET:
+        return L"target confirmation";
+    case OAC_IPC_LAUNCH_STAGE_VALIDATE_STATUS:
+        return L"driver status validation";
+    case OAC_IPC_LAUNCH_STAGE_RESUME_THREAD:
+        return L"target resume";
+    default:
+        return L"unknown launch stage";
+    }
+}
+
+const wchar_t* LaunchDetailText(uint32_t detail) noexcept
+{
+    switch (detail)
+    {
+    case OAC_IPC_LAUNCH_DETAIL_STATUS_UNAVAILABLE:
+        return L"driver status unavailable";
+    case OAC_IPC_LAUNCH_DETAIL_CANCELLED:
+        return L"ticket cancelled";
+    case OAC_IPC_LAUNCH_DETAIL_EXPIRED:
+        return L"ticket expired";
+    case OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH:
+        return L"executable path mismatch";
+    case OAC_IPC_LAUNCH_DETAIL_CONFIRMATION_FAILED:
+        return L"process identity mismatch";
+    case OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION:
+        return L"driver session revoked";
+    default:
+        return L"";
+    }
+}
+
 bool VerifyPipeServer(HANDLE pipe, DWORD& serverProcessId, DWORD& error)
 {
     ULONG pipeProcessId = 0;
@@ -521,8 +567,11 @@ int SendLaunchRequest(const std::wstring& executablePath)
     }
     if (response.Win32Error != ERROR_SUCCESS)
     {
-        std::wcerr << L"OACService rejected the launch: "
-                   << ErrorText(response.Win32Error) << L'\n';
+        std::wcerr << L"OACService rejected the launch during "
+                   << LaunchStageText(response.FailureStage);
+        const wchar_t* detail = LaunchDetailText(response.FailureDetail);
+        if (detail[0] != L'\0') std::wcerr << L" (" << detail << L")";
+        std::wcerr << L": " << ErrorText(response.Win32Error) << L'\n';
         return 5;
     }
 

@@ -1012,6 +1012,41 @@ DWORD ReadDriverStatus(
     return ERROR_SUCCESS;
 }
 
+uint32_t LaunchFailureDetailFromStatus(
+    OAC_V5_REVOKE_REASON revokeReason) noexcept
+{
+    switch (revokeReason)
+    {
+    case OAC_V5_REVOKE_NONE:
+        return OAC_IPC_LAUNCH_DETAIL_NONE;
+    case OAC_REVOKE_LAUNCH_CANCELLED:
+        return OAC_IPC_LAUNCH_DETAIL_CANCELLED;
+    case OAC_REVOKE_LAUNCH_EXPIRED:
+        return OAC_IPC_LAUNCH_DETAIL_EXPIRED;
+    case OAC_REVOKE_LAUNCH_MISMATCH:
+        return OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH;
+    case OAC_REVOKE_TARGET_CONFIRMATION_FAILED:
+        return OAC_IPC_LAUNCH_DETAIL_CONFIRMATION_FAILED;
+    default:
+        return OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION;
+    }
+}
+
+void CaptureLaunchFailureDetail(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    uint32_t& failureDetail) noexcept
+{
+    OAC_V5_STATUS_RESPONSE status{};
+    if (ReadDriverStatus(driver, sessionId, generation, status) != ERROR_SUCCESS)
+    {
+        failureDetail = OAC_IPC_LAUNCH_DETAIL_STATUS_UNAVAILABLE;
+        return;
+    }
+    failureDetail = LaunchFailureDetailFromStatus(status.RevokeReason);
+}
+
 bool SessionHasControl(ULONG state) noexcept
 {
     return state == OAC_V5_SESSION_CLAIMED ||
@@ -1036,13 +1071,18 @@ DWORD LaunchTarget(
     const OAC_IPC_LAUNCH_REQUEST& request,
     ClientIdentity& client,
     DWORD& targetProcessId,
-    bool& driverSessionChanged)
+    bool& driverSessionChanged,
+    uint32_t& failureStage,
+    uint32_t& failureDetail)
 {
     targetProcessId = 0;
     driverSessionChanged = false;
+    failureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
+    failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
     if (!client.primaryToken || WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
         return ERROR_OPERATION_ABORTED;
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_OPEN_EXECUTABLE;
     UniqueHandle executable;
     std::wstring finalDosPath;
     std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS> finalNtPath{};
@@ -1062,10 +1102,12 @@ DWORD LaunchTarget(
         client.revertFailed);
     if (error != ERROR_SUCCESS) return error;
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_CREATE_ENVIRONMENT;
     EnvironmentBlock environment;
     if (!CreateEnvironmentBlock(environment.put(), client.primaryToken.get(), FALSE))
         return GetLastError();
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_ARM_TICKET;
     OAC_ARM_LAUNCH_RESPONSE armed{};
     error = ArmLaunch(
         driver,
@@ -1079,9 +1121,15 @@ DWORD LaunchTarget(
     if (error != ERROR_SUCCESS) return error;
     driverSessionChanged = true;
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS;
     if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
     {
         (void)CancelLaunch(driver, sessionId, generation, armed.LaunchId);
+        CaptureLaunchFailureDetail(
+            driver,
+            sessionId,
+            generation,
+            failureDetail);
         return ERROR_OPERATION_ABORTED;
     }
 
@@ -1109,11 +1157,17 @@ DWORD LaunchTarget(
     {
         error = GetLastError();
         (void)CancelLaunch(driver, sessionId, generation, armed.LaunchId);
+        CaptureLaunchFailureDetail(
+            driver,
+            sessionId,
+            generation,
+            failureDetail);
         return error;
     }
 
     UniqueHandle process(processInformation.hProcess);
     UniqueHandle thread(processInformation.hThread);
+    failureStage = OAC_IPC_LAUNCH_STAGE_CONFIRM_TARGET;
     OAC_CONFIRM_TARGET_RESPONSE confirmed{};
     error = ConfirmTarget(
         driver,
@@ -1124,10 +1178,16 @@ DWORD LaunchTarget(
         confirmed);
     if (error != ERROR_SUCCESS)
     {
+        CaptureLaunchFailureDetail(
+            driver,
+            sessionId,
+            generation,
+            failureDetail);
         TerminateSuspendedProcess(process.get());
         return error;
     }
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_VALIDATE_STATUS;
     OAC_V5_STATUS_RESPONSE status{};
     error = ReadDriverStatus(driver, sessionId, generation, status);
     if (error != ERROR_SUCCESS ||
@@ -1135,9 +1195,15 @@ DWORD LaunchTarget(
         status.TargetProcessId != confirmed.TargetProcessId ||
         status.TargetProcessId != processInformation.dwProcessId)
     {
+        CaptureLaunchFailureDetail(
+            driver,
+            sessionId,
+            generation,
+            failureDetail);
         TerminateSuspendedProcess(process.get());
         return error == ERROR_SUCCESS ? ERROR_INVALID_STATE : error;
     }
+    failureStage = OAC_IPC_LAUNCH_STAGE_RESUME_THREAD;
     if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
     {
         TerminateSuspendedProcess(process.get());
@@ -1157,6 +1223,8 @@ DWORD LaunchTarget(
     }
 
     targetProcessId = processInformation.dwProcessId;
+    failureStage = OAC_IPC_LAUNCH_STAGE_NONE;
+    failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
     return ERROR_SUCCESS;
 }
 
@@ -1468,6 +1536,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                 response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
                 response.Header.RequestId = request.Header.RequestId;
                 response.Win32Error = authorization;
+                response.FailureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
                 if (authorization == ERROR_SUCCESS)
                 {
                     bool driverSessionChanged = false;
@@ -1483,7 +1552,9 @@ DWORD ServiceHost::PipeLoop() noexcept
                             request,
                             client,
                             targetProcessId,
-                            driverSessionChanged);
+                            driverSessionChanged,
+                            response.FailureStage,
+                            response.FailureDetail);
                     }
                     catch (const std::bad_alloc&)
                     {

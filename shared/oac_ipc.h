@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OAC_IPC_PROTOCOL_REVISION 0x00010001u
+#define OAC_IPC_PROTOCOL_REVISION 0x00010002u
 #define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
 #define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
@@ -35,6 +35,30 @@
 
 #define OAC_IPC_LAUNCH_CONFIRMED 0x00000001u
 #define OAC_IPC_LAUNCH_RESUMED   0x00000002u
+
+typedef enum OAC_IPC_LAUNCH_STAGE_TAG
+{
+    OAC_IPC_LAUNCH_STAGE_NONE = 0,
+    OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT = 1,
+    OAC_IPC_LAUNCH_STAGE_OPEN_EXECUTABLE = 2,
+    OAC_IPC_LAUNCH_STAGE_CREATE_ENVIRONMENT = 3,
+    OAC_IPC_LAUNCH_STAGE_ARM_TICKET = 4,
+    OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS = 5,
+    OAC_IPC_LAUNCH_STAGE_CONFIRM_TARGET = 6,
+    OAC_IPC_LAUNCH_STAGE_VALIDATE_STATUS = 7,
+    OAC_IPC_LAUNCH_STAGE_RESUME_THREAD = 8
+} OAC_IPC_LAUNCH_STAGE;
+
+typedef enum OAC_IPC_LAUNCH_DETAIL_TAG
+{
+    OAC_IPC_LAUNCH_DETAIL_NONE = 0,
+    OAC_IPC_LAUNCH_DETAIL_STATUS_UNAVAILABLE = 1,
+    OAC_IPC_LAUNCH_DETAIL_CANCELLED = 2,
+    OAC_IPC_LAUNCH_DETAIL_EXPIRED = 3,
+    OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH = 4,
+    OAC_IPC_LAUNCH_DETAIL_CONFIRMATION_FAILED = 5,
+    OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION = 6
+} OAC_IPC_LAUNCH_DETAIL;
 
 /*
  * SCM exposes one application-defined service exit code. OAC keeps the high
@@ -143,7 +167,8 @@ typedef struct OAC_IPC_LAUNCH_RESPONSE_TAG
     uint32_t ClientProcessId;
     uint32_t ClientSessionId;
     uint32_t TargetProcessId;
-    uint64_t Reserved;
+    uint32_t FailureStage;
+    uint32_t FailureDetail;
 } OAC_IPC_LAUNCH_RESPONSE;
 
 static inline int OacIpcHeaderMatches(
@@ -258,7 +283,9 @@ static inline int OacIpcValidateLaunchResponse(
             bytes,
             (uint32_t)sizeof(*response),
             OAC_IPC_TYPE_LAUNCH_RESPONSE) ||
-        response->Header.RequestId != requestId || response->Reserved != 0)
+        response->Header.RequestId != requestId ||
+        response->FailureStage > OAC_IPC_LAUNCH_STAGE_RESUME_THREAD ||
+        response->FailureDetail > OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION)
     {
         return 0;
     }
@@ -268,13 +295,16 @@ static inline int OacIpcValidateLaunchResponse(
             response->ServiceProcessId != 0 &&
             response->ClientProcessId != 0 &&
             response->ClientSessionId != 0 &&
-            response->TargetProcessId != 0;
+            response->TargetProcessId != 0 &&
+            response->FailureStage == OAC_IPC_LAUNCH_STAGE_NONE &&
+            response->FailureDetail == OAC_IPC_LAUNCH_DETAIL_NONE;
     }
     return response->LaunchFlags == 0 &&
         response->ServiceProcessId == 0 &&
         response->ClientProcessId == 0 &&
         response->ClientSessionId == 0 &&
-        response->TargetProcessId == 0;
+        response->TargetProcessId == 0 &&
+        response->FailureStage != OAC_IPC_LAUNCH_STAGE_NONE;
 }
 
 #ifdef __cplusplus
@@ -307,8 +337,11 @@ OAC_IPC_STATIC_ASSERT(
     offsetof(OAC_IPC_LAUNCH_RESPONSE, TargetProcessId) == 44,
     "OAC_IPC_LAUNCH_RESPONSE target identity moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_RESPONSE, Reserved) == 48,
-    "OAC_IPC_LAUNCH_RESPONSE reserved field moved");
+    offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureStage) == 48,
+    "OAC_IPC_LAUNCH_RESPONSE failure stage moved");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureDetail) == 52,
+    "OAC_IPC_LAUNCH_RESPONSE failure detail moved");
 OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_STAGE_MASK) == 0 &&
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0 &&

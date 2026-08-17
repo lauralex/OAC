@@ -130,10 +130,12 @@ acknowledgement, cursors, and paging remain WP-06 work.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010001`. Hello and status retain fixed 32-byte
+The local launcher/service wire revision is `0x00010002`. Hello and status retain fixed 32-byte
 requests and 56-byte responses. A launch request is a fixed 1056-byte message containing one counted
 absolute drive path with no arguments; its 56-byte response correlates the request, service, client,
-session, target PID, confirmed binding, and resumed-thread result. Both endpoints reject unknown
+session, target PID, confirmed binding, and resumed-thread result. A rejection also carries an exact
+launch stage and a bounded driver-revocation detail so failures remain attributable without enabling
+filesystem logging in the restricted service. Both endpoints reject unknown
 types or flags, wrong sizes or revisions, zero request IDs, nonzero reserved data, malformed UTF-16,
 unsafe path components, and dirty unused path units.
 

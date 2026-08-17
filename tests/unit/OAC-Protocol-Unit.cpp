@@ -40,6 +40,8 @@ static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
 static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
+static_assert(offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureStage) == 48);
+static_assert(offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureDetail) == 52);
 
 namespace
 {
@@ -650,8 +652,12 @@ void TestServiceLaunchMessages(TestLog& log)
     log.Expect("service launch missing target", OacIpcValidateLaunchResponse(
         &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
     badResponse = response;
-    badResponse.Reserved = 1;
-    log.Expect("service launch response reserved", OacIpcValidateLaunchResponse(
+    badResponse.FailureStage = OAC_IPC_LAUNCH_STAGE_CONFIRM_TARGET;
+    log.Expect("service launch success has no failure stage", OacIpcValidateLaunchResponse(
+        &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
+    badResponse = response;
+    badResponse.FailureDetail = OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH;
+    log.Expect("service launch success has no failure detail", OacIpcValidateLaunchResponse(
         &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
     log.Expect("service launch response correlation", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId + 1) == 0);
@@ -662,10 +668,23 @@ void TestServiceLaunchMessages(TestLog& log)
     response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
     response.Header.RequestId = request.Header.RequestId;
     response.Win32Error = ERROR_ACCESS_DENIED;
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS;
+    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH;
     log.Expect("service launch rejection response", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) != 0);
     response.TargetProcessId = 12;
     log.Expect("service launch rejection has no identity", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) == 0);
+    response.TargetProcessId = 0;
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_NONE;
+    log.Expect("service launch rejection names its stage", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) == 0);
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_RESUME_THREAD + 1;
+    log.Expect("service launch rejection stage range", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) == 0);
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS;
+    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION + 1;
+    log.Expect("service launch rejection detail range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
 }
 
