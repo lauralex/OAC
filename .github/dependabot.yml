@@ -8,3 +8,7 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: monthly

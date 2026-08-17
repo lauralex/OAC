@@ -1,0 +1,2 @@
+pycdlib==1.14.0
+PyYAML==6.0.3

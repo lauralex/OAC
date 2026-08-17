@@ -4,11 +4,12 @@
 #include <memory>
 #include <set>
 #include <sstream>
-#include <string_view>
 #include <vector>
 
 namespace
 {
+constexpr size_t kMaximumCpuSnapshotBytes = size_t{1024} * 1024;
+
 class UniqueHandle
 {
 public:
@@ -25,9 +26,34 @@ public:
         return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
     }
 
+    void reset(HANDLE handle = INVALID_HANDLE_VALUE) noexcept
+    {
+        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
+            CloseHandle(handle_);
+        handle_ = handle;
+    }
+
 private:
     HANDLE handle_;
 };
+
+UniqueHandle g_DiagnosticDevice;
+
+HANDLE OpenDiagnosticDevice()
+{
+    if (!g_DiagnosticDevice)
+    {
+        g_DiagnosticDevice.reset(CreateFileW(
+            L"\\\\.\\OAC",
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr));
+    }
+    return g_DiagnosticDevice.get();
+}
 
 std::wstring LastErrorMessage(DWORD error)
 {
@@ -74,46 +100,20 @@ std::wstring ConvertCategory(ULONG value)
     return value < std::size(names) ? names[value] : L"kernel/unknown";
 }
 
-bool IsPendingHandleMutation(const OAC_FINDING& finding, const std::wstring& text)
-{
-    static constexpr std::wstring_view prefix =
-        L"Stripped protected-object mutation access pending signed-owner classification:";
-    return finding.Category == OacCategoryHandle && text.starts_with(prefix);
-}
-
 void AddKernelFinding(
     const OAC_FINDING& finding,
     const std::wstring& text,
     Reporter& reporter)
 {
-    FindingSeverity severity = ConvertSeverity(finding.Severity);
-    std::wstring enrichedText = text;
-    if (IsPendingHandleMutation(finding, text))
-    {
-        const std::wstring path = QueryProcessImagePath(finding.ProcessId);
-        if (IsTrustedWindowsImagePath(path))
-        {
-            severity = FindingSeverity::Low;
-            enrichedText += L"; trusted Windows image=" + path;
-        }
-        else if (path.empty())
-        {
-            severity = FindingSeverity::Medium;
-            enrichedText += L"; requestor image unavailable or already exited";
-        }
-        else
-        {
-            severity = FindingSeverity::High;
-            enrichedText += L"; untrusted requestor image=" + path;
-        }
-    }
     reporter.Add(
-        severity,
+        ConvertSeverity(finding.Severity),
         ConvertCategory(finding.Category),
-        enrichedText,
+        text,
         finding.ProcessId,
         finding.ThreadId,
-        finding.Address);
+        finding.Address,
+        finding.Sequence,
+        finding.Timestamp100ns);
 }
 
 bool DrainFindings(HANDLE device, Reporter& reporter)
@@ -200,15 +200,16 @@ bool CheckDriverGate(
 
 bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
 {
-    UniqueHandle device(CreateFileW(
-        L"\\\\.\\OAC",
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr));
-    if (!device)
+    if (options.deploymentMode == DeploymentMode::Production)
+    {
+        reporter.Add(FindingSeverity::Critical, L"driver",
+            L"OAC-Client is a lab-only protocol-v4 compatibility tool; "
+            L"production driver authority belongs to OACService");
+        return false;
+    }
+
+    const HANDLE device = OpenDiagnosticDevice();
+    if (device == nullptr || device == INVALID_HANDLE_VALUE)
     {
         reporter.Add(options.deploymentMode == DeploymentMode::Production
                 ? FindingSeverity::High : FindingSeverity::Medium,
@@ -229,7 +230,7 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
         configuration.Flags |= OAC_CONFIG_PROTECT_PROCESS;
     DWORD returned = 0;
     if (!DeviceIoControl(
-            device.get(),
+            device,
             IOCTL_OAC_CONFIGURE,
             &configuration,
             sizeof(configuration),
@@ -250,7 +251,7 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
     if (options.verboseHandles) request.Flags |= OAC_SCAN_VERBOSE_HANDLES;
     if (options.privateKernelTraces) request.Flags |= OAC_SCAN_PRIVATE_KERNEL_TRACES;
     if (!DeviceIoControl(
-            device.get(),
+            device,
             IOCTL_OAC_RUN_KERNEL_SCAN,
             &request,
             sizeof(request),
@@ -267,11 +268,11 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
     std::vector<std::byte> cpuBuffer(size_t{64} * 1024);
     bool cpuCaptured = false;
     DWORD cpuError = ERROR_SUCCESS;
-    for (unsigned attempt = 0; attempt < 4; ++attempt)
+    for (;;)
     {
         returned = 0;
         if (DeviceIoControl(
-                device.get(),
+                device,
                 IOCTL_OAC_CPU_SNAPSHOT,
                 nullptr,
                 0,
@@ -285,7 +286,7 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
         }
         cpuError = GetLastError();
         if ((cpuError != ERROR_INSUFFICIENT_BUFFER && cpuError != ERROR_MORE_DATA) ||
-            cpuBuffer.size() >= size_t{1024} * 1024) break;
+            cpuBuffer.size() >= kMaximumCpuSnapshotBytes) break;
         cpuBuffer.resize(cpuBuffer.size() * 2);
     }
 
@@ -296,10 +297,14 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
         const size_t available = returned >= header
             ? (returned - header) / sizeof(OAC_CPU_RECORD)
             : 0;
+        const size_t bufferCapacity = cpuBuffer.size() >= header
+            ? (cpuBuffer.size() - header) / sizeof(OAC_CPU_RECORD)
+            : 0;
         if (returned >= header &&
             response->Version == OAC_PROTOCOL_VERSION &&
-            response->Size >= header && response->Size <= returned &&
+            response->Size == returned &&
             response->Count <= available && response->Count <= response->Capacity &&
+            response->Capacity <= bufferCapacity &&
             response->Size == header + response->Count * sizeof(OAC_CPU_RECORD))
         {
             std::set<ULONG> processorIndexes;
@@ -422,7 +427,7 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
 
     OAC_STATUS_RESPONSE status{};
     if (DeviceIoControl(
-            device.get(),
+            device,
             IOCTL_OAC_GET_STATUS,
             nullptr,
             0,
@@ -482,7 +487,7 @@ bool RunDriverScan(const ScanOptions& options, Reporter& reporter)
             L"Driver status response failed protocol validation");
     }
 
-    return DrainFindings(device.get(), reporter) && healthy;
+    return DrainFindings(device, reporter) && healthy;
 }
 
 bool PollDriverSession(
@@ -490,15 +495,8 @@ bool PollDriverSession(
     Reporter& reporter,
     bool runKernelScan)
 {
-    UniqueHandle device(CreateFileW(
-        L"\\\\.\\OAC",
-        GENERIC_READ | GENERIC_WRITE,
-        0,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr));
-    if (!device)
+    const HANDLE device = OpenDiagnosticDevice();
+    if (device == nullptr || device == INVALID_HANDLE_VALUE)
     {
         reporter.Add(FindingSeverity::Critical, L"driver/monitor",
             L"Lost the OAC kernel session: " + LastErrorMessage(GetLastError()));
@@ -514,7 +512,7 @@ bool PollDriverSession(
         request.Size = sizeof(request);
         if (options.verboseHandles) request.Flags |= OAC_SCAN_VERBOSE_HANDLES;
         if (options.privateKernelTraces) request.Flags |= OAC_SCAN_PRIVATE_KERNEL_TRACES;
-        if (!DeviceIoControl(device.get(), IOCTL_OAC_RUN_KERNEL_SCAN,
+        if (!DeviceIoControl(device, IOCTL_OAC_RUN_KERNEL_SCAN,
                 &request, sizeof(request), nullptr, 0, &returned, nullptr))
         {
             healthy = false;
@@ -526,7 +524,7 @@ bool PollDriverSession(
 
     OAC_STATUS_RESPONSE status{};
     returned = 0;
-    if (!DeviceIoControl(device.get(), IOCTL_OAC_GET_STATUS,
+    if (!DeviceIoControl(device, IOCTL_OAC_GET_STATUS,
             nullptr, 0, &status, sizeof(status), &returned, nullptr) ||
         returned < sizeof(status) || status.Version != OAC_PROTOCOL_VERSION ||
         status.Size != sizeof(status))
@@ -562,6 +560,6 @@ bool PollDriverSession(
             healthy = false;
     }
 
-    if (!DrainFindings(device.get(), reporter)) healthy = false;
+    if (!DrainFindings(device, reporter)) healthy = false;
     return healthy;
 }

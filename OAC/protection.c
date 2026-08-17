@@ -1,4 +1,5 @@
 #include "protection.h"
+#include "session.h"
 #include "telemetry.h"
 #include "..\shared\oac_driver_policy.h"
 
@@ -111,8 +112,8 @@ static PEPROCESS OacReadProcessIdentity(_In_ PVOID volatile* Identity)
 static BOOLEAN OacIsTrustedRequestor(VOID)
 {
     PEPROCESS current = PsGetCurrentProcess();
-    return current == OacReadProcessIdentity(&g_ClientProcess) ||
-           current == OacReadProcessIdentity(&g_ProtectedProcess);
+    return OacSessionIsControllerProcess(current) ||
+           OacIsProtectedProcessObject(current);
 }
 
 static BOOLEAN OacIsProtectedWindowsRequestor(VOID)
@@ -199,6 +200,15 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
     {
         return OB_PREOP_SUCCESS;
     }
+    /* Windows must finish creating the service-bound suspended process before
+     * the service can confirm its handle. Keep protection active against
+     * ordinary callers, but allow protected OS bootstrap processes during
+     * this one bounded state. Full filtering applies before thread resume. */
+    if (OacSessionTargetAwaitingConfirmation(targetProcess) &&
+        OacIsProtectedWindowsRequestor())
+    {
+        return OB_PREOP_SUCCESS;
+    }
 
     if (Information->Operation == OB_OPERATION_HANDLE_CREATE)
     {
@@ -221,7 +231,7 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
         OacReportFinding(
             protectedWindowsRequestor
                 ? OacSeverityLow
-                : (mutationAttempt ? OacSeverityInfo : OacSeverityLow),
+                : (mutationAttempt ? OacSeverityMedium : OacSeverityLow),
             OacCategoryHandle,
             sourcePid,
             PsGetCurrentThreadId(),
@@ -230,7 +240,7 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
             protectedWindowsRequestor
                 ? L"Stripped protected-object access from a protected Windows requestor: requested=0x%08X granted=0x%08X"
                 : (mutationAttempt
-                    ? L"Stripped protected-object mutation access pending signed-owner classification: requested=0x%08X granted=0x%08X"
+                    ? L"Stripped protected-object mutation access: requested=0x%08X granted=0x%08X"
                     : L"Stripped protected-object read access: requested=0x%08X granted=0x%08X"),
             before,
             *desiredAccess);
@@ -246,8 +256,24 @@ static VOID OacProcessNotify(
 {
     PEPROCESS releasedProtected = NULL;
     PEPROCESS releasedClient = NULL;
+    OAC_SESSION_PROCESS_CREATE_RESULT createResult;
 
-    if (CreateInfo != NULL) return;
+    if (CreateInfo != NULL)
+    {
+        if (!NT_SUCCESS(CreateInfo->CreationStatus)) return;
+        createResult = OacSessionNotifyProcessCreate(
+            Process,
+            ProcessId,
+            PsGetCurrentProcess(),
+            CreateInfo->CreatingThreadId.UniqueProcess,
+            CreateInfo->ImageFileName,
+            (BOOLEAN)CreateInfo->FileOpenNameAvailable);
+        if (createResult == OacSessionProcessCreateDenied)
+        {
+            CreateInfo->CreationStatus = STATUS_ACCESS_DENIED;
+        }
+        return;
+    }
 
     KeEnterCriticalRegion();
     ExAcquirePushLockExclusive(&g_IdentityLock);
@@ -267,9 +293,19 @@ static VOID OacProcessNotify(
             &g_ClientProcess,
             NULL);
         InterlockedExchange64(&g_ClientPid, 0);
+        if (releasedProtected == NULL)
+        {
+            releasedProtected = (PEPROCESS)InterlockedExchangePointer(
+                &g_ProtectedProcess,
+                NULL);
+        }
+        InterlockedExchange64(&g_ProtectedPid, 0);
+        InterlockedExchange(&g_ConfigurationFlags, 0);
     }
     ExReleasePushLockExclusive(&g_IdentityLock);
     KeLeaveCriticalRegion();
+
+    OacSessionNotifyProcessExit(Process, ProcessId);
 
     if (releasedProtected != NULL)
     {
@@ -575,7 +611,8 @@ VOID OacProtectionShutdown(VOID)
 
 NTSTATUS OacConfigureProtection(
     _In_ const OAC_CONFIG_REQUEST* Request,
-    _In_ HANDLE RequestorProcessId)
+    _In_ HANDLE RequestorProcessId,
+    _In_ const OAC_SESSION_LEASE* SessionLease)
 {
     PEPROCESS clientProcess = NULL;
     PEPROCESS protectedProcess = NULL;
@@ -643,6 +680,21 @@ NTSTATUS OacConfigureProtection(
         return STATUS_PROCESS_IS_TERMINATING;
     }
 
+    status = OacSessionBindTarget(
+        SessionLease,
+        protectedProcess,
+        protectedProcess != NULL
+            ? ULongToHandle((ULONG)Request->ProtectedProcessId)
+            : NULL);
+    if (!NT_SUCCESS(status))
+    {
+        ExReleasePushLockExclusive(&g_IdentityLock);
+        KeLeaveCriticalRegion();
+        if (protectedProcess != NULL) ObDereferenceObject(protectedProcess);
+        ObDereferenceObject(clientProcess);
+        return status;
+    }
+
     oldProtected = (PEPROCESS)InterlockedExchangePointer(
         &g_ProtectedProcess,
         protectedProcess);
@@ -672,7 +724,11 @@ NTSTATUS OacConfigureProtection(
 
 HANDLE OacProtectedProcessId(VOID)
 {
-    return ULongToHandle((ULONG)InterlockedCompareExchange64(&g_ProtectedPid, 0, 0));
+    HANDLE processId = OacSessionTargetProcessId();
+
+    if (processId != NULL) return processId;
+    return ULongToHandle(
+        (ULONG)InterlockedCompareExchange64(&g_ProtectedPid, 0, 0));
 }
 
 HANDLE OacTrustedClientProcessId(VOID)
@@ -683,13 +739,40 @@ HANDLE OacTrustedClientProcessId(VOID)
 BOOLEAN OacIsProtectedProcessObject(_In_opt_ PVOID Object)
 {
     return Object != NULL &&
-        Object == OacReadProcessIdentity(&g_ProtectedProcess);
+        (Object == OacReadProcessIdentity(&g_ProtectedProcess) ||
+         OacSessionIsTargetProcess((PEPROCESS)Object));
 }
 
 BOOLEAN OacIsTrustedClientProcess(_In_ PEPROCESS Process)
 {
-    return Process != NULL &&
-        Process == OacReadProcessIdentity(&g_ClientProcess);
+    return OacSessionIsControllerProcess(Process);
+}
+
+VOID OacProtectionRevokeController(_In_ PEPROCESS Controller)
+{
+    PEPROCESS releasedClient = NULL;
+    PEPROCESS releasedProtected = NULL;
+
+    if (Controller == NULL) return;
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&g_IdentityLock);
+    if (Controller == OacReadProcessIdentity(&g_ClientProcess))
+    {
+        releasedClient = (PEPROCESS)InterlockedExchangePointer(
+            &g_ClientProcess,
+            NULL);
+        releasedProtected = (PEPROCESS)InterlockedExchangePointer(
+            &g_ProtectedProcess,
+            NULL);
+        InterlockedExchange64(&g_ClientPid, 0);
+        InterlockedExchange64(&g_ProtectedPid, 0);
+        InterlockedExchange(&g_ConfigurationFlags, 0);
+    }
+    ExReleasePushLockExclusive(&g_IdentityLock);
+    KeLeaveCriticalRegion();
+
+    if (releasedProtected != NULL) ObDereferenceObject(releasedProtected);
+    if (releasedClient != NULL) ObDereferenceObject(releasedClient);
 }
 
 ULONG OacConfigurationFlags(VOID)

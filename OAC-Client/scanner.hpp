@@ -42,6 +42,8 @@ struct ClientFinding
     unsigned long long address = 0;
     unsigned long long sequence = 0;
     unsigned long long timestamp100ns = 0;
+    unsigned long long originSequence = 0;
+    unsigned long long originTimestamp100ns = 0;
 };
 
 class Reporter
@@ -58,7 +60,9 @@ public:
         const std::wstring& message,
         DWORD processId = 0,
         DWORD threadId = 0,
-        unsigned long long address = 0);
+        unsigned long long address = 0,
+        unsigned long long originSequence = 0,
+        unsigned long long originTimestamp100ns = 0);
 
     bool Save(const std::filesystem::path& path) const;
     const std::vector<ClientFinding>& Findings() const noexcept;

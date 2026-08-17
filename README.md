@@ -1,13 +1,19 @@
 # OAC
 
-OAC is a defensive, x64 Windows anti-cheat reference implementation. The current protocol-v4
-implementation builds on the original crash-oriented proof of concept with an unsigned-by-default
-kernel control driver intended for authorized signing and an elevated user-mode scanner. The kernel
-component performs only bounded, IRQL-appropriate work; pageable memory inspection, service/device
-enumeration, signature validation, and stack walking stay in user mode. The driver is deliberately
-`SERVICE_DEMAND_START`, never boot-start. The launcher owns the security boundary: global preflight
-runs first, the game is created suspended, protection is bound to its process object, and execution
-is allowed only after a clean target gate.
+OAC is a defensive, x64 Windows anti-cheat reference implementation. Its production control
+foundation consists of an unsigned-by-default, demand-start kernel driver, a restricted
+`OACService`, a standard-user launcher, and a typed production session bound to one file object and
+one referenced service process. The launcher can request one executable launch; the service
+authenticates the local client, resolves the executable under that identity, creates it suspended
+under the caller's token, confirms creation-time binding through a one-use kernel ticket, and only
+then resumes it. Signed launch manifests and service-owned job/liveness handling remain required,
+so this revision is not yet a complete production anti-cheat.
+
+The existing diagnostic scanner remains available only when the disposable-VM/lab `LabMode`
+registry switch is explicit. `OAC-Client` keeps one diagnostic handle for its entire run and refuses
+to act as a production controller. The kernel component performs bounded, IRQL-appropriate work;
+pageable inspection, signature validation, reporting, and stack walking stay in user mode. The
+driver is always `SERVICE_DEMAND_START`, never boot-start.
 
 ## Project guide
 
@@ -16,6 +22,14 @@ is allowed only after a clean target gate.
 - [`SECURITY.md`](SECURITY.md) explains private vulnerability reporting and sensitive-data rules.
 - [`docs/README.md`](docs/README.md) indexes current procedures, research notes, and the explicitly
   planned [`production hardening roadmap`](docs/hardening-plan.md).
+
+The production driver implements negotiate, claim, status, and launch-ticket dispatch. The
+restricted service owns the serialized arm, suspended-create, exact-handle confirmation, and resume
+transaction. The shared protocol header also defines the typed event schema and IDs reserved for later
+transport work; their presence is not a claim that event delivery, scanning, or revocation requests
+are available. WP-01 through WP-04 form a working production-control MVP and passed the
+commit-bound driver-backed service-launch and Driver Verifier campaign described below. WP-05 and
+later liveness, transport, policy, manifest, backend, and release controls remain separate work.
 
 ## Security and compatibility contract
 
@@ -29,9 +43,12 @@ is allowed only after a clean target gate.
 - Private kernel data is never a load or protection dependency. A private check runs only when
   the running kernel exactly matches a reviewed IDALib profile; otherwise OAC reports the skipped
   capability and continues with stable cross-view heuristics.
-- Protected-game and trusted-client identities are held as referenced process objects rather than
-  bare PIDs, so PID reuse cannot transfer trust. The first administrator client claims the driver;
-  reconfiguration remains restricted to that process until its exit notification clears the claim.
+- Production authority requires the exact `OACService` SID, the CREATE-owner process object, the
+  claimed file object, a random 128-bit session ID, and a nonzero generation. Cleanup revokes the
+  file session, and a live diagnostic target leaves a tombstone that prevents unsafe reclamation.
+  Numeric PIDs are diagnostics only. Administrators retain direct access only in explicit lab mode.
+- Protocol authority cannot be mixed on one file: production negotiation excludes privileged
+  diagnostic calls, and a diagnostic claim prevents later production negotiation.
 - A single binary cannot safely cover every historical Windows release and architecture. Windows
   XP lacks the object callbacks required for handle filtering, and x86/ARM64 require different
   context, register, PE, and calling-convention implementations. OAC fails or degrades explicitly
@@ -39,9 +56,12 @@ is allowed only after a clean target gate.
 - `ObRegisterCallbacks` filters user-mode process and thread handles. It cannot stop a hostile
   kernel driver, DMA device, hypervisor, or already-compromised kernel. “Block all interaction” is
   therefore implemented as the strongest supported user-mode handle policy, with the protected
-  process and trusted OAC client allowlisted.
+  process and current OAC controller allowlisted.
 
-## Requested capability coverage
+## Lab scanner capability coverage
+
+The table below describes the diagnostic scanner available only with `LabMode=1`. The production
+service does not expose these scan operations.
 
 | Capability | Implementation |
 |---|---|
@@ -93,7 +113,8 @@ Requirements:
 ```
 
 Use the 64-bit MSBuild host shown above with the x64 WDK toolchain. The build stages the INF,
-driver, and generated catalog under `x64\Release\OAC`, and builds the client and bounded protocol
+driver, and generated catalog under `x64\Release\OAC`, and builds `OAC-Service`, `OAC-Launcher`,
+the lab compatibility client, the driver-backed protocol test, and the driver-free protocol unit
 test under `x64\Release`. The catalog and driver still require an authorized signature before
 installation.
 
@@ -115,9 +136,29 @@ defense-in-depth telemetry when they are present.
 
 ## Run
 
-Install the properly signed `OAC` driver as a demand-start service (`StartType=3`). Do not configure
-it as boot-start, system-start, or automatic-start. From an elevated terminal, choose one of these
-flows.
+Install the properly signed `OAC` driver and `OACService` through reviewed deployment tooling. Both
+remain demand-start; do not configure either as boot-start, system-start, or automatic-start. A
+standard user can verify the production control path without receiving a driver handle:
+
+```powershell
+OAC-Launcher.exe --status
+```
+
+The same standard user can request one executable launch:
+
+```powershell
+OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
+```
+
+The launch request accepts one absolute local executable path and no command-line arguments. The
+service resolves and keeps the file open under the authenticated caller identity, creates the target
+suspended with that caller's primary token, confirms the exact creation-time driver binding, and
+resumes the initial thread. A production service session intentionally owns one target. Service-owned
+job containment, target-tree liveness, signed-manifest authorization, arguments, and session reuse
+remain later work packages.
+
+The following direct scanner flows are lab-only. They require `LabMode=1`, must not be enabled on a
+production machine, and use `audit` or `test` deployment mode.
 
 Global preflight without creating a game:
 
@@ -125,13 +166,12 @@ Global preflight without creating a game:
 OAC-Client.exe --preflight --mode test --output .\scan-output
 ```
 
-Preferred closed-gap launch flow (preflight, suspended creation, target gate, resume, continuous
-monitoring):
+Legacy suspended diagnostic launch flow:
 
 ```powershell
 OAC-Client.exe --launch "C:\Games\Example\Game.exe" `
   --launch-args "-example" `
-  --mode production `
+  --mode test `
   --challenge 00112233445566778899AABBCCDDEEFF `
   --output .\scan-output
 ```
@@ -157,16 +197,16 @@ Optional switches:
 - `--verbose-handles`: asks the kernel to emit individual handle records; this can overflow the
   bounded telemetry ring on busy machines. The client CSV always contains the raw full inventory.
 - `--no-private-kernel-traces`: disables IDALib-profiled PiDDB and unloaded-driver inspection.
-- `--mode audit|test|production`: selects policy. Test signing is informational only in `test`,
-  while it is a critical finding in `production`.
+- `--mode audit|test`: selects lab policy. `OAC-Client` refuses direct production authority; use
+  the service/launcher path for production-control development.
 - `--fail-on low|medium|high|critical`: controls the exit-code enforcement threshold.
 - `--require-hvci`: treats inactive HVCI as a policy failure.
-- `--challenge <hex>`: binds the report chain to a server-issued 16-64 byte nonce. Production mode
-  reports a missing challenge because an unchallenged report is replayable.
+- `--challenge <hex>`: binds the lab report chain to a supplied 16-64 byte nonce. This does not
+  authenticate the scanner; the production backend challenge and upload path is not implemented.
 
-The client exits `0` when no finding reaches the configured threshold, `1` when actionable findings
-are present, `5` after production session revocation, and a different larger value for argument,
-scan, or report failures. Reports use a per-run ID,
+The lab client exits `0` when no finding reaches the configured threshold, `1` when actionable
+findings are present, and a larger value for argument, scan, or report failures. Reports use a
+per-run ID,
 sequence/timestamped SHA-256 finding chain, inventory-artifact digests, an atomic replace, and a
 `.sha256` sidecar. Those unkeyed hashes expose accidental or after-the-fact tampering; they do not
 authenticate the scanner. Production deployments must combine the challenge with authenticated,
@@ -193,9 +233,11 @@ Review the upstream policy diff and test compatibility before accepting a new ar
 hash rules are supplemented by OAC-owned conservative basename rules shared with the kernel image
 telemetry path. A renamed helper cannot evade the monotonic post-start load latch, and a manually
 mapped payload is handled by loader-independent execution and control-flow checks rather than by
-its filename. Because the public image callback is observational, production "blocking" means the
-protected process is never launched—or is revoked within the monitor interval—once the latch is
-set; OAC does not claim that it can retroactively prevent a payload's already-entered `DriverEntry`.
+its filename. Because the public image callback is observational, the lab path can fail its gate or
+revoke its diagnostic target after the latch is observed; OAC does not claim that it can
+retroactively prevent a payload's already-entered `DriverEntry`. The current production launch path
+closes the post-creation binding gap; target-tree liveness and signed launch authorization remain
+separate work packages.
 
 ## Disposable-VM test signing
 
@@ -207,10 +249,11 @@ only and is not a production signing path. On the build machine:
 ```
 
 The script creates a 30-day RSA-3072 certificate named `OAC LOCAL TEST ONLY - NOT FOR PRODUCTION`,
-signs the SYS and regenerated catalog, verifies both, builds and hashes the protocol test, writes a
-manifest, and removes the exact temporary certificate from the build machine's trust stores. Its
-default output is a timestamped directory under the system temporary directory, outside the source
-tree. Copy the printed result directory to a disposable VM and run an elevated terminal there:
+signs the driver package and user-mode binaries, verifies their signatures, hashes both protocol
+tests, writes a manifest, deletes the exact temporary CurrentUser `My` certificate and private key,
+and scrubs the exact incidental CurrentUser `CA` cache entry. Its default output is a timestamped
+directory under the system temporary directory, outside the source tree. Copy the printed result
+directory to a disposable VM and run a 64-bit elevated terminal there to enable test-signing mode:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
@@ -219,11 +262,13 @@ tree. Copy the printed result directory to a disposable VM and run an elevated t
   -ConfirmDisposableVm
 ```
 
-Reboot when `bcdedit` requests it, then rerun without `-EnableTestSigning` to install/start the
-driver and optionally pass `-SmokeTestPid <pid>`. Windows normally requires Secure Boot to be
-disabled before test-signing mode can be enabled; the installer deliberately refuses to automate
-that firmware change. Never use this package on a production machine, export or distribute its
-private key, or ship a binary trusted only by this local certificate. See
+Reboot when `bcdedit` requests it. The actual install and removal paths require a LocalSystem
+PowerShell process inside the disposable VM; the automated harness supplies that boundary, while a
+manual lab must use its trusted provisioning mechanism. Rerun without `-EnableTestSigning` to
+install/start the driver and optionally pass `-SmokeTestPid <pid>`. Windows normally requires Secure
+Boot to be disabled before test-signing mode can be enabled; the installer deliberately refuses to
+automate that firmware change. Never use this package on a production machine, export or distribute
+its private key, or ship a binary trusted only by this local certificate. See
 [the test-signing guide](docs/test-signing.md) for the exact containment and cleanup procedure.
 
 ## IDALib profiles and kernel-load research
@@ -251,7 +296,22 @@ The separate [hardware identity review](docs/hwid-review.md) records the hash-ve
 30-driver corpus, the supported identity paths confirmed by each storage/USB/network/display/battery
 component, and the privacy and stability rules applied by the collector.
 
-## Validation performed
+## Validation evidence
+
+Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` completed the bounded
+disposable-VM campaign on Microsoft Windows 11 Pro 10.0.26100 build 26100 in a networkless
+Generation 2 Hyper-V VM with test signing enabled and Secure Boot disabled. Host validation
+accepted 27 exact result records: five protocol executions and ten client, launcher, and preflight
+executions, plus the production boundary, exact remove/reinstall boundary, renamed signed load
+gate, kernel provenance, standard Driver Verifier, and final containment. Verifier recorded three
+loads and three unloads of `OAC.sys`; no crash event or minidump was present. The result ZIP SHA-256
+was `46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`.
+Compact status, host-manifest, containment, and log evidence is retained outside the repository at
+`C:\OAC-VM\evidence\20260817-bbf8f06`; the VM, checkpoint, VHD chain, package, seed, and large ZIP
+were deleted after validation. This evidence applies only to that implementation commit, build,
+configuration, and guest environment.
+
+The following evidence is historical and predates the current production service/session foundation:
 
 - Clean x64 Debug and Release rebuilds with MSVC `/W4`, SDL checks, and warnings as errors.
 - x64 MSVC/PREfast code analysis for both the driver and client, plus user-mode Clang static
@@ -274,7 +334,7 @@ component, and the privacy and stability rules applied by the collector.
   enabled; the durable guest result reported `overall_pass: true`. Evidence is emitted to a
   caller-selected directory outside the source tree, and the VM is shut down with one current
   pre-Verifier checkpoint.
-- A focused protocol-v4 campaign on the same networkless 24H2 VM loaded a renamed, signed transient
+- A focused diagnostic-protocol campaign on the same networkless 24H2 VM loaded a renamed, signed transient
   driver after OAC was armed. OAC retained `post-start driver loads=1` and `load-gate trips=1`, made
   both immediate and post-cleanup scans fail, and reset only after a demand-start service restart.
   The test repeated under standard Driver Verifier with all 23 protocol checks passing, no recent
@@ -286,9 +346,10 @@ component, and the privacy and stability rules applied by the collector.
   the broad hook and overlay false positives discovered in the first smoke were corrected.
 
 The checked-in driver remains intentionally unsigned; only the disposable-VM package is locally
-test signed. The passing 24H2 campaign is evidence for that exact build, not a universal Windows
-certification. Complete the documented Windows 10/11/Server, HVCI/VBS, hardware, and game-specific
-matrix and use an authorized production signing pipeline before deployment.
+test signed. The current campaign is acceptance evidence for one exact source and Windows build,
+not a universal Windows certification. Complete the documented Windows 10/11/Server, HVCI/VBS,
+hardware, and game-specific matrix, implement the remaining hardening work packages, and use an
+authorized production signing pipeline before deployment.
 
 ## Removed unsafe design
 

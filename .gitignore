@@ -35,6 +35,9 @@ Release/
 # Local signing material and generated validation bundles
 *.cer
 *.pfx
+*.p12
+*.pem
+*.key
 artifacts/
 
 # VM, crash, and analysis scratch data
@@ -46,7 +49,20 @@ artifacts/
 *.vmrs
 *.vsv
 *.dmp
+*.evtx
+*.zip
 *.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# Scanner output
+oac-report.txt*
+oac-open-handles.csv
+oac-services.csv
+oac-suspect-strings-*.txt
 
 # Python cache
 __pycache__/

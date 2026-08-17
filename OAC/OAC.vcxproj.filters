@@ -17,6 +17,7 @@
     <ClCompile Include="main.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="protection.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="scanner.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="session.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="telemetry.c"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -25,9 +26,12 @@
     <ClInclude Include="descriptor.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="protection.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="scanner.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="session.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="telemetry.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_protocol.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\protocol\oac_v5.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\protocol\oac_validate.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <Inf Include="OAC.inf" />

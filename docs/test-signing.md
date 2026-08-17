@@ -21,11 +21,15 @@ campaign explicitly requires a recoverable key. The script:
    `InfVerif /w` tool;
 2. creates a 30-day RSA-3072 code-signing certificate with a conspicuous test-only subject and,
    by default, a non-exportable private key;
-3. signs `OAC.sys`, regenerates `oac.cat`, signs the catalog, and verifies each file digest and
-   signer while requiring the expected untrusted-root result for the newly self-signed certificate;
-4. copies `OAC-Client.exe` and writes a SHA-256 package manifest; and
-5. leaves the host trust stores unchanged and removes that exact certificate from CurrentUser `My`
-   unless retaining it was explicitly requested for repeat test builds.
+3. signs `OAC.sys`, every packaged user-mode executable, and the regenerated catalog, then verifies
+   each file digest and signer while requiring the expected untrusted-root result for the newly
+   self-signed certificate;
+4. packages `OAC-Client`, `OAC-Service`, `OAC-Launcher`, and both protocol tests and writes a
+   SHA-256 manifest that distinguishes protocol v5 from legacy v4; and
+5. leaves the host trust anchors unchanged, always removes the exact incidental CurrentUser `CA`
+   cache entry, and by default deletes the exact CurrentUser `My` certificate and its private key.
+   `-KeepCertificateInCurrentUserStore` retains only that `My` certificate and key when explicitly
+   requested for repeat test builds.
 
 If `-ExportPrivateKey` is explicitly used, treat the resulting PFX as a secret, store its password
 outside the package, and delete both after the isolated campaign. The default workflow emits no
@@ -55,34 +59,57 @@ The package can be checked without changing trust stores, boot configuration, dr
   -ConfirmDisposableVm
 ```
 
-Reboot if requested. Then install and start the package:
+Reboot if requested. Installation and removal intentionally require a LocalSystem PowerShell
+process so the script can enforce the final SYSTEM-owned ACLs and still roll back an incomplete
+configuration. The automated VM harness supplies that boundary. For a manually provisioned
+disposable VM, enter a LocalSystem shell through the lab's trusted provisioning mechanism, then
+install and start the package:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
   -PackageDirectory .\package `
   -ConfirmDisposableVm `
+  -LegacyV4LabMode `
   -SmokeTestPid 1234
 ```
 
 The installer validates that all resolved targets remain inside the selected package directory,
 imports only the package certificate into LocalMachine test trust stores, verifies the SYS/catalog,
 uses `pnputil` to stage the INF, starts the `OAC` service, and can perform a client smoke scan.
-It then reads `HKLM\SYSTEM\CurrentControlSet\Services\OAC\Start` and refuses to load the driver
-unless the value is exactly `3` (`SERVICE_DEMAND_START`). Verify it independently with:
+The smoke client requires the explicit `-LegacyV4LabMode` switch. Without that switch, the installer
+sets `LabMode=0`, installs the restricted, manual `OACService`, and leaves it stopped for the
+production-boundary test phase. The service object is assigned to SYSTEM and its exact DACL grants
+interactive users and administrators only query-status and start rights. The installer reads
+`HKLM\SYSTEM\CurrentControlSet\Services\OAC\Start` and refuses to load the driver unless the value
+is exactly `3` (`SERVICE_DEMAND_START`). From the same LocalSystem shell, verify both services
+independently with:
 
 ```powershell
 reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\OAC /v Start
 sc.exe query OAC
+sc.exe qc OACService
 ```
+
+Ordinary and elevated interactive users are intentionally limited to query-status and start access
+on `OACService`; they cannot run the configuration query above.
 
 The first command must report `0x3`; never change it to boot, system, or automatic start.
 
 For an end-to-end isolated campaign, `tools\vm\New-OACSeedIso.py` builds a Joliet seed ISO only
 after verifying the complete file set and rejecting PFX/P12/key material. Run
-`tools\vm\Start-OACHyperVTest.ps1` with that seed and a Windows installation ISO to create a
-networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the baseline and standard
-Driver Verifier phases, copy the durable result through PowerShell Direct, and shut the guest down.
-The orchestrator refuses to replace an existing VM or VHDX.
+`tools\vm\Start-OACHyperVTest.ps1` from a 64-bit elevated terminal with that seed and a Windows
+installation ISO to create a
+networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
+boundary including one standard-user creation-time-bound launch, protocol lifecycle/race, baseline
+scanner, and standard Driver Verifier phases,
+copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
+to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
+because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
+campaign passed at implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11
+Pro build 26100: 27 exact results, standard Driver Verifier, zero crash events/minidumps, and final
+containment were accepted. The validated result ZIP SHA-256 was
+`46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`. This is evidence for that
+exact test configuration, not authorization to use test signing outside a disposable VM.
 
 ## Test matrix
 
@@ -103,20 +130,32 @@ Keep a recovery snapshot and know how to disable Verifier from recovery before b
 
 ## Cleanup
 
-After a campaign, stop/delete the `OAC` service, remove the staged driver package with `pnputil`,
-remove only the test certificate matching the manifest thumbprint from LocalMachine `Root` and
-`TrustedPublisher`, disable test-signing mode, reboot, and discard or roll back the VM snapshot.
+After a campaign, use the installer's exact `-Remove` path to stop/delete `OACService`, remove its
+verified binaries, remove the staged driver package, and delete only the manifest certificate from
+LocalMachine `Root` and `TrustedPublisher`. Installation and removal both require a LocalSystem
+PowerShell process inside the disposable VM; an ordinary elevated administrator is rejected before
+any trust, driver, service, or file mutation. The automated VM harness supplies that boundary. From
+a manually provisioned LocalSystem shell, run:
 
 ```powershell
-sc.exe stop OAC
-sc.exe delete OAC
+.\Install-OACTestDriver.ps1 `
+  -PackageDirectory .\package `
+  -ConfirmDisposableVm `
+  -Remove
+```
+
+After the verified stack has been removed, disable test-signing mode, reboot, and discard or roll
+back the VM snapshot.
+
+```powershell
 bcdedit.exe /set testsigning off
 shutdown.exe /r /t 0
 ```
 
-Use `pnputil.exe /enum-drivers` to identify the exact published name for `OAC.inf`, then remove only
-that entry with `pnputil.exe /delete-driver <published-name> /uninstall`. Remove the exact
-certificate thumbprint recorded in `package-manifest.json`; do not use a subject wildcard.
+If the verified removal path cannot complete, stop and inspect the VM instead of applying a broad
+cleanup command. `pnputil.exe /enum-drivers` can identify the exact published name for `OAC.inf`;
+remove only that entry and only the exact certificate thumbprint recorded in
+`package-manifest.json`. Never use a subject wildcard.
 
 The checked-in installer intentionally does not automate broad certificate deletion, Secure Boot
 changes, VM rollback, or production-machine use.

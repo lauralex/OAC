@@ -21,14 +21,23 @@ function Write-BootstrapLog([string]$Message) {
     Write-SerialLine "BOOTSTRAP $Message"
 }
 
+function Clear-LabAutoLogon {
+    $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    foreach ($name in @(
+        'AutoAdminLogon', 'DefaultUserName', 'DefaultDomainName',
+        'DefaultPassword', 'AutoLogonCount')) {
+        Remove-ItemProperty -Path $winlogon -Name $name `
+            -ErrorAction SilentlyContinue
+    }
+}
+
 $installRoot = 'C:\OACTest'
 $results = Join-Path $installRoot 'results'
-New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
-New-Item -ItemType Directory -Path $results -Force | Out-Null
-[IO.File]::WriteAllText(
-    (Join-Path $installRoot 'campaign-start-utc.txt'),
-    [DateTime]::UtcNow.ToString('o'),
-    [Text.UTF8Encoding]::new($false))
+if (Test-Path -LiteralPath $installRoot) {
+    throw 'Refusing to reuse C:\OACTest; every VM campaign requires a fresh guest directory.'
+}
+New-Item -ItemType Directory -Path $installRoot | Out-Null
+New-Item -ItemType Directory -Path $results | Out-Null
 
 try {
     Write-BootstrapLog "Copying read-only seed from $PSScriptRoot"
@@ -42,6 +51,10 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $installRoot 'package-manifest.json') `
         -Raw | ConvertFrom-Json
     if (-not $manifest.test_files) { throw 'Package manifest has no test-tool hashes.' }
+    $sourceCommit = [string]$manifest.source_commit
+    if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'Package manifest has no canonical source commit.'
+    }
     $installPrefix = $installRoot + [IO.Path]::DirectorySeparatorChar
     foreach ($entry in @($manifest.test_files)) {
         $name = [string]$entry.name
@@ -58,6 +71,29 @@ try {
         }
     }
     Write-BootstrapLog 'Signed package, certificate, and test-tool hashes validated.'
+
+    $campaignId = [Guid]::NewGuid().ToString('D')
+    $campaignStart = [DateTime]::UtcNow.ToString('o')
+    $manifestHash = (Get-FileHash -LiteralPath `
+        (Join-Path $installRoot 'package-manifest.json') -Algorithm SHA256).Hash
+    [IO.File]::WriteAllText(
+        (Join-Path $installRoot 'campaign-id.txt'),
+        $campaignId,
+        [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText(
+        (Join-Path $installRoot 'campaign-start-utc.txt'),
+        $campaignStart,
+        [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText(
+        (Join-Path $installRoot 'campaign-manifest-sha256.txt'),
+        $manifestHash,
+        [Text.Encoding]::ASCII)
+    [IO.File]::WriteAllText(
+        (Join-Path $installRoot 'campaign-source-commit.txt'),
+        $sourceCommit,
+        [Text.Encoding]::ASCII)
+    Write-BootstrapLog `
+        "Campaign $campaignId uses manifest SHA-256 $manifestHash from commit $sourceCommit."
 
     New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' `
         -Name CrashDumpEnabled -PropertyType DWord -Value 3 -Force | Out-Null
@@ -86,15 +122,37 @@ try {
     Register-ScheduledTask -TaskName 'OAC-VM-Test' -Action $action -Trigger $trigger `
         -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 
+    # Keep exactly one post-reboot interactive session so the standard-user
+    # launcher boundary can be exercised. The orchestrator removes these
+    # values as soon as that session appears.
     $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-    foreach ($name in @('AutoAdminLogon', 'DefaultUserName', 'DefaultPassword', 'AutoLogonCount')) {
-        Remove-ItemProperty -Path $winlogon -Name $name -ErrorAction SilentlyContinue
-    }
+    New-ItemProperty -Path $winlogon -Name AutoAdminLogon -PropertyType String `
+        -Value '1' -Force | Out-Null
+    New-ItemProperty -Path $winlogon -Name DefaultUserName -PropertyType String `
+        -Value 'OACAdmin' -Force | Out-Null
+    New-ItemProperty -Path $winlogon -Name DefaultDomainName -PropertyType String `
+        -Value $env:COMPUTERNAME -Force | Out-Null
+    New-ItemProperty -Path $winlogon -Name DefaultPassword -PropertyType String `
+        -Value 'OacTest!2026' -Force | Out-Null
+    New-ItemProperty -Path $winlogon -Name AutoLogonCount -PropertyType DWord `
+        -Value 1 -Force | Out-Null
     Write-BootstrapLog 'Registered SYSTEM startup orchestrator; rebooting into test-signing mode.'
     Start-Sleep -Seconds 3
     Restart-Computer -Force
 } catch {
-    Write-BootstrapLog "FATAL: $($_.Exception.Message)"
-    $_ | Out-String | Out-File -LiteralPath (Join-Path $results 'bootstrap-failure.txt') -Encoding utf8
-    throw
+    $fatalError = $_
+    try { Clear-LabAutoLogon } catch { }
+    try { Write-BootstrapLog "FATAL: $($fatalError.Exception.Message)" } catch { }
+    try {
+        $fatalError | Out-String | Out-File -LiteralPath `
+            (Join-Path $results 'bootstrap-failure.txt') -Encoding utf8
+    } catch { }
+    try {
+        Write-BootstrapLog 'Bootstrap failed; shutting down the disposable guest.'
+    } catch { }
+    try {
+        Start-Sleep -Seconds 3
+        Stop-Computer -Force
+    } catch { }
+    throw $fatalError
 }
