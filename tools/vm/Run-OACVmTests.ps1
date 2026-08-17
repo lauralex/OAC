@@ -61,6 +61,8 @@ $auxiliaryExitValues = [ordered]@{
     'verifier-bcd' = @(0)
     'verifier-active-settings' = @(0, 2)
     'verifier-sc-start' = @(0, 1056)
+    'verifier-protocol-boundary-sc-stop' = @(0)
+    'verifier-protocol-boundary-sc-start' = @(0)
     'verifier-inter-client-sc-stop' = @(0)
     'verifier-inter-client-sc-start' = @(0)
     'verifier-sc-stop' = @(0, 1062)
@@ -104,6 +106,8 @@ $fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
     'verifier-bcd',
     'verifier-active-settings',
     'verifier-sc-start',
+    'verifier-protocol-boundary-sc-stop',
+    'verifier-protocol-boundary-sc-start',
     'verifier-inter-client-sc-stop',
     'verifier-inter-client-sc-start',
     'verifier-sc-stop',
@@ -1671,6 +1675,23 @@ function Run-UnderDriverVerifier {
         Invoke-NativeCapture "verifier-protocol-$iteration" `
             (Join-Path $root 'OAC-Protocol-Test.exe') | Out-Null
     }
+
+    # Protocol cleanup can emit findings after the test's final drain. Reload
+    # the verified driver before the independent medium-threshold scan.
+    $protocolBoundaryStop = Invoke-ConsoleCapture `
+        'verifier-protocol-boundary-sc-stop' 'sc.exe' @('stop', 'OAC')
+    if ($protocolBoundaryStop -ne 0) {
+        throw "Could not end the verified protocol lifetime; exit=$protocolBoundaryStop."
+    }
+    Wait-TestServiceState OAC `
+        ([ServiceProcess.ServiceControllerStatus]::Stopped)
+    $protocolBoundaryStart = Invoke-ConsoleCapture `
+        'verifier-protocol-boundary-sc-start' 'sc.exe' @('start', 'OAC')
+    if ($protocolBoundaryStart -ne 0) {
+        throw "Could not start the verified scanner lifetime; exit=$protocolBoundaryStart."
+    }
+    Wait-TestServiceState OAC `
+        ([ServiceProcess.ServiceControllerStatus]::Running)
 
     Invoke-NativeCapture 'verifier-preflight' `
         (Join-Path $root 'package\OAC-Client.exe') @(

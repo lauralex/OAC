@@ -100,6 +100,8 @@ $auxiliaryExitValues = [ordered]@{
     'verifier-bcd' = @(0)
     'verifier-active-settings' = @(0, 2)
     'verifier-sc-start' = @(0, 1056)
+    'verifier-protocol-boundary-sc-stop' = @(0)
+    'verifier-protocol-boundary-sc-start' = @(0)
     'verifier-inter-client-sc-stop' = @(0)
     'verifier-inter-client-sc-start' = @(0)
     'verifier-sc-stop' = @(0, 1062)
@@ -143,6 +145,8 @@ $fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
     'verifier-bcd',
     'verifier-active-settings',
     'verifier-sc-start',
+    'verifier-protocol-boundary-sc-stop',
+    'verifier-protocol-boundary-sc-start',
     'verifier-inter-client-sc-stop',
     'verifier-inter-client-sc-start',
     'verifier-sc-stop',
