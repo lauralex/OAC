@@ -1,7 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-04 controls implemented in source; current disposable-VM acceptance
-pending
+**Status:** WP-01 through WP-04 controls implemented and accepted on the named Windows 11 build
+26100 disposable-VM campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -23,13 +23,13 @@ trust boundaries, adversaries, and failure behavior.
 | Boundary | Current behavior | Evidence state |
 |---|---|---|
 | Driver load | Windows Code Integrity decides whether the demand-start driver image may load | Existing control; current driver remains unsigned by default |
-| Driver device | Production DACL grants SYSTEM and the exact service SID; Administrators are added only with `LabMode=1` | Implemented in source; VM ACL checks pending |
-| Service identity | The test installer sets SYSTEM owner/group and explicitly grants Administrators and Interactive query-status/start only; the restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Test-installer source present; targeted Windows 11 24H2 build 26100 native-policy probe passed; full install, effective-access, and production-deployment acceptance pending |
-| Driver controller | One production session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Implemented in source; lifecycle VM checks pending |
-| Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Implemented in source; unauthorized-client VM checks pending |
-| Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Implemented in source; driver-backed launch/race evidence pending |
-| User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Existing implementation; production use awaits target binding |
-| Driver-load evidence | Load callback plus monotonic post-start counters | Existing implementation; current VM rerun pending |
+| Driver device | Production DACL grants SYSTEM and the exact service SID; Administrators are added only with `LabMode=1` | Named VM campaign passed service access and denied direct opens from LocalSystem, limited-user, and administrator probes |
+| Service identity | The test installer sets SYSTEM owner/group and explicitly grants Administrators and Interactive query-status/start only; the restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Structural readback and the complete service start/status/launch path passed on Windows 11 build 26100; broader effective-right and production-deployment testing remains pending |
+| Driver controller | One production session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Driver-backed lifecycle, wrong-process, cleanup, and race cases passed on the named campaign |
+| Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Two standard-user status calls and one launch passed; dedicated AppContainer, remote, and impersonation-negative cases remain pending |
+| Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Creation-time binding, exact-handle confirmation, and resume passed on the named campaign |
+| User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
+| Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Stable production IDs and a provenance-preserving record schema are defined with pure validation tests | Test source present; production transport planned |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Policy, manifest, backend | No production trust boundary exists | Planned |
@@ -59,8 +59,8 @@ permits retirement. This prevents a new controller from inheriting a driver whos
 protection state is still active.
 
 The invariant is implemented for diagnostic binding and the production service's serialized arm,
-suspended create, confirm-or-cancel, and resume transaction. Driver-backed acceptance remains
-pending.
+suspended create, confirm-or-cancel, and resume transaction. Driver-backed acceptance was recorded
+for implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100.
 
 ## In-scope adversaries
 
@@ -110,9 +110,11 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   from that service process are denied after target binding.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-These statements describe source behavior, not completed platform acceptance. Driver-backed production,
-service installation, ACL, lifecycle, race, and Driver Verifier tests must pass in the disposable VM
-before WP-02 or WP-03 can be marked complete.
+These statements describe source behavior plus one exact platform acceptance run. The current
+driver-backed production, service installation, lifecycle, race, and standard Driver Verifier
+campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That result does not
+replace the broader supported-platform, effective-right, compatibility, or production-deployment
+matrix.
 
 ## Planned controls
 

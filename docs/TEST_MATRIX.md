@@ -1,6 +1,7 @@
 # OAC test matrix
 
-**Status:** WP-01 through WP-04 test sources integrated; current disposable-VM acceptance pending
+**Status:** WP-01 through WP-04 tested at implementation commit
+`bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -16,10 +17,10 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; final-commit CI pending |
-| `Release|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; final-commit CI pending |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local Debug/Release passed `277/277`; final-commit CI pending |
-| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations; final-commit CI pending |
+| `Debug|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; hosted CI is a merge gate |
+| `Release|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; hosted CI is a merge gate |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local Debug/Release passed `284/284`; hosted CI remains a merge gate |
+| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations; hosted CI is a merge gate |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
 | Clang-Tidy | Required for scanner changes | Historical result only |
@@ -75,7 +76,8 @@ driver-gate coverage plus these production cases:
   for production arm, cancel, and confirm operations.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
-Driver Verifier results are pending. Driver-free tests cover the launch wire contract, canonical
+standard Driver Verifier run passed on implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c`.
+Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
 service-owned launch; alert acknowledgement and snapshot paging remain later work.
@@ -98,21 +100,21 @@ dependency, restricted service SID type, exact four-privilege list, fixed SID, b
 owner/group, and exact query-status/start-only Administrators and Interactive ACL. It also verifies
 a one-day reset policy with one restart after five seconds followed by no further action, including
 non-crash failures. A targeted LocalSystem native-policy probe passed on Windows 11 24H2 build
-26100. Full installer, effective service-right, reboot-persistence, and production-boundary VM
-acceptance remain pending.
+26100. The complete installer and production-boundary VM paths now pass on that build. Dedicated
+negative effective-service-right and reboot-persistence cases remain pending.
 
 ## Runtime matrix
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Historical for the diagnostic protocol; current production run pending |
-| Standard Driver Verifier on `OAC.sys` | Historical for earlier source; current session/rundown run pending |
-| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Source present; current VM run pending |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `bbf8f06`; 27 exact results, overall pass, Secure Boot disabled |
+| Standard Driver Verifier on `OAC.sys` | Tested at `bbf8f06`; three loads/unloads, reset and inactive, zero crashes/dumps |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `bbf8f06`; status twice, launch once, and LocalSystem/limited/admin direct opens denied |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| Production per-file cleanup/close and concurrent status teardown | Source present; current VM run pending |
-| Live-target tombstone and later retirement | Source and driver-backed test present; current VM result pending |
-| Standard-user service launch, creation-time binding, confirmation, and resume | Source and VM harness present; current VM result pending |
-| Renamed, signed normal post-start driver image | Historical load-latch evidence; current rerun pending |
+| Production per-file cleanup/close and concurrent status teardown | Tested at `bbf8f06` in baseline and Verifier protocol executions |
+| Live-target tombstone and later retirement | Tested at `bbf8f06` in the driver-backed lifecycle suite |
+| Standard-user service launch, creation-time binding, confirmation, and resume | Tested at `bbf8f06`; target PID 6588 was bound, confirmed, and resumed |
+| Renamed, signed normal post-start driver image | Tested at `bbf8f06`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
 | Secure Boot production signing path | Planned |
@@ -121,18 +123,18 @@ acceptance remain pending.
 | Corresponding supported Windows Server releases | Planned |
 | x86, ARM64, Windows XP/historical releases | Unsupported |
 
-Historical results are summarized in the root README. They must not be used as acceptance evidence
-for the current service/session source.
+The root README separates this current exact-commit result from older historical campaigns. Neither
+is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 
 ## Hardening acceptance matrix
 
 | Work package | Required evidence | State |
 |---|---|---|
-| WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Source and workflow present; final results pending |
-| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Source and unit coverage present; final host/VM results pending |
-| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Source and VM harness present; VM result pending |
-| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Source and driver-backed harness present; current VM result pending |
-| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Driver/service/launcher source, hostile units, and VM acceptance source present; current driver-backed result pending |
+| WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Local and VM-tested foundation; hosted CI required at merge |
+| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `bbf8f06` |
+| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `bbf8f06`; broader negative matrix remains |
+| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `bbf8f06`; literal numeric PID reuse remains unforced |
+| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `bbf8f06` |
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Planned |
 | WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Planned |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Planned |
@@ -140,7 +142,8 @@ for the current service/session source.
 | WP-09/10 signatures | Wrong key/scope/build, expiry, rollback, canonical serialization | Planned |
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
-WP-02 and WP-03 are not complete until their disposable-VM acceptance evidence is recorded.
+WP-02 through WP-04 acceptance is recorded only for the exact commit and environment above. WP-05
+and later work packages remain planned.
 
 ## Exact host commands
 

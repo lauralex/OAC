@@ -3,7 +3,8 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-current disposable-VM acceptance is pending
+implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -118,7 +119,7 @@ If cleanup occurs while a referenced target is still live, the cleaned session r
 unusable tombstone. It blocks a replacement claim until the target exit callback releases the
 target and retires the session. This prevents a new controller from inheriting authority while
 stale protection state still exists. The kernel invariant is implemented in source; its target-live
-service-transaction VM acceptance remains pending.
+service-transaction path passed the named VM campaign.
 
 ### Typed event schema
 
@@ -154,7 +155,7 @@ The diagnostic finding ring and report path retain their known limitations: one 
 destructive batch reads without acknowledgement, and display-oriented user-mode re-sequencing. It is not a
 fallback production authority and must remain unavailable when lab mode is off.
 
-## Test coverage and pending gate
+## Test coverage and acceptance
 
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
 request/response validation, correlation, the session transition matrix, and hostile binary and
@@ -165,10 +166,13 @@ bidirectional diagnostic/production per-file exclusion, same-file and wrong-file
 duplicated-handle wrong-process check, cleanup authority loss, fresh session ID/generation checks,
 and a bounded four-thread status/close race after 32 successful status calls per thread. It also
 verifies that malformed launch messages are rejected and that diagnostic sessions cannot invoke
-production launch operations. The source coverage is present, but its current disposable-VM
-execution and Driver Verifier evidence remain pending.
+production launch operations. The current disposable-VM execution passed at implementation commit
+`bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11
+Pro build 26100. The campaign accepted all five protocol executions under the baseline and standard
+Driver Verifier phases, with zero crash events or minidumps and Verifier inactive at completion.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, and IPC validation. The VM production boundary supplies the successful
-standard-user service transaction. Service-owned job/liveness, event transport, signed manifests
-and policy, and authenticated backend sessions remain separate work packages.
+standard-user service transaction: creation-time binding, exact process-handle confirmation, and
+initial-thread resume all passed. Service-owned job/liveness, event transport, signed manifests and
+policy, and authenticated backend sessions remain separate work packages.

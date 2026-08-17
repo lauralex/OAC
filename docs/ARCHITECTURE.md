@@ -1,7 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-04 production-control foundation implemented in source; current
-disposable-VM acceptance pending
+**Status:** WP-01 through WP-04 production-control MVP implemented and accepted on the named
+Windows 11 build 26100 disposable-VM campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -100,8 +100,9 @@ until the process-exit callback clears the target reference and retires that tom
 transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
-The service now drives the serialized production transaction; driver-backed target-live acceptance
-remains pending.
+The service drives the serialized production transaction; implementation commit
+`bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the driver-backed target-live, cleanup, and
+standard-user launch cases under the baseline and Driver Verifier phases.
 
 ## Protocol and evidence boundary
 
@@ -114,12 +115,10 @@ diagnostic ring.
 
 ## Planned sequence
 
-1. Complete driver-backed creation, mismatch, expiry, cancellation, replay, and target-live evidence
-   for the serialized launch transaction.
-2. Assign the target tree to a service-owned kill-on-close job and finish liveness rules.
-3. Separate critical alerts, operational events, and paged snapshots.
-4. Keep health and evidence acknowledgement independent of expensive scan workers.
-5. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
+1. Assign the target tree to a service-owned kill-on-close job and finish liveness rules.
+2. Separate critical alerts, operational events, and paged snapshots.
+3. Keep health and evidence acknowledgement independent of expensive scan workers.
+4. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
    and backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).

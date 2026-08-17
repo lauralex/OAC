@@ -27,8 +27,9 @@ The production driver implements negotiate, claim, status, and launch-ticket dis
 restricted service owns the serialized arm, suspended-create, exact-handle confirmation, and resume
 transaction. The shared protocol header also defines the typed event schema and IDs reserved for later
 transport work; their presence is not a claim that event delivery, scanning, or revocation requests
-are available. Source-level WP-01 through WP-04 foundations are integrated; current driver-backed
-service-launch and Driver Verifier acceptance remain pending.
+are available. WP-01 through WP-04 form a working production-control MVP and passed the
+commit-bound driver-backed service-launch and Driver Verifier campaign described below. WP-05 and
+later liveness, transport, policy, manifest, backend, and release controls remain separate work.
 
 ## Security and compatibility contract
 
@@ -297,10 +298,18 @@ component, and the privacy and stability rules applied by the collector.
 
 ## Validation evidence
 
-For the current WP-01 through WP-04 source, the repository workflow is configured to build Debug
-and Release and run the driver-free protocol unit executable. A current disposable-VM run of the
-production service launch, device ACL, per-file lifecycle, cleanup race, protocol integration suite,
-and Driver Verifier is still pending. Do not reuse the results below as evidence for those changes.
+Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` completed the bounded
+disposable-VM campaign on Microsoft Windows 11 Pro 10.0.26100 build 26100 in a networkless
+Generation 2 Hyper-V VM with test signing enabled and Secure Boot disabled. Host validation
+accepted 27 exact result records: five protocol executions and ten client, launcher, and preflight
+executions, plus the production boundary, exact remove/reinstall boundary, renamed signed load
+gate, kernel provenance, standard Driver Verifier, and final containment. Verifier recorded three
+loads and three unloads of `OAC.sys`; no crash event or minidump was present. The result ZIP SHA-256
+was `46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`.
+Compact status, host-manifest, containment, and log evidence is retained outside the repository at
+`C:\OAC-VM\evidence\20260817-bbf8f06`; the VM, checkpoint, VHD chain, package, seed, and large ZIP
+were deleted after validation. This evidence applies only to that implementation commit, build,
+configuration, and guest environment.
 
 The following evidence is historical and predates the current production service/session foundation:
 
@@ -337,10 +346,10 @@ The following evidence is historical and predates the current production service
   the broad hook and overlay false positives discovered in the first smoke were corrected.
 
 The checked-in driver remains intentionally unsigned; only the disposable-VM package is locally
-test signed. The historical 24H2 campaign is evidence for that older source and exact build, not
-for the current production foundation and not a universal Windows certification. Complete the current VM
-gate and the documented Windows 10/11/Server, HVCI/VBS, hardware, and game-specific matrix, then use
-an authorized production signing pipeline before deployment.
+test signed. The current campaign is acceptance evidence for one exact source and Windows build,
+not a universal Windows certification. Complete the documented Windows 10/11/Server, HVCI/VBS,
+hardware, and game-specific matrix, implement the remaining hardening work packages, and use an
+authorized production signing pipeline before deployment.
 
 ## Removed unsafe design
 

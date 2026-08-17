@@ -14,9 +14,11 @@
 - The restricted service owns one serialized launch transaction: authenticate a local interactive
   client, resolve and lock one executable, arm a bounded driver ticket, create the process suspended
   under the client token, confirm the exact process handle, and resume it. The per-file session,
-  cleanup/close rundown, creation-time binding, and live-target tombstone are implemented in source;
-  their current disposable-VM acceptance is pending. Job ownership and liveness, signed manifests or
-  policy, backend leases, and split alert/event/snapshot transports are not implemented.
+  cleanup/close rundown, creation-time binding, and live-target tombstone are implemented in source.
+  Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the complete
+  networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign. Job
+  ownership and liveness, signed manifests or policy, backend leases, and split
+  alert/event/snapshot transports are not implemented.
 
 ## Repository map
 

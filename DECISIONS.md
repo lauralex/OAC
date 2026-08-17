@@ -32,9 +32,9 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** WP-01 through WP-03 may be described as implemented in source while their work
   packages remain incomplete until the named host and disposable-VM acceptance tests pass.
 
-## ADR-004: Use protocol v5 for production control
+## ADR-004: Use the production protocol for privileged control
 
-- **Status:** Accepted; foundation implemented, acceptance pending
+- **Status:** Accepted; foundation implemented and VM tested
 - **Date:** 2026-08-16
 - **Decision:** Preserve v4 only as an explicit `LabMode=1` diagnostic path. Production authority
   uses the restricted service, exact v5 negotiation, and a per-file-object session.
@@ -63,17 +63,17 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-007: Retain a live-target tombstone after cleanup
 
-- **Status:** Accepted; source implemented, target-live acceptance pending
+- **Status:** Accepted; source implemented and target-live path VM tested
 - **Date:** 2026-08-16
 - **Decision:** Cleanup closes authority and drains rundown, but a session that still references a
   live target remains installed as an unusable tombstone until target exit.
 - **Consequence:** A replacement controller cannot claim the device while stale target protection
-  survives. The production service transaction can create this state; its dedicated VM case remains
-  required acceptance evidence.
+  survives. The production service transaction and the dedicated target-live case passed at
+  implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100.
 
 ## ADR-008: Keep the first production service surface narrow
 
-- **Status:** Accepted; source implemented, VM acceptance pending
+- **Status:** Accepted; source implemented and VM tested
 - **Date:** 2026-08-16
 - **Decision:** The restricted service owns one persistent production session and exposes
   identity-checked hello/status plus one serialized executable launch to the standard-user launcher.

@@ -14,8 +14,8 @@ the named revisions, not a claim that later work packages are complete.
 > [!NOTE]
 > The current working tree now contains the protocol-v5, restricted-service, and per-file session
 > foundations described in `ARCHITECTURE.md` and `PROTOCOL.md`. The statements below intentionally
-> remain frozen at `075ad21`; they are not a description of current source. Current disposable-VM
-> acceptance for WP-02 and WP-03 is pending.
+> remain frozen at `075ad21`; they are not a description of current source. See `PROGRESS.md` and
+> `TEST_MATRIX.md` for the current commit-bound WP-01 through WP-04 acceptance evidence.
 
 ## Revision delta
 

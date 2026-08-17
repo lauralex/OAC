@@ -6,18 +6,18 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-The current WP-01 through WP-04 source foundation is integrated and locally validated in the working tree
-that started from the frozen baseline. Its commit-bound disposable-VM result is still pending.
-Status requires both source and evidence; source present is not the same as an accepted work
-package.
+WP-01 through WP-04 now form a working production-control MVP. Implementation commit
+`bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the commit-bound disposable-VM and standard
+Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
+remaining production-hardening work packages.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
-| WP-00 Baseline, docs, tests | Locally validated; CI pending | Baseline recorded, docs updated, Debug/Release unit CI configured; both local configurations pass |
-| WP-01 Production protocol foundations | Source integrated; acceptance pending | Production ABI, explicit message types, validators, stable IDs, event schema, pure units, and available driver dispatch present; final host and VM results pending |
-| WP-02 Service and device identity | Source integrated; acceptance pending | Restricted service, identity-checked launcher IPC, production device ACL, installer and VM boundary phase present; disposable-VM results pending |
-| WP-03 Per-file session state | Source integrated; acceptance pending | File contexts, process/file/session identity, diagnostic/production exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and retained-file owner-exit tests present; VM results pending |
-| WP-04 Launch ticket and early binding | Source integrated; acceptance pending | One-use ticket ABI, creation-time creator/path binding, serialized service launch under the caller token, exact process-handle confirmation, hostile units, and VM acceptance source are present |
+| WP-00 Baseline, docs, tests | Tested foundation | Baseline recorded; Debug/Release builds and units, repository validation, packaging, and the current VM campaign passed; hosted CI remains a required merge gate |
+| WP-01 Production protocol foundations | Tested foundation | Production ABI, explicit message types, validators, stable IDs, event schema, pure units, driver dispatch, and driver-backed protocol execution passed on the named campaign |
+| WP-02 Service and device identity | VM-tested foundation | Restricted service, identity-checked launcher IPC, production device ACL, exact install/remove, standard-user status, and direct-open denials passed on the named campaign |
+| WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
+| WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
 | WP-05 Job and liveness | Planned | No service-owned target job or complete target revocation exists |
 | WP-06 Alert/event/snapshot transport | Planned | Typed event schema exists; no production event transport is advertised or dispatched |
 | WP-07 Bounded service scheduler | Planned | No independent health loop or bounded worker scheduler exists |
@@ -29,7 +29,8 @@ package.
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
 
-WP-02 and WP-03 are deliberately not marked complete.
+These tested states apply only to the named commit and Windows build; they are not general platform
+certification or production readiness.
 
 ## Frozen WP-00 evidence
 
@@ -90,7 +91,7 @@ revoke, signed-manifest, signed-policy, and backend capabilities remain unavaila
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Debug and Release `OAC-Protocol-Unit.exe` | Passed; `280/280` in each configuration |
+| Debug and Release `OAC-Protocol-Unit.exe` | Passed; `284/284` in each configuration |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
 | `tools/Test-OACRepository.ps1` (seven PowerShell, eleven XML, five YAML, one Python) | Passed |
@@ -102,15 +103,30 @@ revoke, signed-manifest, signed-policy, and backend capabilities remain unavaila
 CI workflow does not yet provide CodeQL, SBOM generation, or secret-scanning evidence. These are
 explicit remaining CI/static-analysis gaps rather than implied passes.
 
+## Current disposable-VM validation
+
+Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed on Microsoft Windows
+11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
+and Secure Boot disabled. The host accepted 27 exact result records, including five protocol
+executions and ten client, launcher, and preflight executions. The campaign passed production
+service identity and direct-open boundaries, one standard-user suspended launch with creation-time
+binding and exact-handle confirmation, exact remove/reinstall, per-file cleanup and tombstone races,
+the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier. Verifier
+recorded three loads and three unloads of `OAC.sys`; final Verifier flags were clear, both OAC
+services were stopped, the VM was Off with zero adapters, and there were zero crash events and zero
+minidumps. The validated result ZIP SHA-256 was
+`46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`.
+
+Compact evidence is retained at `C:\OAC-VM\evidence\20260817-bbf8f06`. Large disposable artifacts
+were deleted after validation.
+
 ## Current pending gates
 
-- Run the full driver-backed protocol suite in a disposable VM, including the production session lifecycle and
-  bounded cleanup race.
-- Run the `LabMode=0` service/launcher/direct-open boundary phase, including the standard-user
-  suspended launch, exact creation-time bind, handle confirmation, and resume evidence.
-- Run standard Driver Verifier on the current driver and record crash/dump and cleanup state.
-- Record the exact final commit, Windows build, security configuration, commands, exits, and
-  evidence location before changing WP-02 or WP-03 to complete.
+- Hosted Debug/Release build and unit checks remain required for each merge.
+- WP-05 must add service-owned job/liveness containment and deterministic target termination.
+- WP-06 through WP-08 must add production evidence transport, bounded scheduling, and centralized
+  typed policy before the hardened-foundation definition is met.
+- The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready or as a complete hardened foundation. The minimal
 control plane still lacks job/liveness containment, production telemetry, policy, signed manifest,
