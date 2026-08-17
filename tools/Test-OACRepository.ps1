@@ -99,6 +99,13 @@ try {
     $inf = Get-Content -LiteralPath (Join-Path $root 'OAC\OAC.inf')
     $startType = $inf | Select-String '^StartType\s*=\s*3\s*$'
     if ($null -eq $startType) { throw 'OAC.inf must remain demand-start (StartType=3).' }
+    $serviceLines = @($inf | Select-String '^\s*AddService\s*=')
+    $infText = $inf -join "`n"
+    if ($serviceLines.Count -ne 1 -or
+        $infText -notmatch
+            '(?m)^\[DefaultInstall\.NTamd64\.Services\]\nAddService\s*=\s*OAC\s*,\s*,\s*OAC\.Service\s*$') {
+        throw 'OAC.inf must install OAC as a device-less primitive service.'
+    }
 
     $blocked = @($files | Where-Object {
             $_ -match '(?i)\.(pdb|exe|sys|cat|cer|pfx|p12|pem|key|id0|id1|id2|idb|i64|nam|til|iso|vhdx?|avhdx|dmp)$'

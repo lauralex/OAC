@@ -673,28 +673,36 @@ function Add-TestCertificateToMachineStore([string]$StoreName) {
 
 function Stop-ServiceBounded([string]$Name) {
     $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
-    if ($null -eq $service -or $service.Status -eq 'Stopped') { return }
-    Stop-Service -Name $Name -Force
-    $service.WaitForStatus(
-        [ServiceProcess.ServiceControllerStatus]::Stopped,
-        [TimeSpan]::FromSeconds(20))
-    $service.Refresh()
-    if ($service.Status -ne 'Stopped') {
-        throw "Service $Name did not stop within the bounded wait."
+    try {
+        if ($null -eq $service -or $service.Status -eq 'Stopped') { return }
+        Stop-Service -Name $Name -Force
+        $service.WaitForStatus(
+            [ServiceProcess.ServiceControllerStatus]::Stopped,
+            [TimeSpan]::FromSeconds(20))
+        $service.Refresh()
+        if ($service.Status -ne 'Stopped') {
+            throw "Service $Name did not stop within the bounded wait."
+        }
+    } finally {
+        if ($null -ne $service) { $service.Dispose() }
     }
 }
 
 function Start-ServiceBounded([string]$Name) {
     $service = Get-Service -Name $Name -ErrorAction Stop
-    if ($service.Status -ne 'Running') {
-        Start-Service -Name $Name
-        $service.WaitForStatus(
-            [ServiceProcess.ServiceControllerStatus]::Running,
-            [TimeSpan]::FromSeconds(20))
-        $service.Refresh()
-    }
-    if ($service.Status -ne 'Running') {
-        throw "Service $Name did not start within the bounded wait."
+    try {
+        if ($service.Status -ne 'Running') {
+            Start-Service -Name $Name
+            $service.WaitForStatus(
+                [ServiceProcess.ServiceControllerStatus]::Running,
+                [TimeSpan]::FromSeconds(20))
+            $service.Refresh()
+        }
+        if ($service.Status -ne 'Running') {
+            throw "Service $Name did not start within the bounded wait."
+        }
+    } finally {
+        $service.Dispose()
     }
 }
 
@@ -1269,7 +1277,7 @@ if ($serviceKeyExists) {
         throw 'Refusing an OACService registration outside OAC-Test.'
     }
     Assert-ServiceConfiguration `
-        $serviceKey $quotedServicePath -AllowDisabled:$Remove
+        $serviceKey $quotedServicePath -AllowDisabled
     Assert-ServicePolicy $serviceDescriptor
 }
 $expectedInstalledFiles = @{
@@ -1300,6 +1308,8 @@ if ($Remove) {
     Stop-ServiceBounded 'OAC'
     Invoke-BoundedProcess 'sc.exe' @('delete', 'OACService')
     Wait-ServiceRemoved 'OACService' $serviceKey
+    Invoke-BoundedProcess 'sc.exe' @('delete', 'OAC')
+    Wait-ServiceRemoved 'OAC' 'HKLM:\SYSTEM\CurrentControlSet\Services\OAC'
 
     Invoke-BoundedProcess 'pnputil.exe' @(
         '/delete-driver',
@@ -1522,8 +1532,13 @@ try {
 }
 
 Start-ServiceBounded 'OAC'
-if ((Get-Service -Name OACService).Status -ne 'Stopped') {
-    throw 'OACService must remain stopped until the production-boundary phase.'
+$installedControlService = Get-Service -Name OACService -ErrorAction Stop
+try {
+    if ($installedControlService.Status -ne 'Stopped') {
+        throw 'OACService must remain stopped until the production-boundary phase.'
+    }
+} finally {
+    $installedControlService.Dispose()
 }
 
 if ($SmokeTestPid -ne 0) {

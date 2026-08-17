@@ -11,7 +11,7 @@ PnpLockdown=1
 CopyFiles=@OAC.sys
 
 [DefaultInstall.NTamd64.Services]
-AddService=OAC,0x00000002,OAC.Service
+AddService=OAC,,OAC.Service
 
 [DestinationDirs]
 DefaultDestDir=13
