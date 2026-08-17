@@ -113,7 +113,7 @@ static BOOLEAN OacIsTrustedRequestor(VOID)
 {
     PEPROCESS current = PsGetCurrentProcess();
     return OacSessionIsControllerProcess(current) ||
-           current == OacReadProcessIdentity(&g_ProtectedProcess);
+           OacIsProtectedProcessObject(current);
 }
 
 static BOOLEAN OacIsProtectedWindowsRequestor(VOID)
@@ -247,8 +247,24 @@ static VOID OacProcessNotify(
 {
     PEPROCESS releasedProtected = NULL;
     PEPROCESS releasedClient = NULL;
+    OAC_SESSION_PROCESS_CREATE_RESULT createResult;
 
-    if (CreateInfo != NULL) return;
+    if (CreateInfo != NULL)
+    {
+        if (!NT_SUCCESS(CreateInfo->CreationStatus)) return;
+        createResult = OacSessionNotifyProcessCreate(
+            Process,
+            ProcessId,
+            PsGetCurrentProcess(),
+            CreateInfo->CreatingThreadId.UniqueProcess,
+            CreateInfo->ImageFileName,
+            (BOOLEAN)CreateInfo->FileOpenNameAvailable);
+        if (createResult == OacSessionProcessCreateDenied)
+        {
+            CreateInfo->CreationStatus = STATUS_ACCESS_DENIED;
+        }
+        return;
+    }
 
     KeEnterCriticalRegion();
     ExAcquirePushLockExclusive(&g_IdentityLock);
@@ -699,7 +715,11 @@ NTSTATUS OacConfigureProtection(
 
 HANDLE OacProtectedProcessId(VOID)
 {
-    return ULongToHandle((ULONG)InterlockedCompareExchange64(&g_ProtectedPid, 0, 0));
+    HANDLE processId = OacSessionTargetProcessId();
+
+    if (processId != NULL) return processId;
+    return ULongToHandle(
+        (ULONG)InterlockedCompareExchange64(&g_ProtectedPid, 0, 0));
 }
 
 HANDLE OacTrustedClientProcessId(VOID)
@@ -710,7 +730,8 @@ HANDLE OacTrustedClientProcessId(VOID)
 BOOLEAN OacIsProtectedProcessObject(_In_opt_ PVOID Object)
 {
     return Object != NULL &&
-        Object == OacReadProcessIdentity(&g_ProtectedProcess);
+        (Object == OacReadProcessIdentity(&g_ProtectedProcess) ||
+         OacSessionIsTargetProcess((PEPROCESS)Object));
 }
 
 BOOLEAN OacIsTrustedClientProcess(_In_ PEPROCESS Process)

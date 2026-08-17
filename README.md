@@ -2,13 +2,14 @@
 
 OAC is a defensive, x64 Windows anti-cheat reference implementation. Its production control
 foundation consists of an unsigned-by-default, demand-start kernel driver, a restricted
-`OACService`, a standard-user launcher, and a typed protocol-v5 session bound to one file object and
-one referenced service process. The current service surface deliberately exposes only
-access-controlled, identity-checked health/status IPC; creation-time launch tickets and target
-liveness are the next work packages, so this revision is not yet a complete production
-anti-cheat.
+`OACService`, a standard-user launcher, and a typed production session bound to one file object and
+one referenced service process. The launcher can request one executable launch; the service
+authenticates the local client, resolves the executable under that identity, creates it suspended
+under the caller's token, confirms creation-time binding through a one-use kernel ticket, and only
+then resumes it. Signed launch manifests and service-owned job/liveness handling remain required,
+so this revision is not yet a complete production anti-cheat.
 
-The existing protocol-v4 scanner remains available only when the disposable-VM/lab `LabMode`
+The existing diagnostic scanner remains available only when the disposable-VM/lab `LabMode`
 registry switch is explicit. `OAC-Client` keeps one diagnostic handle for its entire run and refuses
 to act as a production controller. The kernel component performs bounded, IRQL-appropriate work;
 pageable inspection, signature validation, reporting, and stack walking stay in user mode. The
@@ -22,11 +23,12 @@ driver is always `SERVICE_DEMAND_START`, never boot-start.
 - [`docs/README.md`](docs/README.md) indexes current procedures, research notes, and the explicitly
   planned [`production hardening roadmap`](docs/hardening-plan.md).
 
-The production driver currently implements protocol-v5 negotiate, claim, and status requests and
-advertises only session control. The shared v5 header also defines the typed event schema and IDs
-reserved for later transport work; their presence is not a claim that event delivery, scanning,
-launch tickets, or revocation requests are available through v5 yet. Source-level WP-01 through
-WP-03 foundations are integrated, but their current disposable-VM acceptance run is still pending.
+The production driver implements negotiate, claim, status, and launch-ticket dispatch. The
+restricted service owns the serialized arm, suspended-create, exact-handle confirmation, and resume
+transaction. The shared protocol header also defines the typed event schema and IDs reserved for later
+transport work; their presence is not a claim that event delivery, scanning, or revocation requests
+are available. Source-level WP-01 through WP-04 foundations are integrated; current driver-backed
+service-launch and Driver Verifier acceptance remain pending.
 
 ## Security and compatibility contract
 
@@ -44,8 +46,8 @@ WP-03 foundations are integrated, but their current disposable-VM acceptance run
   claimed file object, a random 128-bit session ID, and a nonzero generation. Cleanup revokes the
   file session, and a live diagnostic target leaves a tombstone that prevents unsafe reclamation.
   Numeric PIDs are diagnostics only. Administrators retain direct access only in explicit lab mode.
-- Protocol authority cannot be mixed on one file: v5 negotiation excludes privileged v4 calls, and
-  a v4 diagnostic claim prevents later v5 negotiation.
+- Protocol authority cannot be mixed on one file: production negotiation excludes privileged
+  diagnostic calls, and a diagnostic claim prevents later production negotiation.
 - A single binary cannot safely cover every historical Windows release and architecture. Windows
   XP lacks the object callbacks required for handle filtering, and x86/ARM64 require different
   context, register, PE, and calling-convention implementations. OAC fails or degrades explicitly
@@ -57,8 +59,8 @@ WP-03 foundations are integrated, but their current disposable-VM acceptance run
 
 ## Lab scanner capability coverage
 
-The table below describes the protocol-v4 diagnostic scanner available only with `LabMode=1`. The
-status-only production service does not expose these scan operations yet.
+The table below describes the diagnostic scanner available only with `LabMode=1`. The production
+service does not expose these scan operations.
 
 | Capability | Implementation |
 |---|---|
@@ -141,8 +143,18 @@ standard user can verify the production control path without receiving a driver 
 OAC-Launcher.exe --status
 ```
 
-The current service intentionally does not launch a game. Launch requests remain unavailable until
-the creation-time ticket and liveness work packages are implemented and tested.
+The same standard user can request one executable launch:
+
+```powershell
+OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
+```
+
+The launch request accepts one absolute local executable path and no command-line arguments. The
+service resolves and keeps the file open under the authenticated caller identity, creates the target
+suspended with that caller's primary token, confirms the exact creation-time driver binding, and
+resumes the initial thread. A production service session intentionally owns one target. Service-owned
+job containment, target-tree liveness, signed-manifest authorization, arguments, and session reuse
+remain later work packages.
 
 The following direct scanner flows are lab-only. They require `LabMode=1`, must not be enabled on a
 production machine, and use `audit` or `test` deployment mode.
@@ -222,8 +234,9 @@ telemetry path. A renamed helper cannot evade the monotonic post-start load latc
 mapped payload is handled by loader-independent execution and control-flow checks rather than by
 its filename. Because the public image callback is observational, the lab path can fail its gate or
 revoke its diagnostic target after the latch is observed; OAC does not claim that it can
-retroactively prevent a payload's already-entered `DriverEntry`. Production launch enforcement is
-planned with the launch-ticket and liveness work packages.
+retroactively prevent a payload's already-entered `DriverEntry`. The current production launch path
+closes the post-creation binding gap; target-tree liveness and signed launch authorization remain
+separate work packages.
 
 ## Disposable-VM test signing
 
@@ -284,12 +297,12 @@ component, and the privacy and stability rules applied by the collector.
 
 ## Validation evidence
 
-For the current WP-01 through WP-03 source, the repository workflow is configured to build Debug
+For the current WP-01 through WP-04 source, the repository workflow is configured to build Debug
 and Release and run the driver-free protocol unit executable. A current disposable-VM run of the
-v5 service, device ACL, per-file lifecycle, cleanup race, protocol integration suite, and Driver
-Verifier is still pending. Do not reuse the results below as evidence for those changes.
+production service launch, device ACL, per-file lifecycle, cleanup race, protocol integration suite,
+and Driver Verifier is still pending. Do not reuse the results below as evidence for those changes.
 
-The following evidence is historical and predates the current v5 service/session foundation:
+The following evidence is historical and predates the current production service/session foundation:
 
 - Clean x64 Debug and Release rebuilds with MSVC `/W4`, SDL checks, and warnings as errors.
 - x64 MSVC/PREfast code analysis for both the driver and client, plus user-mode Clang static
@@ -312,7 +325,7 @@ The following evidence is historical and predates the current v5 service/session
   enabled; the durable guest result reported `overall_pass: true`. Evidence is emitted to a
   caller-selected directory outside the source tree, and the VM is shut down with one current
   pre-Verifier checkpoint.
-- A focused protocol-v4 campaign on the same networkless 24H2 VM loaded a renamed, signed transient
+- A focused diagnostic-protocol campaign on the same networkless 24H2 VM loaded a renamed, signed transient
   driver after OAC was armed. OAC retained `post-start driver loads=1` and `load-gate trips=1`, made
   both immediate and post-cleanup scans fail, and reset only after a demand-start service restart.
   The test repeated under standard Driver Verifier with all 23 protocol checks passing, no recent
@@ -325,7 +338,7 @@ The following evidence is historical and predates the current v5 service/session
 
 The checked-in driver remains intentionally unsigned; only the disposable-VM package is locally
 test signed. The historical 24H2 campaign is evidence for that older source and exact build, not
-for the current v5 foundation and not a universal Windows certification. Complete the current VM
+for the current production foundation and not a universal Windows certification. Complete the current VM
 gate and the documented Windows 10/11/Server, HVCI/VBS, hardware, and game-specific matrix, then use
 an authorized production signing pipeline before deployment.
 

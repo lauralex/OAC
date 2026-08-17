@@ -68,18 +68,20 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Decision:** Cleanup closes authority and drains rundown, but a session that still references a
   live target remains installed as an unusable tombstone until target exit.
 - **Consequence:** A replacement controller cannot claim the device while stale target protection
-  survives. Production cannot exercise this path until launch-ticket target binding exists; the v4
-  lab path and a dedicated VM case must validate it in the meantime.
+  survives. The production service transaction can create this state; its dedicated VM case remains
+  required acceptance evidence.
 
-## ADR-008: Keep the first production service surface status-only
+## ADR-008: Keep the first production service surface narrow
 
 - **Status:** Accepted; source implemented, VM acceptance pending
 - **Date:** 2026-08-16
-- **Decision:** The restricted service owns one persistent v5 session and exposes only identity-
-  checked hello/status IPC to the standard-user launcher.
-- **Consequence:** This phase can validate service, device, IPC, and session authority without
-  pretending that launch tickets, target liveness, manifests, policy, telemetry, or backend leases
-  exist.
+- **Decision:** The restricted service owns one persistent production session and exposes
+  identity-checked hello/status plus one serialized executable launch to the standard-user launcher.
+  Launch resolution and process creation use the authenticated caller identity; the service arms the
+  kernel ticket, creates the process suspended, confirms the exact handle, and resumes it.
+- **Consequence:** The production surface has no diagnostic scans, arbitrary arguments, policy or
+  manifest transfer, evidence upload, or backend protocol. One target is allowed per service session;
+  job ownership, liveness, and signed executable authorization remain separate work packages.
 
 ## ADR-009: Defer forced integrity on user-mode test binaries
 

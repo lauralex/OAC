@@ -112,7 +112,7 @@ NTSTATUS OacClose(
 
 static ULONG OacV5Capabilities(VOID)
 {
-    return OAC_V5_CAP_SESSION_CONTROL;
+    return OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET;
 }
 
 static VOID OacInitializeV5Response(
@@ -423,6 +423,153 @@ NTSTATUS OacDeviceControl(
                 &snapshot);
             response->State = snapshot.State;
             response->Capabilities = OacV5Capabilities();
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IOCTL_OAC_ARM_LAUNCH:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateArmLaunchRequest(
+                (const OAC_ARM_LAUNCH_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_ARM_LAUNCH_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            const OAC_ARM_LAUNCH_REQUEST request =
+                *(const OAC_ARM_LAUNCH_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            OAC_LAUNCH_ID launchId;
+            ULONGLONG expirationInterruptTime100ns;
+            POAC_ARM_LAUNCH_RESPONSE response;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionArmLaunch(
+                &lease,
+                request.TimeToLiveMilliseconds,
+                request.CanonicalNtPath,
+                request.CanonicalNtPathLength,
+                &launchId,
+                &expirationInterruptTime100ns,
+                &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            response = (POAC_ARM_LAUNCH_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_MESSAGE_ARM_LAUNCH,
+                &snapshot);
+            response->LaunchId = launchId;
+            response->ExpirationInterruptTime100ns =
+                expirationInterruptTime100ns;
+            response->State = snapshot.State;
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IOCTL_OAC_CANCEL_LAUNCH:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateCancelLaunchRequest(
+                (const OAC_CANCEL_LAUNCH_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_CANCEL_LAUNCH_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            const OAC_CANCEL_LAUNCH_REQUEST request =
+                *(const OAC_CANCEL_LAUNCH_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_CANCEL_LAUNCH_RESPONSE response;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionCancelLaunch(
+                &lease,
+                &request.LaunchId,
+                &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            response = (POAC_CANCEL_LAUNCH_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_MESSAGE_CANCEL_LAUNCH,
+                &snapshot);
+            response->Header.Flags = OAC_V5_RESPONSE_REVOKED;
+            response->State = snapshot.State;
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IOCTL_OAC_CONFIRM_TARGET:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateConfirmTargetRequest(
+                (const OAC_CONFIRM_TARGET_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_CONFIRM_TARGET_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            const OAC_CONFIRM_TARGET_REQUEST request =
+                *(const OAC_CONFIRM_TARGET_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_CONFIRM_TARGET_RESPONSE response;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionConfirmTarget(
+                &lease,
+                &request.LaunchId,
+                request.TargetProcessHandle,
+                &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            response = (POAC_CONFIRM_TARGET_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_MESSAGE_CONFIRM_TARGET,
+                &snapshot);
+            response->TargetProcessId = snapshot.TargetProcessId;
+            response->State = snapshot.State;
             bytesWritten = sizeof(*response);
             status = STATUS_SUCCESS;
         }

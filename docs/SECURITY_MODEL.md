@@ -1,6 +1,6 @@
 # OAC security model
 
-**Status:** WP-01 through WP-03 controls implemented in source; current disposable-VM acceptance
+**Status:** WP-01 through WP-04 controls implemented in source; current disposable-VM acceptance
 pending
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
@@ -25,19 +25,19 @@ trust boundaries, adversaries, and failure behavior.
 | Driver load | Windows Code Integrity decides whether the demand-start driver image may load | Existing control; current driver remains unsigned by default |
 | Driver device | Production DACL grants SYSTEM and the exact service SID; Administrators are added only with `LabMode=1` | Implemented in source; VM ACL checks pending |
 | Service identity | The test installer sets SYSTEM owner/group and explicitly grants Administrators and Interactive query-status/start only; the restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Test-installer source present; targeted Windows 11 24H2 build 26100 native-policy probe passed; full install, effective-access, and production-deployment acceptance pending |
-| Driver controller | One v5 session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Implemented in source; lifecycle VM checks pending |
-| Launcher IPC | Local, remote-rejecting, status-only named pipe with server/client identity cross-checks | Implemented in source; unauthorized-client VM checks pending |
-| Protected target | No production target binding or launch exists; v4 lab mode can bind an already-created diagnostic target | Production control planned in WP-04 |
+| Driver controller | One production session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Implemented in source; lifecycle VM checks pending |
+| Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Implemented in source; unauthorized-client VM checks pending |
+| Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Implemented in source; driver-backed launch/race evidence pending |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Existing implementation; production use awaits target binding |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Existing implementation; current VM rerun pending |
-| Typed evidence | Stable v5 IDs and provenance-preserving record schema are defined with pure validation tests | Test source present; v5 transport planned |
-| Local report | V4 lab scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
+| Typed evidence | Stable production IDs and a provenance-preserving record schema are defined with pure validation tests | Test source present; production transport planned |
+| Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Policy, manifest, backend | No production trust boundary exists | Planned |
 
 ## Production authority
 
 Production file creation and claim require the exact restricted service token, not Administrator
-membership. Negotiation and claim occur on one persistent service handle. Every later accepted v5
+membership. Negotiation and claim occur on one persistent service handle. Every later accepted production
 request must use that file from the referenced service process and match the session ID, generation,
 and active state. Numeric PIDs are returned only for diagnostics and cannot authorize a request.
 
@@ -46,9 +46,9 @@ session values. A duplicated handle used by another process is rejected by proce
 Accepted requests hold rundown protection so cleanup can stop acquisition and wait for in-flight
 work before releasing controller objects.
 
-V4 and v5 authorization cannot be mixed on one file. Negotiation and claim are serialized: a
-v5-negotiated or claimed file cannot issue privileged v4 operations, while a file that claimed the
-unnegotiated v4 diagnostic path cannot later negotiate v5.
+Diagnostic and production authorization cannot be mixed on one file. Negotiation and claim are
+serialized: a production-negotiated or claimed file cannot issue privileged diagnostic operations,
+while a file that claimed the unnegotiated diagnostic path cannot later negotiate production.
 
 ### Tombstone invariant
 
@@ -58,9 +58,9 @@ tombstone and blocks a replacement claim. Only target exit removes the last targ
 permits retirement. This prevents a new controller from inheriting a driver whose prior target
 protection state is still active.
 
-The invariant is implemented in source. A production session cannot bind a target yet, so the
-target-live case currently arises only through the v4 lab compatibility path; its current VM
-acceptance evidence is pending.
+The invariant is implemented for diagnostic binding and the production service's serialized arm,
+suspended create, confirm-or-cancel, and resume transaction. Driver-backed acceptance remains
+pending.
 
 ## In-scope adversaries
 
@@ -88,25 +88,32 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   state, install undocumented loader hooks, or weaken host security controls.
 - Kernel callbacks and IPI routines perform bounded, IRQL-appropriate work.
 - Private kernel profiles are optional and exact-image gated.
-- V5 uses fixed, C-compatible layouts with explicit `MessageType`, strict sizes, request/session
+- The production protocol uses fixed, C-compatible layouts with explicit `MessageType`, strict sizes, request/session
   correlation, reserved-field checks, flag masks, and bounded payload validation.
 - Production device and claim authorization require the exact restricted service identity; direct
   administrator control is lab-only.
 - The disposable-VM installer sets the service owner and group to SYSTEM; its exact DACL gives
   SYSTEM full control and explicitly grants Administrators and Interactive only query-status and
   start rights. Production deployment tooling must reproduce and verify this policy.
-- Each file selects one protocol authority path; v4 and v5 cannot be combined to bypass state or
+- Each file selects one protocol authority path; diagnostic and production modes cannot be combined to bypass state or
   identity checks.
 - File cleanup drains in-flight requests, revokes authority, and preserves a live-target tombstone.
+- A production launch ticket is random, bounded, one-use, and bound to the exact service creator and
+  canonical image path; monitoring requires confirmation through an exact user-mode process handle.
+- The service authenticates the pipe client, opens and resolves the executable under impersonation,
+  duplicates the same identity to a primary token, and keeps the selected file locked against writes
+  and deletion through process creation.
+- The production controller may create exactly one child process per session; additional children
+  from that service process are denied after target binding.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-These statements describe source behavior, not completed platform acceptance. Driver-backed v5,
+These statements describe source behavior, not completed platform acceptance. Driver-backed production,
 service installation, ACL, lifecycle, race, and Driver Verifier tests must pass in the disposable VM
 before WP-02 or WP-03 can be marked complete.
 
 ## Planned controls
 
-- One-time launch tickets and creation-time target binding.
+- Signed-manifest and stable executable-identity verification before a launch ticket is armed.
 - Kill-on-close job ownership and deterministic target termination after service/session/backend
   loss.
 - Separate critical alert, operational event, and paged snapshot transports.
@@ -120,11 +127,12 @@ An observation, confidence assessment, policy violation, and enforcement action 
 single weak heuristic such as an overlay style, virtualization indicator, or global DR7 value is
 not proof of cheating. Evidence loss, incomplete scanning, unavailable security state, or an
 unsupported platform must remain explicit rather than silently becoming a clean result. Display
-text has no policy meaning in the v5 schema.
+text has no policy meaning in the production schema.
 
-Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The v4 lab
-path can fail its gate after detecting the latch; the status-only production path cannot yet launch
-or revoke a game and does not claim to replace Windows Code Integrity.
+Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
+path can fail its gate after detecting the latch; the production launch transaction closes the
+creation-time target-binding gap but does not replace Windows Code Integrity or the later signed
+manifest and liveness controls.
 
 ## Unsupported guarantees
 
@@ -141,7 +149,7 @@ supported Server releases; the verified support matrix remains incomplete.
 
 ## Lab-only operations
 
-Protocol v4 direct driver control, test signing, self-signed certificates, driver installation,
+Diagnostic direct driver control, test signing, self-signed certificates, driver installation,
 Driver Verifier, private kernel profiles, `DbgUiRemoteBreakin` patching, and
 `ThreadHideFromDebugger` belong only in documented diagnostic or disposable-VM paths. They are not
 production trust mechanisms.

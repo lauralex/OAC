@@ -1,6 +1,6 @@
 # OAC test matrix
 
-**Status:** WP-01 through WP-03 test sources integrated; current disposable-VM acceptance pending
+**Status:** WP-01 through WP-04 test sources integrated; current disposable-VM acceptance pending
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -16,14 +16,14 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Final branch result pending |
-| `Release|x64` solution build | Workflow matrix configured | Frozen baseline Release was tested; current result pending |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Final local/CI result pending |
-| Protocol layout assertions | V4 and v5 compile-time sizes/offsets | Compiled result pending final build |
-| `InfVerif /w` | Required for package changes | Frozen baseline passed; current rerun pending |
-| PowerShell/Python/XML/YAML parse | Required repository checks | Frozen baseline passed; current rerun pending |
+| `Debug|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; final-commit CI pending |
+| `Release|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; final-commit CI pending |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local Debug/Release passed `277/277`; final-commit CI pending |
+| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations; final-commit CI pending |
+| `InfVerif /w` | Required for package changes | Current local validation passed |
+| PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
 | Clang-Tidy | Required for scanner changes | Historical result only |
-| PREfast/MSVC analysis | Required for driver/lifetime changes | Current rerun pending |
+| Driver PREfast | Required for driver/lifetime changes | Current local `DriverMinimumRules` run passed with zero warnings/errors |
 | Secret scan | GitGuardian branch check configured | Required repository check |
 
 The workflow builds Debug and Release, runs
@@ -31,7 +31,7 @@ The workflow builds Debug and Release, runs
 keeps the stable aggregate job name `build`. A green hosted workflow is compile and pure-unit
 evidence; it does not load the driver or test Windows service security.
 
-### Driver-free v5 coverage
+### Driver-free production protocol coverage
 
 The pure C/C++ unit source covers:
 
@@ -42,20 +42,24 @@ The pure C/C++ unit source covers:
 - negotiation, claim, and status requests and responses, including revoked-state consistency;
 - stable rule/event IDs, severity, confidence, category, and the exact session transition matrix;
 - event provenance rules and hostile none, binary, and UTF-16 payload cases, including dirty tails,
-  embedded nulls, and invalid surrogate pairs.
+  embedded nulls, and invalid surrogate pairs;
+- launch-ticket layouts, strict canonical NT paths, expiry/cancel/replay decisions, exact process
+  handles, response correlation, and terminal state invariants; and
+- launcher/service launch IPC layouts, hostile DOS paths, reserved fields, dirty tails, and success
+  or rejection identity invariants.
 
 This validates the schema and pure validators, not the kernel dispatcher or service boundary.
 
 ## Driver-backed protocol coverage
 
 `OAC-Protocol-Test.exe` requires an installed, running test-signed driver in an isolated disposable
-VM. Its current source includes the earlier v4 malformed-request, scan, CPU, finding, and driver-gate
-coverage plus these v5 cases:
+VM. Its current source includes the earlier diagnostic malformed-request, scan, CPU, finding, and
+driver-gate coverage plus these production cases:
 
 - claim denied before negotiation and production claim denied to a lab administrator;
 - exact negotiation/claim/status correlation and malformed version, size, request ID, flags,
   `MessageType`, session, generation, mode, and reserved fields;
-- bidirectional per-file exclusion between v5 negotiation/claim and privileged v4 operations;
+- bidirectional per-file exclusion between production negotiation/claim and privileged diagnostic operations;
 - a second file may negotiate but cannot claim or use copied session credentials;
 - a duplicated handle used from another process cannot use the owning file's session;
 - cleanup/close removes authority and a replacement claim receives a different session ID and
@@ -63,27 +67,34 @@ coverage plus these v5 cases:
 - four concurrent status workers each complete 32 valid warm-up requests, then race one final
   request with handle cleanup; completions must be valid or fail with a bounded close result;
 - a replacement claim after the race advances generation;
-- closing the controller with a live v4 target leaves a tombstone, rejects a replacement claim
+- closing the controller with a live diagnostic target leaves a tombstone, rejects a replacement claim
   with `ERROR_BUSY`, and permits reclaim only after the target exits; and
-- after a v5 owner exits, a wrong-process holder of the exact old file object remains denied while
-  a different file immediately claims a distinct, higher-generation session.
+- after a production-session owner exits, a wrong-process holder of the exact old file object remains denied while
+  a different file immediately claims a distinct, higher-generation session; and
+- malformed launch requests are rejected while diagnostic sessions receive `ERROR_NOT_SUPPORTED`
+  for production arm, cancel, and confirm operations.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
-Driver Verifier results are pending. The suite does not yet exercise a creation-time launch ticket,
-production target binding, alert acknowledgement, or snapshot paging.
+Driver Verifier results are pending. Driver-free tests cover the launch wire contract, canonical
+path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
+and terminal state transitions. The VM production boundary exercises the real creation callback and
+service-owned launch; alert acknowledgement and snapshot paging remain later work.
 
 ## Service and launcher coverage
 
 The VM harness source now contains a bounded `LabMode=0` production-boundary phase that:
 
-- starts the restricted `OACService` and requires its v5 production claim;
+- starts the restricted `OACService` and requires its production claim;
 - runs standard-user launcher status twice;
-- attempts direct driver opens as a limited user and as an administrator and requires both to fail;
+- attempts direct driver opens as LocalSystem, a limited user, and an administrator and requires all
+  three to fail;
+- launches `whoami.exe` as the standard user, requires exact creation-time binding and process-handle
+  confirmation, and accepts success only after the initial thread is resumed;
 - stops the service and restores explicit lab mode before diagnostic tests;
 - records cleanup separately so a failed boundary test cannot silently leave the wrong mode active.
 
 The installer structurally reads back the service type, manual start, LocalSystem account, OAC
-dependency, restricted service SID type, required privilege list, fixed SID, binary paths, SYSTEM
+dependency, restricted service SID type, exact four-privilege list, fixed SID, binary paths, SYSTEM
 owner/group, and exact query-status/start-only Administrators and Interactive ACL. It also verifies
 a one-day reset policy with one restart after five seconds followed by no further action, including
 non-crash failures. A targeted LocalSystem native-policy probe passed on Windows 11 24H2 build
@@ -94,12 +105,13 @@ acceptance remain pending.
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Historical for protocol v4; current v5 run pending |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Historical for the diagnostic protocol; current production run pending |
 | Standard Driver Verifier on `OAC.sys` | Historical for earlier source; current session/rundown run pending |
-| V5 service identity, device ACL, standard-user launcher, admin direct-open denial | Source present; current VM run pending |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Source present; current VM run pending |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| V5 per-file cleanup/close and concurrent status teardown | Source present; current VM run pending |
+| Production per-file cleanup/close and concurrent status teardown | Source present; current VM run pending |
 | Live-target tombstone and later retirement | Source and driver-backed test present; current VM result pending |
+| Standard-user service launch, creation-time binding, confirmation, and resume | Source and VM harness present; current VM result pending |
 | Renamed, signed normal post-start driver image | Historical load-latch evidence; current rerun pending |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
@@ -117,10 +129,10 @@ for the current service/session source.
 | Work package | Required evidence | State |
 |---|---|---|
 | WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Source and workflow present; final results pending |
-| WP-01 protocol v5 | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Source and unit coverage present; final host/VM results pending |
+| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Source and unit coverage present; final host/VM results pending |
 | WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Source and VM harness present; VM result pending |
 | WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Source and driver-backed harness present; current VM result pending |
-| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Planned |
+| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Driver/service/launcher source, hostile units, and VM acceptance source present; current driver-backed result pending |
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Planned |
 | WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Planned |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Planned |

@@ -3,10 +3,12 @@
 #include <Windows.h>
 #include <bcrypt.h>
 #include <sddl.h>
+#include <userenv.h>
 
 #include <array>
 #include <cstddef>
 #include <new>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,7 @@ namespace
 {
 constexpr wchar_t kDevicePath[] = L"\\\\.\\OAC";
 constexpr DWORD kPipeIoTimeoutMs = 5000;
+constexpr ULONG kLaunchTimeToLiveMs = 10000;
 constexpr wchar_t kPipeSddl[] =
     L"O:SYG:SYD:P"
     L"(D;;GA;;;NU)"
@@ -74,6 +77,24 @@ public:
     LocalBuffer(const LocalBuffer&) = delete;
     LocalBuffer& operator=(const LocalBuffer&) = delete;
     LocalBuffer() = default;
+
+    void** put() noexcept { return &value_; }
+    [[nodiscard]] void* get() const noexcept { return value_; }
+
+private:
+    void* value_ = nullptr;
+};
+
+class EnvironmentBlock
+{
+public:
+    ~EnvironmentBlock()
+    {
+        if (value_ != nullptr) DestroyEnvironmentBlock(value_);
+    }
+    EnvironmentBlock(const EnvironmentBlock&) = delete;
+    EnvironmentBlock& operator=(const EnvironmentBlock&) = delete;
+    EnvironmentBlock() = default;
 
     void** put() noexcept { return &value_; }
     [[nodiscard]] void* get() const noexcept { return value_; }
@@ -168,6 +189,22 @@ bool GroupsContainWellKnown(
     return false;
 }
 
+bool PrivilegesContain(
+    const TOKEN_PRIVILEGES* privileges,
+    const wchar_t* name)
+{
+    if (privileges == nullptr || name == nullptr) return false;
+    LUID required{};
+    if (!LookupPrivilegeValueW(nullptr, name, &required)) return false;
+    for (DWORD index = 0; index < privileges->PrivilegeCount; ++index)
+    {
+        if (privileges->Privileges[index].Luid.LowPart == required.LowPart &&
+            privileges->Privileges[index].Luid.HighPart == required.HighPart)
+            return true;
+    }
+    return false;
+}
+
 DWORD VerifyServiceIdentity()
 {
     UniqueHandle token;
@@ -188,9 +225,11 @@ DWORD VerifyServiceIdentity()
     std::vector<std::byte> userBuffer;
     std::vector<std::byte> groupBuffer;
     std::vector<std::byte> restrictedBuffer;
+    std::vector<std::byte> privilegeBuffer;
     if (!QueryToken(token.get(), TokenUser, userBuffer, error) ||
         !QueryToken(token.get(), TokenGroups, groupBuffer, error) ||
-        !QueryToken(token.get(), TokenRestrictedSids, restrictedBuffer, error))
+        !QueryToken(token.get(), TokenRestrictedSids, restrictedBuffer, error) ||
+        !QueryToken(token.get(), TokenPrivileges, privilegeBuffer, error))
         return error;
 
     const auto* user = reinterpret_cast<const TOKEN_USER*>(userBuffer.data());
@@ -208,12 +247,18 @@ DWORD VerifyServiceIdentity()
     const auto* groups = reinterpret_cast<const TOKEN_GROUPS*>(groupBuffer.data());
     const auto* restricted = reinterpret_cast<const TOKEN_GROUPS*>(
         restrictedBuffer.data());
+    const auto* privileges = reinterpret_cast<const TOKEN_PRIVILEGES*>(
+        privilegeBuffer.data());
     if (!GroupsContain(
             groups,
             serviceSid.get(),
             SE_GROUP_ENABLED,
             SE_GROUP_USE_FOR_DENY_ONLY) ||
-        !GroupsContain(restricted, serviceSid.get(), 0, 0))
+        !GroupsContain(restricted, serviceSid.get(), 0, 0) ||
+        !PrivilegesContain(privileges, SE_ASSIGNPRIMARYTOKEN_NAME) ||
+        !PrivilegesContain(privileges, SE_CHANGE_NOTIFY_NAME) ||
+        !PrivilegesContain(privileges, SE_IMPERSONATE_NAME) ||
+        !PrivilegesContain(privileges, SE_INCREASE_QUOTA_NAME))
         return ERROR_SERVICE_LOGON_FAILED;
 
     DWORD accountSidSize = 0;
@@ -267,6 +312,7 @@ bool SameLuid(const LUID& left, const LUID& right) noexcept
 struct ClientIdentity
 {
     UniqueHandle process;
+    UniqueHandle primaryToken;
     DWORD processId = 0;
     DWORD sessionId = 0;
     bool revertFailed = false;
@@ -285,6 +331,7 @@ DWORD AuthorizeClient(HANDLE pipe, ClientIdentity& identity)
 
     DWORD result = ERROR_SUCCESS;
     UniqueHandle threadToken;
+    UniqueHandle primaryToken;
     std::vector<std::byte> threadUserBuffer;
     std::vector<std::byte> groupBuffer;
     std::vector<std::byte> integrityBuffer;
@@ -293,7 +340,11 @@ DWORD AuthorizeClient(HANDLE pipe, ClientIdentity& identity)
     try
     {
         HANDLE rawToken = nullptr;
-        if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &rawToken))
+        if (!OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_QUERY | TOKEN_DUPLICATE,
+                TRUE,
+                &rawToken))
         {
             result = GetLastError();
         }
@@ -312,7 +363,7 @@ DWORD AuthorizeClient(HANDLE pipe, ClientIdentity& identity)
              threadType != TokenImpersonation ||
              !QueryTokenValue(
                  threadToken.get(), TokenImpersonationLevel, level, error) ||
-             level != SecurityIdentification ||
+             level != SecurityImpersonation ||
              !QueryTokenValue(
                  threadToken.get(), TokenSessionId, threadSessionId, error) ||
              !QueryTokenValue(
@@ -362,6 +413,53 @@ DWORD AuthorizeClient(HANDLE pipe, ClientIdentity& identity)
                     groups, WinNetworkSid, SE_GROUP_ENABLED) ||
                 integrity < SECURITY_MANDATORY_MEDIUM_RID)
                 result = ERROR_ACCESS_DENIED;
+        }
+
+        if (result == ERROR_SUCCESS)
+        {
+            HANDLE rawPrimaryToken = nullptr;
+            if (!DuplicateTokenEx(
+                    threadToken.get(),
+                    TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+                    nullptr,
+                    SecurityImpersonation,
+                    TokenPrimary,
+                    &rawPrimaryToken))
+            {
+                result = GetLastError();
+            }
+            else
+            {
+                primaryToken.reset(rawPrimaryToken);
+                TOKEN_TYPE primaryType{};
+                TOKEN_STATISTICS primaryStatistics{};
+                DWORD primarySessionId = MAXDWORD;
+                if (!QueryTokenValue(
+                        primaryToken.get(),
+                        TokenType,
+                        primaryType,
+                        error) ||
+                    primaryType != TokenPrimary ||
+                    !QueryTokenValue(
+                        primaryToken.get(),
+                        TokenSessionId,
+                        primarySessionId,
+                        error) ||
+                    !QueryTokenValue(
+                        primaryToken.get(),
+                        TokenStatistics,
+                        primaryStatistics,
+                        error) ||
+                    primarySessionId != pipeSessionId ||
+                    !SameLuid(
+                        primaryStatistics.AuthenticationId,
+                        threadStatistics.AuthenticationId))
+                {
+                    result = error == ERROR_SUCCESS
+                        ? ERROR_ACCESS_DENIED
+                        : error;
+                }
+            }
         }
     }
     catch (const std::bad_alloc&)
@@ -437,6 +535,7 @@ DWORD AuthorizeClient(HANDLE pipe, ClientIdentity& identity)
     }
 
     identity.process = std::move(process);
+    identity.primaryToken = std::move(primaryToken);
     identity.processId = clientPid;
     identity.sessionId = pipeSessionId;
     return ERROR_SUCCESS;
@@ -565,14 +664,466 @@ DWORD WriteMessage(
 bool ValidRequest(const OAC_IPC_REQUEST& request, DWORD bytesRead)
 {
     constexpr DWORD requestSize = static_cast<DWORD>(sizeof(request));
-    return bytesRead == requestSize &&
-        request.Header.Version == OAC_IPC_VERSION &&
-        request.Header.Size == requestSize &&
-        request.Header.Flags == 0 &&
-        request.Header.RequestId != 0 &&
+    return OacIpcHeaderMatches(
+            &request.Header,
+            bytesRead,
+            requestSize,
+            request.Header.Type) &&
         request.Reserved == 0 &&
         (request.Header.Type == OAC_IPC_TYPE_HELLO_REQUEST ||
          request.Header.Type == OAC_IPC_TYPE_STATUS_REQUEST);
+}
+
+DWORD ReadFinalPath(
+    HANDLE file,
+    DWORD flags,
+    std::wstring& path)
+{
+    const DWORD required = GetFinalPathNameByHandleW(
+        file, nullptr, 0, flags);
+    if (required == 0) return GetLastError();
+    if (required > 32768) return ERROR_FILENAME_EXCED_RANGE;
+
+    std::vector<wchar_t> buffer(static_cast<size_t>(required) + 1u);
+    const DWORD written = GetFinalPathNameByHandleW(
+        file,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
+        flags);
+    if (written == 0) return GetLastError();
+    if (written >= buffer.size()) return ERROR_INSUFFICIENT_BUFFER;
+    path.assign(buffer.data(), written);
+    return ERROR_SUCCESS;
+}
+
+DWORD OpenClientExecutable(
+    HANDLE pipe,
+    const OAC_IPC_LAUNCH_REQUEST& request,
+    UniqueHandle& executable,
+    std::wstring& finalDosPath,
+    std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>& finalNtPath,
+    ULONG& finalNtPathLength,
+    bool& revertFailed)
+{
+    static_assert(sizeof(wchar_t) == sizeof(uint16_t));
+    std::wstring requestedPath;
+    requestedPath.reserve(request.ExecutablePathLength);
+    for (ULONG index = 0; index < request.ExecutablePathLength; ++index)
+        requestedPath.push_back(static_cast<wchar_t>(request.ExecutablePath[index]));
+
+    if (!ImpersonateNamedPipeClient(pipe)) return GetLastError();
+    const HANDLE rawExecutable = CreateFileW(
+        requestedPath.c_str(),
+        GENERIC_READ | FILE_EXECUTE,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+        nullptr);
+    DWORD error = rawExecutable == INVALID_HANDLE_VALUE
+        ? GetLastError()
+        : ERROR_SUCCESS;
+    if (!RevertToSelf())
+    {
+        revertFailed = true;
+        const DWORD revertError = GetLastError();
+        if (rawExecutable != INVALID_HANDLE_VALUE) CloseHandle(rawExecutable);
+        return revertError == ERROR_SUCCESS
+            ? ERROR_CANNOT_IMPERSONATE
+            : revertError;
+    }
+    if (error != ERROR_SUCCESS) return error;
+    executable.reset(rawExecutable);
+
+    if (GetFileType(executable.get()) != FILE_TYPE_DISK)
+        return ERROR_FILE_INVALID;
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!GetFileInformationByHandle(executable.get(), &information))
+        return GetLastError();
+    if ((information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        return ERROR_DIRECTORY;
+
+    error = ReadFinalPath(
+        executable.get(),
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        finalDosPath);
+    if (error != ERROR_SUCCESS) return error;
+    if (finalDosPath.size() < 7 || finalDosPath.rfind(L"\\\\?\\", 0) != 0 ||
+        !((finalDosPath[4] >= L'A' && finalDosPath[4] <= L'Z') ||
+          (finalDosPath[4] >= L'a' && finalDosPath[4] <= L'z')) ||
+        finalDosPath[5] != L':' || finalDosPath[6] != L'\\')
+    {
+        return ERROR_BAD_PATHNAME;
+    }
+    const wchar_t driveRoot[] =
+    {
+        finalDosPath[4], L':', L'\\', L'\0'
+    };
+    if (GetDriveTypeW(driveRoot) != DRIVE_FIXED)
+        return ERROR_NOT_SUPPORTED;
+
+    std::wstring ntPath;
+    error = ReadFinalPath(
+        executable.get(),
+        FILE_NAME_NORMALIZED | VOLUME_NAME_NT,
+        ntPath);
+    if (error != ERROR_SUCCESS) return error;
+    if (ntPath.empty() ||
+        ntPath.size() >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
+    {
+        return ERROR_FILENAME_EXCED_RANGE;
+    }
+    finalNtPath.fill(L'\0');
+    for (size_t index = 0; index < ntPath.size(); ++index)
+        finalNtPath[index] = ntPath[index];
+    finalNtPathLength = static_cast<ULONG>(ntPath.size());
+    if (OacValidateCanonicalNtPath(
+            finalNtPath.data(),
+            finalNtPathLength) != OAC_V5_VALID)
+    {
+        return ERROR_BAD_PATHNAME;
+    }
+    return ERROR_SUCCESS;
+}
+
+bool InitializeDriverRequest(
+    OAC_V5_REQUEST_HEADER& header,
+    ULONG size,
+    OAC_V5_MESSAGE_TYPE messageType,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation)
+{
+    header.Version = OAC_V5_VERSION;
+    header.Size = size;
+    header.SessionId = sessionId;
+    header.Generation = generation;
+    header.MessageType = messageType;
+    return MakeRequestId(header.RequestId);
+}
+
+DWORD ArmLaunch(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    const std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>& ntPath,
+    ULONG ntPathLength,
+    OAC_ARM_LAUNCH_RESPONSE& response)
+{
+    OAC_ARM_LAUNCH_REQUEST request{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_MESSAGE_ARM_LAUNCH,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    request.TimeToLiveMilliseconds = kLaunchTimeToLiveMs;
+    request.CanonicalNtPathLength = ntPathLength;
+    CopyMemory(
+        request.CanonicalNtPath,
+        ntPath.data(),
+        static_cast<SIZE_T>(ntPathLength) * sizeof(WCHAR));
+
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_ARM_LAUNCH,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            &response,
+            static_cast<DWORD>(sizeof(response)),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacValidateArmLaunchResponse(&response, returned) != OAC_V5_VALID ||
+        OacV5ValidateCorrelation(
+            &request.Header,
+            &response.Header) != OAC_V5_VALID ||
+        response.Header.Status != 0 ||
+        response.Header.Reason != OAC_V5_REASON_NONE ||
+        response.Header.Flags != 0)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+DWORD CancelLaunch(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    const OAC_LAUNCH_ID& launchId)
+{
+    OAC_CANCEL_LAUNCH_REQUEST request{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_MESSAGE_CANCEL_LAUNCH,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    request.LaunchId = launchId;
+    OAC_CANCEL_LAUNCH_RESPONSE response{};
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_CANCEL_LAUNCH,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            &response,
+            static_cast<DWORD>(sizeof(response)),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacValidateCancelLaunchResponse(&response, returned) != OAC_V5_VALID ||
+        OacV5ValidateCorrelation(
+            &request.Header,
+            &response.Header) != OAC_V5_VALID ||
+        response.Header.Status != 0 ||
+        response.Header.Reason != OAC_V5_REASON_NONE)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+DWORD ConfirmTarget(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    const OAC_LAUNCH_ID& launchId,
+    HANDLE process,
+    OAC_CONFIRM_TARGET_RESPONSE& response)
+{
+    OAC_CONFIRM_TARGET_REQUEST request{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_MESSAGE_CONFIRM_TARGET,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    request.LaunchId = launchId;
+    request.TargetProcessHandle = static_cast<ULONGLONG>(
+        reinterpret_cast<ULONG_PTR>(process));
+
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_CONFIRM_TARGET,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            &response,
+            static_cast<DWORD>(sizeof(response)),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacValidateConfirmTargetResponse(&response, returned) != OAC_V5_VALID ||
+        OacV5ValidateCorrelation(
+            &request.Header,
+            &response.Header) != OAC_V5_VALID ||
+        response.Header.Status != 0 ||
+        response.Header.Reason != OAC_V5_REASON_NONE ||
+        response.Header.Flags != 0 ||
+        response.TargetProcessId != GetProcessId(process))
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+DWORD ReadDriverStatus(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    OAC_V5_STATUS_RESPONSE& response)
+{
+    OAC_V5_STATUS_REQUEST request{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_V5_MESSAGE_GET_STATUS,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_V5_GET_STATUS,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            &response,
+            static_cast<DWORD>(sizeof(response)),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacV5ValidateStatusResponse(&response, returned) != OAC_V5_VALID ||
+        OacV5ValidateCorrelation(
+            &request.Header,
+            &response.Header) != OAC_V5_VALID ||
+        response.Header.Status != 0 ||
+        response.Header.Reason != OAC_V5_REASON_NONE)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+bool SessionHasControl(ULONG state) noexcept
+{
+    return state == OAC_V5_SESSION_CLAIMED ||
+        state == OAC_V5_SESSION_LAUNCH_PENDING ||
+        state == OAC_V5_SESSION_TARGET_BOUND ||
+        state == OAC_V5_SESSION_MONITORING;
+}
+
+void TerminateSuspendedProcess(HANDLE process) noexcept
+{
+    if (process == nullptr || process == INVALID_HANDLE_VALUE) return;
+    (void)TerminateProcess(process, ERROR_PROCESS_ABORTED);
+    (void)WaitForSingleObject(process, 5000);
+}
+
+DWORD LaunchTarget(
+    HANDLE pipe,
+    HANDLE stopEvent,
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    const OAC_IPC_LAUNCH_REQUEST& request,
+    ClientIdentity& client,
+    DWORD& targetProcessId,
+    bool& driverSessionChanged)
+{
+    targetProcessId = 0;
+    driverSessionChanged = false;
+    if (!client.primaryToken || WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+        return ERROR_OPERATION_ABORTED;
+
+    UniqueHandle executable;
+    std::wstring finalDosPath;
+    std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS> finalNtPath{};
+    ULONG finalNtPathLength = 0;
+    DWORD error = OpenClientExecutable(
+        pipe,
+        request,
+        executable,
+        finalDosPath,
+        finalNtPath,
+        finalNtPathLength,
+        client.revertFailed);
+    if (error != ERROR_SUCCESS) return error;
+
+    EnvironmentBlock environment;
+    if (!CreateEnvironmentBlock(environment.put(), client.primaryToken.get(), FALSE))
+        return GetLastError();
+
+    OAC_ARM_LAUNCH_RESPONSE armed{};
+    error = ArmLaunch(
+        driver,
+        sessionId,
+        generation,
+        finalNtPath,
+        finalNtPathLength,
+        armed);
+    if (error != ERROR_SUCCESS) return error;
+    driverSessionChanged = true;
+
+    if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+    {
+        (void)CancelLaunch(driver, sessionId, generation, armed.LaunchId);
+        return ERROR_OPERATION_ABORTED;
+    }
+
+    std::wstring commandLine = L"\"" + finalDosPath + L"\"";
+    std::vector<wchar_t> mutableCommandLine(
+        commandLine.begin(),
+        commandLine.end());
+    mutableCommandLine.push_back(L'\0');
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.lpDesktop = const_cast<wchar_t*>(L"winsta0\\default");
+    PROCESS_INFORMATION processInformation{};
+    if (!CreateProcessAsUserW(
+            client.primaryToken.get(),
+            finalDosPath.c_str(),
+            mutableCommandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+            environment.get(),
+            nullptr,
+            &startup,
+            &processInformation))
+    {
+        error = GetLastError();
+        (void)CancelLaunch(driver, sessionId, generation, armed.LaunchId);
+        return error;
+    }
+
+    UniqueHandle process(processInformation.hProcess);
+    UniqueHandle thread(processInformation.hThread);
+    OAC_CONFIRM_TARGET_RESPONSE confirmed{};
+    error = ConfirmTarget(
+        driver,
+        sessionId,
+        generation,
+        armed.LaunchId,
+        process.get(),
+        confirmed);
+    if (error != ERROR_SUCCESS)
+    {
+        TerminateSuspendedProcess(process.get());
+        return error;
+    }
+
+    OAC_V5_STATUS_RESPONSE status{};
+    error = ReadDriverStatus(driver, sessionId, generation, status);
+    if (error != ERROR_SUCCESS ||
+        status.State != OAC_V5_SESSION_MONITORING ||
+        status.TargetProcessId != confirmed.TargetProcessId ||
+        status.TargetProcessId != processInformation.dwProcessId)
+    {
+        TerminateSuspendedProcess(process.get());
+        return error == ERROR_SUCCESS ? ERROR_INVALID_STATE : error;
+    }
+    if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
+    {
+        TerminateSuspendedProcess(process.get());
+        return ERROR_OPERATION_ABORTED;
+    }
+    const DWORD previousSuspendCount = ResumeThread(thread.get());
+    if (previousSuspendCount == static_cast<DWORD>(-1))
+    {
+        error = GetLastError();
+        TerminateSuspendedProcess(process.get());
+        return error;
+    }
+    if (previousSuspendCount != 1)
+    {
+        TerminateSuspendedProcess(process.get());
+        return ERROR_INVALID_STATE;
+    }
+
+    targetProcessId = processInformation.dwProcessId;
+    return ERROR_SUCCESS;
 }
 
 /* Driver negotiation is kept isolated so every startup path fails closed. */
@@ -580,7 +1131,8 @@ DWORD OpenAndClaimDriver(
     HANDLE& driver,
     ULONG& version,
     ULONGLONG& capabilities,
-    ULONG& statusFlags,
+    OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG& generation,
     OAC_SERVICE_FAILURE_STAGE& failureStage)
 {
     failureStage = OAC_SERVICE_STAGE_DRIVER_OPEN;
@@ -618,13 +1170,16 @@ DWORD OpenAndClaimDriver(
         return GetLastError();
 
     constexpr ULONG requiredProtocol = OAC_V5_PROTOCOL_STRICT_LENGTHS;
+    constexpr ULONG requiredCapabilities =
+        OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET;
     if (OacV5ValidateNegotiateResponse(&negotiated, returned) != OAC_V5_VALID ||
         OacV5ValidateCorrelation(
             &negotiate.Header, &negotiated.Header) != OAC_V5_VALID ||
         negotiated.Header.Status != 0 ||
         negotiated.Header.Reason != OAC_V5_REASON_NONE ||
         negotiated.Header.Flags != 0 ||
-        (negotiated.Capabilities & OAC_V5_CAP_SESSION_CONTROL) == 0 ||
+        (negotiated.Capabilities & requiredCapabilities) !=
+            requiredCapabilities ||
         (negotiated.ProtocolFlags & requiredProtocol) != requiredProtocol)
         return ERROR_REVISION_MISMATCH;
 
@@ -655,7 +1210,8 @@ DWORD OpenAndClaimDriver(
         claimed.Header.Status != 0 ||
         claimed.Header.Reason != OAC_V5_REASON_NONE ||
         claimed.Header.Flags != 0 ||
-        (claimed.Capabilities & OAC_V5_CAP_SESSION_CONTROL) == 0 ||
+        (claimed.Capabilities & requiredCapabilities) !=
+            requiredCapabilities ||
         (claimed.Capabilities & ~negotiated.Capabilities) != 0)
         return ERROR_ACCESS_DENIED;
 
@@ -698,8 +1254,8 @@ DWORD OpenAndClaimDriver(
     driver = candidate.release();
     version = negotiated.SelectedVersion;
     capabilities = status.Capabilities;
-    statusFlags = OAC_IPC_STATUS_DRIVER_READY |
-        OAC_IPC_STATUS_SESSION_CLAIMED;
+    sessionId = claimed.Header.SessionId;
+    generation = claimed.Header.Generation;
     failureStage = OAC_SERVICE_STAGE_NONE;
     return ERROR_SUCCESS;
 }
@@ -736,7 +1292,8 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
             driver_,
             driverVersion_,
             driverCapabilities_,
-            statusFlags_,
+            driverSessionId_,
+            driverSessionGeneration_,
             failureStage);
         if (error != ERROR_SUCCESS) return error;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
@@ -850,12 +1407,19 @@ DWORD ServiceHost::PipeLoop() noexcept
             buffer.data(),
             static_cast<DWORD>(buffer.size()),
             bytesRead);
-        if (error == ERROR_SUCCESS && bytesRead >= sizeof(OAC_IPC_REQUEST))
+        DWORD fatalAfterResponse = ERROR_SUCCESS;
+        if (error == ERROR_SUCCESS && bytesRead >= sizeof(OAC_IPC_HEADER))
         {
-            OAC_IPC_REQUEST request{};
-            CopyMemory(&request, buffer.data(), sizeof(request));
-            if (ValidRequest(request, bytesRead))
+            OAC_IPC_HEADER header{};
+            CopyMemory(&header, buffer.data(), sizeof(header));
+            if (header.Type == OAC_IPC_TYPE_LAUNCH_REQUEST &&
+                bytesRead == sizeof(OAC_IPC_LAUNCH_REQUEST))
             {
+                OAC_IPC_LAUNCH_REQUEST request{};
+                CopyMemory(&request, buffer.data(), sizeof(request));
+                if (!OacIpcValidateLaunchRequest(&request, bytesRead))
+                    goto CompleteConnection;
+
                 ClientIdentity client;
                 const DWORD authorization = AuthorizeClient(pipe, client);
                 if (client.revertFailed)
@@ -864,23 +1428,55 @@ DWORD ServiceHost::PipeLoop() noexcept
                     return authorization;
                 }
 
-                OAC_IPC_RESPONSE response{};
+                OAC_IPC_LAUNCH_RESPONSE response{};
                 response.Header.Version = OAC_IPC_VERSION;
                 response.Header.Size = static_cast<uint32_t>(sizeof(response));
-                response.Header.Type =
-                    request.Header.Type == OAC_IPC_TYPE_HELLO_REQUEST
-                    ? OAC_IPC_TYPE_HELLO_RESPONSE
-                    : OAC_IPC_TYPE_STATUS_RESPONSE;
+                response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
                 response.Header.RequestId = request.Header.RequestId;
                 response.Win32Error = authorization;
                 if (authorization == ERROR_SUCCESS)
                 {
-                    response.StatusFlags = statusFlags_;
-                    response.ServiceProcessId = GetCurrentProcessId();
-                    response.ClientProcessId = client.processId;
-                    response.ClientSessionId = client.sessionId;
-                    response.DriverProtocolVersion = driverVersion_;
-                    response.DriverCapabilities = driverCapabilities_;
+                    bool driverSessionChanged = false;
+                    DWORD targetProcessId = 0;
+                    try
+                    {
+                        response.Win32Error = LaunchTarget(
+                            pipe,
+                            stopEvent_,
+                            driver_,
+                            driverSessionId_,
+                            driverSessionGeneration_,
+                            request,
+                            client,
+                            targetProcessId,
+                            driverSessionChanged);
+                    }
+                    catch (const std::bad_alloc&)
+                    {
+                        response.Win32Error = ERROR_NOT_ENOUGH_MEMORY;
+                    }
+                    catch (...)
+                    {
+                        response.Win32Error = ERROR_UNHANDLED_EXCEPTION;
+                    }
+                    if (client.revertFailed)
+                    {
+                        CloseHandle(pipe);
+                        return response.Win32Error;
+                    }
+                    if (response.Win32Error == ERROR_SUCCESS)
+                    {
+                        response.LaunchFlags = OAC_IPC_LAUNCH_CONFIRMED |
+                            OAC_IPC_LAUNCH_RESUMED;
+                        response.ServiceProcessId = GetCurrentProcessId();
+                        response.ClientProcessId = client.processId;
+                        response.ClientSessionId = client.sessionId;
+                        response.TargetProcessId = targetProcessId;
+                    }
+                    else if (driverSessionChanged)
+                    {
+                        fatalAfterResponse = response.Win32Error;
+                    }
                 }
                 error = WriteMessage(
                     pipe,
@@ -888,13 +1484,78 @@ DWORD ServiceHost::PipeLoop() noexcept
                     &response,
                     static_cast<DWORD>(sizeof(response)));
             }
+            else if (bytesRead == sizeof(OAC_IPC_REQUEST))
+            {
+                OAC_IPC_REQUEST request{};
+                CopyMemory(&request, buffer.data(), sizeof(request));
+                if (ValidRequest(request, bytesRead))
+                {
+                    ClientIdentity client;
+                    const DWORD authorization = AuthorizeClient(pipe, client);
+                    if (client.revertFailed)
+                    {
+                        CloseHandle(pipe);
+                        return authorization;
+                    }
+
+                    OAC_IPC_RESPONSE response{};
+                    response.Header.Version = OAC_IPC_VERSION;
+                    response.Header.Size =
+                        static_cast<uint32_t>(sizeof(response));
+                    response.Header.Type =
+                        request.Header.Type == OAC_IPC_TYPE_HELLO_REQUEST
+                        ? OAC_IPC_TYPE_HELLO_RESPONSE
+                        : OAC_IPC_TYPE_STATUS_RESPONSE;
+                    response.Header.RequestId = request.Header.RequestId;
+                    response.Win32Error = authorization;
+                    if (authorization == ERROR_SUCCESS)
+                    {
+                        OAC_V5_STATUS_RESPONSE driverStatus{};
+                        response.Win32Error = ReadDriverStatus(
+                            driver_,
+                            driverSessionId_,
+                            driverSessionGeneration_,
+                            driverStatus);
+                        if (response.Win32Error == ERROR_SUCCESS)
+                        {
+                            response.StatusFlags = OAC_IPC_STATUS_DRIVER_READY;
+                            if (SessionHasControl(driverStatus.State))
+                            {
+                                response.StatusFlags |=
+                                    OAC_IPC_STATUS_SESSION_CLAIMED;
+                            }
+                            response.ServiceProcessId = GetCurrentProcessId();
+                            response.ClientProcessId = client.processId;
+                            response.ClientSessionId = client.sessionId;
+                            response.DriverProtocolVersion = driverVersion_;
+                            response.DriverCapabilities = driverCapabilities_;
+                        }
+                        else
+                        {
+                            fatalAfterResponse = response.Win32Error;
+                        }
+                    }
+                    error = WriteMessage(
+                        pipe,
+                        stopEvent_,
+                        &response,
+                        static_cast<DWORD>(sizeof(response)));
+                }
+            }
         }
 
+CompleteConnection:
         if (error == ERROR_OPERATION_ABORTED)
         {
             (void)DisconnectNamedPipe(pipe);
             CloseHandle(pipe);
             return error;
+        }
+        if (fatalAfterResponse != ERROR_SUCCESS)
+        {
+            (void)DisconnectNamedPipe(pipe);
+            CloseHandle(pipe);
+            return fatalAfterResponse;
         }
 
         HANDLE nextPipe = CreateControlPipe(false, error);

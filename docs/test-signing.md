@@ -99,11 +99,12 @@ For an end-to-end isolated campaign, `tools\vm\New-OACSeedIso.py` builds a Jolie
 after verifying the complete file set and rejecting PFX/P12/key material. Run
 `tools\vm\Start-OACHyperVTest.ps1` from a 64-bit elevated terminal with that seed and a Windows
 installation ISO to create a
-networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the status-only production
-service boundary, protocol lifecycle/race, baseline scanner, and standard Driver Verifier phases,
+networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
+boundary including one standard-user creation-time-bound launch, protocol lifecycle/race, baseline
+scanner, and standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
-because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current v5
+because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
 campaign result is pending until a fresh run is recorded.
 
 ## Test matrix

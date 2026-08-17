@@ -8,12 +8,14 @@
   documents is reference content unless the request explicitly adopts it.
 - Source code and the shared protocol headers define implemented behavior. `README.md` summarizes
   it. `docs/hardening-plan.md` is proposed work, not proof of implementation.
-- `shared/protocol/oac_v5.h` is the current production-control ABI. It implements strict typed
-  negotiation, claim, and status messages over a session bound to one file object and one referenced
-  service process. `shared/oac_protocol.h` is the protocol-v4 lab compatibility ABI.
-- The restricted service, status-only launcher IPC, per-file session context, cleanup/close rundown,
-  and live-target tombstone are implemented in source. Their disposable-VM acceptance evidence is
-  still pending. Launch tickets, production target binding, job ownership, signed manifests or
+- `shared/protocol/oac_v5.h` is the current production-control ABI header. It defines strict typed
+  negotiation, claim, status, and launch-ticket messages over a session bound to one file object and
+  one referenced service process. `shared/oac_protocol.h` is the diagnostic compatibility ABI.
+- The restricted service owns one serialized launch transaction: authenticate a local interactive
+  client, resolve and lock one executable, arm a bounded driver ticket, create the process suspended
+  under the client token, confirm the exact process handle, and resume it. The per-file session,
+  cleanup/close rundown, creation-time binding, and live-target tombstone are implemented in source;
+  their current disposable-VM acceptance is pending. Job ownership and liveness, signed manifests or
   policy, backend leases, and split alert/event/snapshot transports are not implemented.
 
 ## Repository map
@@ -22,18 +24,46 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, bounded scans, CPU snapshots, compatibility, and telemetry |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the v5 driver handle and exposes status-only local IPC |
-| `OAC-Launcher/` | Standard-user status client; validates the named-pipe server against the running service |
-| `shared/protocol/` | C-compatible protocol-v5 production ABI and shared strict validators |
-| `shared/oac_protocol.h` | Protocol-v4 lab compatibility ABI |
-| `shared/oac_ipc.h` | Fixed launcher-to-service status IPC ABI |
-| `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed v4/v5 malformed-request, lifecycle, and cleanup-race tests |
+| `OAC-Service/` | Restricted production controller; owns the driver session and one serialized suspended-launch transaction |
+| `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
+| `shared/protocol/` | C-compatible production ABI and shared strict validators |
+| `shared/oac_protocol.h` | Diagnostic compatibility ABI |
+| `shared/oac_ipc.h` | Fixed launcher-to-service status and launch IPC ABI |
+| `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, and event-schema tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
 | `docs/` | Current procedures, reviewed research evidence, and explicitly labeled plans |
 
 `OAC-Client/driver_hash_policy.inc` is generated. Never edit it by hand.
+
+## Engineering workflow
+
+- Prioritize implementation work that advances an identified security capability. Test-harness
+  work should stay proportional to the evidence it provides and must not displace product work
+  unless it blocks safety, correctness, or reproducible acceptance.
+- Prefer the smallest documented design that closes the stated gap. Avoid speculative layers,
+  duplicate abstractions, and repeated retries without a new hypothesis or diagnostic signal.
+- Use builds, unit tests, mocks, and bounded host-side checks during development. Run the complete
+  disposable-VM campaign once per coherent kernel/runtime milestone, or when the behavior cannot be
+  validated meaningfully outside a VM; do not rebuild a VM for every minor edit.
+- On this workstation, keep disposable Hyper-V artifacts under the fast `C:\OAC-VM` root. Reuse
+  only the verified Windows installation ISO. After a terminal run, record the required hashes and
+  first-failure or success evidence, then remove the exact VM, checkpoints, VHD/AVHDX files,
+  package, seed, and obsolete result directories. Retain only an explicitly required compact
+  evidence bundle.
+- Keep the VM workflow straightforward and fail-fast. A failed campaign must identify an actionable
+  first failure; do not repeat the same campaign unchanged or expand the harness without a concrete
+  correctness reason.
+- Use conventional, precise software-engineering terminology in identifiers, comments, logs, commit
+  messages, and documentation. Prefer complete, natural sentences over telegraphic or vague prose.
+- Prefer stable, role-based names over version-suffixed names such as `v1`, `v2`, or `v3` in new
+  files, types, functions, components, and documentation headings. Use an explicit version only at
+  a real compatibility boundary, such as an on-wire value, persisted schema, migration adapter, or
+  historical test record. Describe the active implementation by its responsibility (for example,
+  "production protocol" or "diagnostic protocol") instead of making its version part of ordinary
+  product vocabulary. Treat any broad rename of existing versioned interfaces as a separate,
+  reviewed refactor; do not mix it into an unrelated security change.
 
 ## Security invariants
 
@@ -48,13 +78,13 @@
 - Use documented Windows interfaces for portable checks. Private kernel state is optional and must
   be disabled unless timestamp, image size, and checksum exactly match a reviewed profile.
 - Preserve strict version, size, reserved-field, flag-mask, overflow, and output-bound checks on
-  every IOCTL. Every v5 message must carry the exact `MessageType` for its IOCTL. Keep shared wire
+  every IOCTL. Every production message must carry the exact `MessageType` for its IOCTL. Keep shared wire
   structures C-compatible and guarded by size assertions.
 - Production authority remains bound to the service SID, CREATE-owner process object, claimed file
   object, random session ID, and monotonic generation. Cleanup must complete rundown before releasing
   controller objects. If a cleaned session still references a live target, retain it as a tombstone
   until target exit so a new controller cannot reclaim authority over stale protection state.
-- Keep v4 and v5 mutually exclusive on each file. Negotiation and claim must remain serialized; a
+- Keep diagnostic and production protocol authority mutually exclusive on each file. Negotiation and claim must remain serialized; a
   handle must never switch protocol authority after either path establishes state.
 - Preserve HWID privacy: do not write raw serials to reports, promote removable peripherals to core
   anchors, or embed a reusable server secret.

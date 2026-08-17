@@ -844,14 +844,21 @@ function Assert-ServiceConfiguration(
     $configuration = Get-ItemProperty -LiteralPath $ServicePath
     $dependencies = @($configuration.DependOnService)
     $privileges = @($configuration.RequiredPrivileges)
+    $expectedPrivileges = @(
+        'SeAssignPrimaryTokenPrivilege',
+        'SeChangeNotifyPrivilege',
+        'SeImpersonatePrivilege',
+        'SeIncreaseQuotaPrivilege')
     $start = [int]$configuration.Start
     if ([int]$configuration.Type -ne 0x10 -or
         ($start -ne 3 -and (-not $AllowDisabled -or $start -ne 4)) -or
         [string]$configuration.ObjectName -ne 'LocalSystem' -or
         [string]$configuration.ImagePath -cne $ExpectedImagePath -or
         $dependencies.Count -ne 1 -or $dependencies[0] -ne 'OAC' -or
-        $privileges.Count -ne 1 -or
-        $privileges[0] -ne 'SeChangeNotifyPrivilege' -or
+        $privileges.Count -ne $expectedPrivileges.Count -or
+        @($expectedPrivileges | Where-Object {
+            $privileges -cnotcontains $_
+        }).Count -ne 0 -or
         [int]$configuration.ServiceSidType -ne 3) {
         throw 'OACService does not match the required restricted configuration.'
     }
@@ -1464,7 +1471,7 @@ try {
     if (-not (Test-Path -LiteralPath $serviceKey)) {
         New-Service -Name 'OACService' -BinaryPathName $quotedServicePath `
             -DisplayName 'OAC Test Control Service' `
-            -Description 'Disposable-VM OAC v5 control service' `
+            -Description 'Disposable-VM OAC production control service' `
             -StartupType Manual -DependsOn 'OAC' | Out-Null
         $createdService = $true
     } else {
@@ -1473,9 +1480,13 @@ try {
             'error=', 'normal', 'depend=', 'OAC', 'obj=', 'LocalSystem')
     }
     Invoke-ScChecked @('sidtype', 'OACService', 'restricted')
-    Invoke-ScChecked @('privs', 'OACService', 'SeChangeNotifyPrivilege')
     Invoke-ScChecked @(
-        'description', 'OACService', 'Disposable-VM OAC v5 control service')
+        'privs', 'OACService',
+        ('SeAssignPrimaryTokenPrivilege/SeChangeNotifyPrivilege/' +
+            'SeImpersonatePrivilege/SeIncreaseQuotaPrivilege'))
+    Invoke-ScChecked @(
+        'description', 'OACService',
+        'Disposable-VM OAC production control service')
     [Oac.ServicePolicy]::WriteRecoveryPolicy('OACService', 86400, 5000)
     Assert-ServiceConfiguration $serviceKey $quotedServicePath
 

@@ -27,11 +27,31 @@ public:
 
     UniqueHandle(const UniqueHandle&) = delete;
     UniqueHandle& operator=(const UniqueHandle&) = delete;
+    UniqueHandle(UniqueHandle&& other) noexcept : handle_(other.release()) {}
+    UniqueHandle& operator=(UniqueHandle&& other) noexcept
+    {
+        if (this != &other) reset(other.release());
+        return *this;
+    }
 
     [[nodiscard]] HANDLE get() const noexcept { return handle_; }
     [[nodiscard]] explicit operator bool() const noexcept
     {
         return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE release() noexcept
+    {
+        const HANDLE result = handle_;
+        handle_ = nullptr;
+        return result;
+    }
+
+    void reset(HANDLE handle = nullptr) noexcept
+    {
+        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
+            CloseHandle(handle_);
+        handle_ = handle;
     }
 
 private:
@@ -266,55 +286,90 @@ bool VerifyPipeServer(HANDLE pipe, DWORD& serverProcessId, DWORD& error)
     return true;
 }
 
-int SendRequest(ULONG requestType)
+DWORD ConnectService(
+    UniqueHandle& pipe,
+    DWORD& serverProcessId,
+    OAC_SERVICE_FAILURE_STAGE& failureStage)
 {
-    DWORD serviceError = ERROR_SUCCESS;
-    OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_NONE;
-    if (!EnsureServiceRunning(serviceError, failureStage))
-    {
-        std::wcerr << L"OACService could not be started safely";
-        if (failureStage != OAC_SERVICE_STAGE_NONE)
-            std::wcerr << L" during " << ServiceStageText(failureStage);
-        std::wcerr << L": " << ErrorText(serviceError) << L'\n';
-        return 3;
-    }
+    DWORD error = ERROR_SUCCESS;
+    if (!EnsureServiceRunning(error, failureStage)) return error;
     if (!WaitNamedPipeW(OAC_PIPE_NAME, 5000))
-    {
-        std::wcerr << L"OACService is unavailable: "
-                   << ErrorText(GetLastError()) << L'\n';
-        return 3;
-    }
+        return GetLastError();
 
-    UniqueHandle pipe(CreateFileW(
+    pipe.reset(CreateFileW(
         OAC_PIPE_NAME,
         static_cast<DWORD>(OAC_PIPE_CLIENT_ACCESS),
         0,
         nullptr,
         OPEN_EXISTING,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED |
-            SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+            SECURITY_SQOS_PRESENT | SECURITY_IMPERSONATION,
         nullptr));
-    if (!pipe)
-    {
-        std::wcerr << L"Could not connect to OACService: "
-                   << ErrorText(GetLastError()) << L'\n';
-        return 3;
-    }
+    if (!pipe) return GetLastError();
 
-    DWORD serverProcessId = 0;
-    DWORD serverError = ERROR_SUCCESS;
-    if (!VerifyPipeServer(pipe.get(), serverProcessId, serverError))
-    {
-        std::wcerr << L"The OAC control pipe is not owned by the running service: "
-                   << ErrorText(serverError) << L'\n';
-        return 3;
-    }
+    if (!VerifyPipeServer(pipe.get(), serverProcessId, error)) return error;
 
     DWORD mode = PIPE_READMODE_MESSAGE;
     if (!SetNamedPipeHandleState(pipe.get(), &mode, nullptr, nullptr))
+        return GetLastError();
+    return ERROR_SUCCESS;
+}
+
+DWORD TransactService(
+    HANDLE pipe,
+    const void* request,
+    DWORD requestSize,
+    void* response,
+    DWORD responseSize,
+    DWORD& returned)
+{
+    returned = 0;
+    UniqueHandle requestEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (!requestEvent) return GetLastError();
+    OVERLAPPED overlapped{};
+    overlapped.hEvent = requestEvent.get();
+    if (TransactNamedPipe(
+            pipe,
+            const_cast<void*>(request),
+            requestSize,
+            response,
+            responseSize,
+            &returned,
+            &overlapped))
     {
-        std::wcerr << L"Could not select message-mode IPC: "
-                   << ErrorText(GetLastError()) << L'\n';
+        return ERROR_SUCCESS;
+    }
+
+    DWORD error = GetLastError();
+    if (error != ERROR_IO_PENDING) return error;
+    const DWORD wait = WaitForSingleObject(requestEvent.get(), kRequestTimeoutMs);
+    if (wait != WAIT_OBJECT_0)
+    {
+        error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+        (void)CancelIoEx(pipe, &overlapped);
+        (void)GetOverlappedResult(pipe, &overlapped, &returned, TRUE);
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
+    }
+    if (!GetOverlappedResult(pipe, &overlapped, &returned, FALSE))
+        return GetLastError();
+    return ERROR_SUCCESS;
+}
+
+int SendRequest(ULONG requestType)
+{
+    UniqueHandle pipe;
+    DWORD serverProcessId = 0;
+    OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_NONE;
+    const DWORD connectionError = ConnectService(
+        pipe,
+        serverProcessId,
+        failureStage);
+    if (connectionError != ERROR_SUCCESS)
+    {
+        std::wcerr << L"OACService connection failed";
+        if (failureStage != OAC_SERVICE_STAGE_NONE)
+            std::wcerr << L" during " << ServiceStageText(failureStage);
+        std::wcerr << L": " << ErrorText(connectionError) << L'\n';
         return 3;
     }
 
@@ -330,53 +385,18 @@ int SendRequest(ULONG requestType)
 
     OAC_IPC_RESPONSE response{};
     DWORD returned = 0;
-    UniqueHandle requestEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-    if (!requestEvent)
+    const DWORD transactionError = TransactService(
+        pipe.get(),
+        &request,
+        static_cast<DWORD>(sizeof(request)),
+        &response,
+        static_cast<DWORD>(sizeof(response)),
+        returned);
+    if (transactionError != ERROR_SUCCESS)
     {
-        std::wcerr << L"Could not create the IPC completion event: "
-                   << ErrorText(GetLastError()) << L'\n';
+        std::wcerr << L"OACService request failed: "
+                   << ErrorText(transactionError) << L'\n';
         return 3;
-    }
-    OVERLAPPED overlapped{};
-    overlapped.hEvent = requestEvent.get();
-    if (!TransactNamedPipe(
-            pipe.get(),
-            &request,
-            static_cast<DWORD>(sizeof(request)),
-            &response,
-            static_cast<DWORD>(sizeof(response)),
-            &returned,
-            &overlapped))
-    {
-        DWORD error = GetLastError();
-        if (error != ERROR_IO_PENDING)
-        {
-            std::wcerr << L"OACService request failed: "
-                       << ErrorText(error) << L'\n';
-            return 3;
-        }
-        const DWORD wait = WaitForSingleObject(
-            requestEvent.get(), kRequestTimeoutMs);
-        if (wait != WAIT_OBJECT_0)
-        {
-            error = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
-            (void)CancelIoEx(pipe.get(), &overlapped);
-            (void)GetOverlappedResult(
-                pipe.get(), &overlapped, &returned, TRUE);
-            std::wcerr << L"OACService request did not complete in time: "
-                       << ErrorText(error == ERROR_SUCCESS
-                               ? ERROR_GEN_FAILURE
-                               : error)
-                       << L'\n';
-            return 3;
-        }
-        if (!GetOverlappedResult(
-                pipe.get(), &overlapped, &returned, FALSE))
-        {
-            std::wcerr << L"OACService request failed: "
-                       << ErrorText(GetLastError()) << L'\n';
-            return 3;
-        }
     }
 
     const ULONG expectedType = requestType == OAC_IPC_TYPE_HELLO_REQUEST
@@ -384,11 +404,11 @@ int SendRequest(ULONG requestType)
         : OAC_IPC_TYPE_STATUS_RESPONSE;
     constexpr ULONG knownStatusFlags = OAC_IPC_STATUS_DRIVER_READY |
         OAC_IPC_STATUS_SESSION_CLAIMED;
-    if (returned != static_cast<DWORD>(sizeof(response)) ||
-        response.Header.Version != OAC_IPC_VERSION ||
-        response.Header.Size != static_cast<uint32_t>(sizeof(response)) ||
-        response.Header.Type != expectedType ||
-        response.Header.Flags != 0 ||
+    if (!OacIpcHeaderMatches(
+            &response.Header,
+            returned,
+            static_cast<uint32_t>(sizeof(response)),
+            expectedType) ||
         response.Header.RequestId != request.Header.RequestId ||
         (response.StatusFlags & ~knownStatusFlags) != 0)
     {
@@ -416,19 +436,109 @@ int SendRequest(ULONG requestType)
         response.ClientProcessId != GetCurrentProcessId() ||
         response.ClientSessionId != ownSessionId ||
         response.ServiceProcessId != serverProcessId ||
-        response.StatusFlags != knownStatusFlags)
+        (response.StatusFlags & OAC_IPC_STATUS_DRIVER_READY) == 0)
     {
         std::wcerr << L"OACService returned inconsistent client identity.\n";
         return 4;
     }
 
-    std::wcout << L"OACService ready"
+    std::wcout << L"OACService status"
                << L"; service-pid=" << response.ServiceProcessId
                << L"; client-session=" << response.ClientSessionId
                << L"; driver-protocol=0x" << std::hex
                << response.DriverProtocolVersion
                << L"; capabilities=0x" << response.DriverCapabilities
                << L"; flags=0x" << response.StatusFlags << std::dec << L'\n';
+    return 0;
+}
+
+int SendLaunchRequest(const std::wstring& executablePath)
+{
+    if (executablePath.size() >= OAC_IPC_MAX_EXECUTABLE_PATH_CHARS)
+    {
+        std::wcerr << L"The executable path is too long for the launch request.\n";
+        return 2;
+    }
+
+    OAC_IPC_LAUNCH_REQUEST request{};
+    request.Header.Version = OAC_IPC_PROTOCOL_REVISION;
+    request.Header.Size = static_cast<uint32_t>(sizeof(request));
+    request.Header.Type = OAC_IPC_TYPE_LAUNCH_REQUEST;
+    request.ExecutablePathLength = static_cast<uint32_t>(executablePath.size());
+    if (!MakeRequestId(request.Header.RequestId))
+    {
+        std::wcerr << L"Could not create an IPC request identifier.\n";
+        return 3;
+    }
+    for (size_t index = 0; index < executablePath.size(); ++index)
+        request.ExecutablePath[index] = static_cast<uint16_t>(executablePath[index]);
+    if (!OacIpcValidateLaunchRequest(
+            &request,
+            static_cast<uint32_t>(sizeof(request))))
+    {
+        std::wcerr << L"Launch requires one canonical absolute drive path.\n";
+        return 2;
+    }
+
+    UniqueHandle pipe;
+    DWORD serverProcessId = 0;
+    OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_NONE;
+    const DWORD connectionError = ConnectService(
+        pipe,
+        serverProcessId,
+        failureStage);
+    if (connectionError != ERROR_SUCCESS)
+    {
+        std::wcerr << L"OACService connection failed";
+        if (failureStage != OAC_SERVICE_STAGE_NONE)
+            std::wcerr << L" during " << ServiceStageText(failureStage);
+        std::wcerr << L": " << ErrorText(connectionError) << L'\n';
+        return 3;
+    }
+
+    OAC_IPC_LAUNCH_RESPONSE response{};
+    DWORD returned = 0;
+    const DWORD transactionError = TransactService(
+        pipe.get(),
+        &request,
+        static_cast<DWORD>(sizeof(request)),
+        &response,
+        static_cast<DWORD>(sizeof(response)),
+        returned);
+    if (transactionError != ERROR_SUCCESS)
+    {
+        std::wcerr << L"OACService launch request failed: "
+                   << ErrorText(transactionError) << L'\n';
+        return 3;
+    }
+    if (!OacIpcValidateLaunchResponse(
+            &response,
+            returned,
+            request.Header.RequestId))
+    {
+        std::wcerr << L"OACService returned an invalid launch response.\n";
+        return 4;
+    }
+    if (response.Win32Error != ERROR_SUCCESS)
+    {
+        std::wcerr << L"OACService rejected the launch: "
+                   << ErrorText(response.Win32Error) << L'\n';
+        return 5;
+    }
+
+    DWORD ownSessionId = 0;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &ownSessionId) ||
+        response.ServiceProcessId != serverProcessId ||
+        response.ClientProcessId != GetCurrentProcessId() ||
+        response.ClientSessionId != ownSessionId)
+    {
+        std::wcerr << L"OACService returned inconsistent launch identity.\n";
+        return 4;
+    }
+
+    std::wcout << L"OACService launched target"
+               << L"; target-pid=" << response.TargetProcessId
+               << L"; binding=confirmed; thread=resumed\n";
     return 0;
 }
 } // namespace
@@ -440,9 +550,15 @@ int wmain(int argumentCount, wchar_t** arguments)
         type = OAC_IPC_TYPE_HELLO_REQUEST;
     else if (argumentCount == 2 && std::wstring(arguments[1]) == L"--status")
         type = OAC_IPC_TYPE_STATUS_REQUEST;
+    else if (argumentCount == 3 &&
+        std::wstring(arguments[1]) == L"--launch")
+    {
+        return SendLaunchRequest(arguments[2]);
+    }
     else if (argumentCount != 1)
     {
-        std::wcerr << L"Usage: OAC-Launcher.exe [--hello|--status]\n";
+        std::wcerr <<
+            L"Usage: OAC-Launcher.exe [--hello|--status|--launch <absolute-executable-path>]\n";
         return 2;
     }
 

@@ -26,6 +26,7 @@ $requiredZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-launch',
     'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator',
@@ -970,6 +971,10 @@ function Test-ProductionBoundary {
         limited = [int64]-1
         administrator = [int64]-1
     }
+    $launchExit = [int64]-1
+    $launchTargetProcessId = [int64]0
+    $launchBindingConfirmed = $false
+    $launchThreadResumed = $false
     $testError = $null
     $cleanupError = $null
     try {
@@ -1059,8 +1064,44 @@ exit $code
                 ([ServiceProcess.ServiceControllerStatus]::Running)
         }
 
+        # Launch last because target exit revokes the one-use production
+        # controller session. The service is stopped in the common cleanup.
+        $launchName = 'production-launch'
+        $launchWorkspace = New-InteractiveTaskWorkspace $launchName
+        $launchScriptPath = Join-Path $launchWorkspace 'task.ps1'
+        $launchResultPath = Join-Path $launchWorkspace 'result.txt'
+        $launchOutputPath = Join-Path $launchWorkspace 'stdout.txt'
+        $launchTarget = Join-Path $env:SystemRoot 'System32\whoami.exe'
+        $launchScript = @"
+`$output = & '$launcher' --launch '$launchTarget' 2>&1
+`$code = `$LASTEXITCODE
+`$output | Out-File -LiteralPath '$launchOutputPath' -Encoding utf8
+[IO.File]::WriteAllText('$launchResultPath', [string]`$code, [Text.Encoding]::ASCII)
+exit `$code
+"@
+        Write-TaskScript $launchScriptPath $launchScript
+        $launchExit = Invoke-InteractiveTask $launchName $launchWorkspace 'Limited'
+        $launchOutput = Get-Content -LiteralPath `
+            (Join-Path $results 'production-launch.stdout.txt') -Raw
+        $launchMatches = [regex]::Matches(
+            $launchOutput,
+            '(?m)^OACService launched target; target-pid=([1-9][0-9]*); binding=confirmed; thread=resumed\r?$')
+        if ($launchMatches.Count -eq 1) {
+            $parsedTargetProcessId = [int64]0
+            if ([int64]::TryParse(
+                    $launchMatches[0].Groups[1].Value,
+                    [ref]$parsedTargetProcessId) -and
+                $parsedTargetProcessId -gt 0) {
+                $launchTargetProcessId = $parsedTargetProcessId
+                $launchBindingConfirmed = $true
+                $launchThreadResumed = $true
+            }
+        }
+
         if (@($launcherExits | Where-Object { $_ -ne 0 }).Count -ne 0 -or
-            @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -ne 0) {
+            @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -ne 0 -or
+            $launchExit -ne 0 -or -not $launchBindingConfirmed -or
+            -not $launchThreadResumed) {
             throw 'The production service/launcher/direct-open boundary did not pass.'
         }
     } catch {
@@ -1079,13 +1120,19 @@ exit $code
     $passed = $null -eq $testError -and $null -eq $cleanupError -and
         $launcherExits.Count -eq 2 -and
         @($launcherExits | Where-Object { $_ -ne 0 }).Count -eq 0 -and
-        @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -eq 0
+        @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -eq 0 -and
+        $launchExit -eq 0 -and $launchTargetProcessId -gt 0 -and
+        $launchBindingConfirmed -and $launchThreadResumed
     [ordered]@{
         timestamp_utc = [DateTime]::UtcNow.ToString('o')
         launcher_exits = @($launcherExits)
         direct_open_localsystem_exit = $probeExits.localsystem
         direct_open_limited_exit = $probeExits.limited
         direct_open_administrator_exit = $probeExits.administrator
+        launch_exit = $launchExit
+        launch_target_process_id = $launchTargetProcessId
+        launch_binding_confirmed = $launchBindingConfirmed
+        launch_thread_resumed = $launchThreadResumed
         test_error = $testError
         cleanup_error = $cleanupError
         lab_mode_restored = $null -eq $cleanupError
@@ -1095,7 +1142,7 @@ exit $code
     if (-not $passed) {
         throw "Production boundary failed; test='$testError' cleanup='$cleanupError'."
     }
-    Write-RunLog 'Production service boundary passed twice; LocalSystem, limited-user, and administrator direct opens were denied.'
+    Write-RunLog 'Production service boundary passed: status was queried twice, direct device opens were denied, and one standard-user target was bound and resumed.'
 }
 
 function Assert-KernelFindingProvenance([string]$ReportPath) {

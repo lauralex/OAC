@@ -39,6 +39,29 @@ static __inline BOOLEAN OacV5SessionIdEqual(
         Left->High == Right->High && Left->Low == Right->Low;
 }
 
+static __inline BOOLEAN OacLaunchIdIsZero(
+    const OAC_LAUNCH_ID* LaunchId)
+{
+    return LaunchId != NULL && LaunchId->High == 0 && LaunchId->Low == 0;
+}
+
+static __inline BOOLEAN OacLaunchIdEqual(
+    const OAC_LAUNCH_ID* Left,
+    const OAC_LAUNCH_ID* Right)
+{
+    return Left != NULL && Right != NULL &&
+        Left->High == Right->High && Left->Low == Right->Low;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateLaunchId(
+    const OAC_LAUNCH_ID* LaunchId)
+{
+    if (LaunchId == NULL) return OAC_V5_INVALID_POINTER;
+    return OacLaunchIdIsZero(LaunchId)
+        ? OAC_V5_INVALID_VALUE
+        : OAC_V5_VALID;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateVersion(ULONG Version)
 {
     return Version == OAC_V5_VERSION ? OAC_V5_VALID : OAC_V5_INVALID_VERSION;
@@ -48,7 +71,7 @@ static __inline BOOLEAN OacV5MessageTypeValid(
     OAC_V5_MESSAGE_TYPE MessageType)
 {
     return MessageType >= OAC_V5_MESSAGE_NEGOTIATE &&
-        MessageType <= OAC_V5_MESSAGE_REVOKE_SESSION;
+        MessageType <= OAC_MESSAGE_CONFIRM_TARGET;
 }
 
 static __inline OAC_V5_VALIDATION OacV5ValidateSize(
@@ -88,6 +111,86 @@ static __inline OAC_V5_VALIDATION OacV5ValidateReserved(
         if (bytes[index] != 0) return OAC_V5_INVALID_RESERVED;
     }
     return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateCanonicalNtPath(
+    const WCHAR* Path,
+    ULONG PathLength)
+{
+    ULONG componentStart;
+    ULONG index;
+
+    if (Path == NULL) return OAC_V5_INVALID_POINTER;
+    if (PathLength <= 8 ||
+        PathLength >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
+    {
+        return OAC_V5_INVALID_RANGE;
+    }
+    if (Path[0] != L'\\' || Path[1] != L'D' || Path[2] != L'e' ||
+        Path[3] != L'v' || Path[4] != L'i' || Path[5] != L'c' ||
+        Path[6] != L'e' ||
+        Path[7] != L'\\' || Path[PathLength - 1] == L'\\')
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+
+    componentStart = 1;
+    for (index = 0; index < PathLength; ++index)
+    {
+        const WCHAR value = Path[index];
+
+        if (value == L'\0' || value < 0x20 || value == 0x7f ||
+            value == L'/' || value == L':')
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+        if (value == L'\\')
+        {
+            ULONG componentLength;
+
+            if (index == 0) continue;
+            if (index == componentStart) return OAC_V5_INVALID_VALUE;
+            componentLength = index - componentStart;
+            if (Path[index - 1] == L'.' || Path[index - 1] == L' ')
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            if ((componentLength == 1 && Path[componentStart] == L'.') ||
+                (componentLength == 2 && Path[componentStart] == L'.' &&
+                 Path[componentStart + 1] == L'.'))
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            componentStart = index + 1;
+            continue;
+        }
+        if (value >= 0xd800 && value <= 0xdbff)
+        {
+            if (index + 1 >= PathLength ||
+                Path[index + 1] < 0xdc00 || Path[index + 1] > 0xdfff)
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            ++index;
+        }
+        else if (value >= 0xdc00 && value <= 0xdfff)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+
+    if (Path[PathLength - 1] == L'.' || Path[PathLength - 1] == L' ' ||
+        (PathLength - componentStart == 1 &&
+         Path[componentStart] == L'.') ||
+        (PathLength - componentStart == 2 &&
+         Path[componentStart] == L'.' &&
+         Path[componentStart + 1] == L'.'))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OacV5ValidateReserved(
+        &Path[PathLength],
+        (OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS - PathLength) * sizeof(WCHAR));
 }
 
 static __inline OAC_V5_VALIDATION OacV5ValidateSession(
@@ -288,9 +391,41 @@ static __inline BOOLEAN OacV5SessionTransitionValid(
     }
 }
 
+static __inline OAC_LAUNCH_DECISION OacDecideLaunchCandidate(
+    OAC_V5_SESSION_STATE State,
+    ULONGLONG CurrentTime100ns,
+    ULONGLONG ExpirationInterruptTime100ns,
+    BOOLEAN CreatorMatches,
+    BOOLEAN NameAvailable,
+    BOOLEAN PathMatches)
+{
+    if (!CreatorMatches)
+    {
+        return OAC_LAUNCH_IGNORE;
+    }
+    if (State == OAC_V5_SESSION_TARGET_BOUND ||
+        State == OAC_V5_SESSION_MONITORING)
+    {
+        return OAC_LAUNCH_DENY_SERVICE_CREATION_AFTER_BIND;
+    }
+    if (State != OAC_V5_SESSION_LAUNCH_PENDING)
+    {
+        return OAC_LAUNCH_IGNORE;
+    }
+    if (CurrentTime100ns >= ExpirationInterruptTime100ns)
+    {
+        return OAC_LAUNCH_REVOKE_EXPIRED;
+    }
+    if (!NameAvailable || !PathMatches)
+    {
+        return OAC_LAUNCH_REVOKE_MISMATCH;
+    }
+    return OAC_LAUNCH_CONSUME_BIND;
+}
+
 static __inline BOOLEAN OacV5RevokeReasonValid(OAC_V5_REVOKE_REASON Reason)
 {
-    return Reason <= OAC_V5_REVOKE_DRIVER_STOP;
+    return Reason <= OAC_REVOKE_TARGET_CONFIRMATION_FAILED;
 }
 
 static __inline BOOLEAN OacV5RuleIdValid(OAC_V5_RULE_ID RuleId)
@@ -507,6 +642,57 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusRequest(
         sizeof(*Request), OAC_V5_MESSAGE_GET_STATUS, 0);
 }
 
+static __inline OAC_V5_VALIDATION OacValidateArmLaunchRequest(
+    const OAC_ARM_LAUNCH_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_MESSAGE_ARM_LAUNCH, 0);
+    if (result != OAC_V5_VALID) return result;
+    if (Request->TimeToLiveMilliseconds < OAC_LAUNCH_MIN_TTL_MS ||
+        Request->TimeToLiveMilliseconds > OAC_LAUNCH_MAX_TTL_MS)
+    {
+        return OAC_V5_INVALID_RANGE;
+    }
+    if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
+    return OacValidateCanonicalNtPath(
+        Request->CanonicalNtPath,
+        Request->CanonicalNtPathLength);
+}
+
+static __inline OAC_V5_VALIDATION OacValidateCancelLaunchRequest(
+    const OAC_CANCEL_LAUNCH_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_MESSAGE_CANCEL_LAUNCH, 0);
+    if (result != OAC_V5_VALID) return result;
+    return OacValidateLaunchId(&Request->LaunchId);
+}
+
+static __inline OAC_V5_VALIDATION OacValidateConfirmTargetRequest(
+    const OAC_CONFIRM_TARGET_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_MESSAGE_CONFIRM_TARGET, 0);
+    if (result != OAC_V5_VALID) return result;
+    result = OacValidateLaunchId(&Request->LaunchId);
+    if (result != OAC_V5_VALID) return result;
+    return Request->TargetProcessHandle != 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_VALUE;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateNegotiateResponse(
     const OAC_V5_NEGOTIATE_RESPONSE* Response,
     ULONG OutputLength)
@@ -523,6 +709,8 @@ static __inline OAC_V5_VALIDATION OacV5ValidateNegotiateResponse(
         OacV5ValidateFlags(Response->Capabilities, OAC_V5_CAP_ALL) != OAC_V5_VALID ||
         OacV5ValidateFlags(Response->ProtocolFlags, OAC_V5_PROTOCOL_FLAGS) != OAC_V5_VALID ||
         Response->MaximumInputSize < sizeof(OAC_V5_CLAIM_REQUEST) ||
+        (((Response->Capabilities & OAC_V5_CAP_LAUNCH_TICKET) != 0) &&
+         Response->MaximumInputSize < sizeof(OAC_ARM_LAUNCH_REQUEST)) ||
         Response->MaximumInputSize > OAC_V5_MAX_INPUT_SIZE ||
         Response->MaximumOutputSize < sizeof(OAC_V5_STATUS_RESPONSE) ||
         Response->MaximumOutputSize > OAC_V5_MAX_OUTPUT_SIZE ||
@@ -553,6 +741,71 @@ static __inline OAC_V5_VALIDATION OacV5ValidateClaimResponse(
     return OAC_V5_VALID;
 }
 
+static __inline OAC_V5_VALIDATION OacValidateArmLaunchResponse(
+    const OAC_ARM_LAUNCH_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_MESSAGE_ARM_LAUNCH, 0,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    result = OacValidateLaunchId(&Response->LaunchId);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->ExpirationInterruptTime100ns == 0 ||
+        Response->State != OAC_V5_SESSION_LAUNCH_PENDING)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return Response->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateCancelLaunchResponse(
+    const OAC_CANCEL_LAUNCH_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_MESSAGE_CANCEL_LAUNCH,
+        OAC_V5_RESPONSE_REVOKED, OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->Header.Flags != OAC_V5_RESPONSE_REVOKED ||
+        Response->State != OAC_V5_SESSION_REVOKED)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return Response->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateConfirmTargetResponse(
+    const OAC_CONFIRM_TARGET_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_MESSAGE_CONFIRM_TARGET, 0,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->TargetProcessId == 0 ||
+        Response->State != OAC_V5_SESSION_MONITORING)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return Response->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     const OAC_V5_STATUS_RESPONSE* Response,
     ULONG OutputLength)
@@ -577,6 +830,15 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
         (Response->RevokeReason == OAC_V5_REVOKE_NONE) ||
         ((Response->State >= OAC_V5_SESSION_REVOKED) !=
          ((Response->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if (((Response->State == OAC_V5_SESSION_CLAIMED ||
+          Response->State == OAC_V5_SESSION_LAUNCH_PENDING) &&
+         Response->TargetProcessId != 0) ||
+        ((Response->State == OAC_V5_SESSION_TARGET_BOUND ||
+          Response->State == OAC_V5_SESSION_MONITORING) &&
+         Response->TargetProcessId == 0))
     {
         return OAC_V5_INVALID_VALUE;
     }

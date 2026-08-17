@@ -6,9 +6,8 @@
 > request authorizes implementation. See the root README and source for current behavior.
 
 > [!NOTE]
-> The current working tree implements the source foundations for WP-00 through WP-03, including
-> status-only service control and per-file sessions. Their acceptance state is tracked in
-> `../PROGRESS.md`; this roadmap is not updated in place to imply that later deliverables exist.
+> Implementation and acceptance state are tracked in `../PROGRESS.md`. This roadmap is not updated
+> in place to imply that proposed deliverables exist.
 
 **Document status:** Proposed target architecture and roadmap
 **Target repository:** `lauralex/OAC`

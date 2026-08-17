@@ -6,10 +6,13 @@
  * messages whose version, size, type, flags, or reserved fields differ.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
-#define OAC_IPC_VERSION 0x00010000u
+#define OAC_IPC_PROTOCOL_REVISION 0x00010001u
+#define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
+#define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
 
 #define OAC_SERVICE_NAME L"OACService"
 #define OAC_SERVICE_ACCOUNT L"NT SERVICE\\OACService"
@@ -22,11 +25,16 @@
 
 #define OAC_IPC_TYPE_HELLO_REQUEST 0x00000001u
 #define OAC_IPC_TYPE_STATUS_REQUEST 0x00000002u
+#define OAC_IPC_TYPE_LAUNCH_REQUEST 0x00000003u
 #define OAC_IPC_TYPE_HELLO_RESPONSE 0x80000001u
 #define OAC_IPC_TYPE_STATUS_RESPONSE 0x80000002u
+#define OAC_IPC_TYPE_LAUNCH_RESPONSE 0x80000003u
 
 #define OAC_IPC_STATUS_DRIVER_READY 0x00000001u
 #define OAC_IPC_STATUS_SESSION_CLAIMED 0x00000002u
+
+#define OAC_IPC_LAUNCH_CONFIRMED 0x00000001u
+#define OAC_IPC_LAUNCH_RESUMED   0x00000002u
 
 /*
  * SCM exposes one application-defined service exit code. OAC keeps the high
@@ -118,6 +126,157 @@ typedef struct OAC_IPC_RESPONSE_TAG
     uint64_t DriverCapabilities;
 } OAC_IPC_RESPONSE;
 
+typedef struct OAC_IPC_LAUNCH_REQUEST_TAG
+{
+    OAC_IPC_HEADER Header;
+    uint32_t ExecutablePathLength;
+    uint32_t Reserved;
+    uint16_t ExecutablePath[OAC_IPC_MAX_EXECUTABLE_PATH_CHARS];
+} OAC_IPC_LAUNCH_REQUEST;
+
+typedef struct OAC_IPC_LAUNCH_RESPONSE_TAG
+{
+    OAC_IPC_HEADER Header;
+    uint32_t Win32Error;
+    uint32_t LaunchFlags;
+    uint32_t ServiceProcessId;
+    uint32_t ClientProcessId;
+    uint32_t ClientSessionId;
+    uint32_t TargetProcessId;
+    uint64_t Reserved;
+} OAC_IPC_LAUNCH_RESPONSE;
+
+static inline int OacIpcHeaderMatches(
+    const OAC_IPC_HEADER* header,
+    uint32_t bytes,
+    uint32_t expectedSize,
+    uint32_t expectedType)
+{
+    return header != 0 && bytes == expectedSize &&
+        header->Version == OAC_IPC_PROTOCOL_REVISION &&
+        header->Size == expectedSize && header->Type == expectedType &&
+        header->Flags == 0 && header->RequestId != 0;
+}
+
+static inline int OacIpcExecutablePathValid(
+    const uint16_t* path,
+    uint32_t length)
+{
+    uint32_t index;
+    uint32_t componentStart = 3;
+
+    if (path == 0 || length < 4 ||
+        length >= OAC_IPC_MAX_EXECUTABLE_PATH_CHARS ||
+        !((path[0] >= (uint16_t)'A' && path[0] <= (uint16_t)'Z') ||
+          (path[0] >= (uint16_t)'a' && path[0] <= (uint16_t)'z')) ||
+        path[1] != (uint16_t)':' || path[2] != (uint16_t)'\\')
+    {
+        return 0;
+    }
+
+    for (index = 3; index < length; ++index)
+    {
+        const uint16_t value = path[index];
+        if (value == 0 || value < 0x20u || value == (uint16_t)'/' ||
+            value == (uint16_t)':' || value == (uint16_t)'"' ||
+            value == (uint16_t)'*' || value == (uint16_t)'?' ||
+            value == (uint16_t)'<' || value == (uint16_t)'>' ||
+            value == (uint16_t)'|')
+        {
+            return 0;
+        }
+        if (value >= 0xD800u && value <= 0xDBFFu)
+        {
+            if (++index >= length || path[index] < 0xDC00u ||
+                path[index] > 0xDFFFu)
+            {
+                return 0;
+            }
+            continue;
+        }
+        if (value >= 0xDC00u && value <= 0xDFFFu) return 0;
+        if (value == (uint16_t)'\\')
+        {
+            const uint32_t componentLength = index - componentStart;
+            if (componentLength == 0 || path[index - 1] == (uint16_t)'.' ||
+                path[index - 1] == (uint16_t)' ' ||
+                (componentLength == 1 &&
+                 path[componentStart] == (uint16_t)'.') ||
+                (componentLength == 2 &&
+                 path[componentStart] == (uint16_t)'.' &&
+                 path[componentStart + 1] == (uint16_t)'.'))
+            {
+                return 0;
+            }
+            componentStart = index + 1;
+        }
+    }
+
+    if (componentStart == length || path[length - 1] == (uint16_t)'.' ||
+        path[length - 1] == (uint16_t)' ' ||
+        (length - componentStart == 1 &&
+         path[componentStart] == (uint16_t)'.') ||
+        (length - componentStart == 2 &&
+         path[componentStart] == (uint16_t)'.' &&
+         path[componentStart + 1] == (uint16_t)'.'))
+    {
+        return 0;
+    }
+    for (index = length; index < OAC_IPC_MAX_EXECUTABLE_PATH_CHARS; ++index)
+    {
+        if (path[index] != 0) return 0;
+    }
+    return 1;
+}
+
+static inline int OacIpcValidateLaunchRequest(
+    const OAC_IPC_LAUNCH_REQUEST* request,
+    uint32_t bytes)
+{
+    return request != 0 &&
+        OacIpcHeaderMatches(
+            &request->Header,
+            bytes,
+            (uint32_t)sizeof(*request),
+            OAC_IPC_TYPE_LAUNCH_REQUEST) &&
+        request->Reserved == 0 &&
+        OacIpcExecutablePathValid(
+            request->ExecutablePath,
+            request->ExecutablePathLength);
+}
+
+static inline int OacIpcValidateLaunchResponse(
+    const OAC_IPC_LAUNCH_RESPONSE* response,
+    uint32_t bytes,
+    uint64_t requestId)
+{
+    const uint32_t successFlags =
+        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_RESUMED;
+
+    if (response == 0 || !OacIpcHeaderMatches(
+            &response->Header,
+            bytes,
+            (uint32_t)sizeof(*response),
+            OAC_IPC_TYPE_LAUNCH_RESPONSE) ||
+        response->Header.RequestId != requestId || response->Reserved != 0)
+    {
+        return 0;
+    }
+    if (response->Win32Error == 0)
+    {
+        return response->LaunchFlags == successFlags &&
+            response->ServiceProcessId != 0 &&
+            response->ClientProcessId != 0 &&
+            response->ClientSessionId != 0 &&
+            response->TargetProcessId != 0;
+    }
+    return response->LaunchFlags == 0 &&
+        response->ServiceProcessId == 0 &&
+        response->ClientProcessId == 0 &&
+        response->ClientSessionId == 0 &&
+        response->TargetProcessId == 0;
+}
+
 #ifdef __cplusplus
 #define OAC_IPC_STATIC_ASSERT(Expression, Message) \
     static_assert((Expression), Message)
@@ -132,6 +291,24 @@ OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_REQUEST) == 32,
     "OAC_IPC_REQUEST layout changed");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 56,
     "OAC_IPC_RESPONSE layout changed");
+OAC_IPC_STATIC_ASSERT(sizeof(uint16_t) == 2,
+    "OAC IPC paths require 16-bit code units");
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,
+    "OAC_IPC_LAUNCH_REQUEST layout changed");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePathLength) == 24,
+    "OAC_IPC_LAUNCH_REQUEST length moved");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32,
+    "OAC_IPC_LAUNCH_REQUEST path moved");
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56,
+    "OAC_IPC_LAUNCH_RESPONSE layout changed");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_LAUNCH_RESPONSE, TargetProcessId) == 44,
+    "OAC_IPC_LAUNCH_RESPONSE target identity moved");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_LAUNCH_RESPONSE, Reserved) == 48,
+    "OAC_IPC_LAUNCH_RESPONSE reserved field moved");
 OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_STAGE_MASK) == 0 &&
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0 &&

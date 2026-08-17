@@ -1,7 +1,7 @@
 #pragma once
 
 /*
- * OAC protocol v5 wire types. Keep this header C-compatible and free of
+ * OAC production-protocol wire types. Keep this header C-compatible and free of
  * process-local pointers: it is shared by the kernel driver and user mode.
  */
 
@@ -12,12 +12,16 @@
 #include <winioctl.h>
 #endif
 
-#define OAC_V5_VERSION 0x00050000UL
+#define OAC_PRODUCTION_PROTOCOL_VERSION 0x00050001UL
+#define OAC_V5_VERSION OAC_PRODUCTION_PROTOCOL_VERSION
 #define OAC_V5_ULONG_MAX 0xFFFFFFFFUL
 #define OAC_V5_MAX_INPUT_SIZE (64UL * 1024UL)
 #define OAC_V5_MAX_OUTPUT_SIZE (1024UL * 1024UL)
 #define OAC_V5_MAX_EVENT_COUNT 64UL
 #define OAC_V5_MAX_EVENT_TEXT 192UL
+#define OAC_LAUNCH_MIN_TTL_MS 100UL
+#define OAC_LAUNCH_MAX_TTL_MS 10000UL
+#define OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS 512UL
 
 #define OAC_V5_IOCTL_ACCESS (FILE_READ_ACCESS | FILE_WRITE_ACCESS)
 
@@ -37,6 +41,12 @@
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x816, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
 #define IOCTL_OAC_V5_REVOKE_SESSION \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x817, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
+#define IOCTL_OAC_ARM_LAUNCH \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x818, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
+#define IOCTL_OAC_CANCEL_LAUNCH \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x819, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
+#define IOCTL_OAC_CONFIRM_TARGET \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x81A, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
 
 typedef ULONGLONG OAC_V5_REQUEST_ID;
 typedef ULONGLONG OAC_V5_SCAN_ID;
@@ -62,12 +72,21 @@ typedef ULONG OAC_V5_REVOKE_REASON;
 #define OAC_V5_MESSAGE_CPU_SNAPSHOT   0x00000815UL
 #define OAC_V5_MESSAGE_GET_STATUS     0x00000816UL
 #define OAC_V5_MESSAGE_REVOKE_SESSION 0x00000817UL
+#define OAC_MESSAGE_ARM_LAUNCH     0x00000818UL
+#define OAC_MESSAGE_CANCEL_LAUNCH  0x00000819UL
+#define OAC_MESSAGE_CONFIRM_TARGET 0x0000081AUL
 
 typedef struct OAC_V5_SESSION_ID_TAG
 {
     ULONGLONG High;
     ULONGLONG Low;
 } OAC_V5_SESSION_ID, *POAC_V5_SESSION_ID;
+
+typedef struct OAC_LAUNCH_ID_TAG
+{
+    ULONGLONG High;
+    ULONGLONG Low;
+} OAC_LAUNCH_ID, *POAC_LAUNCH_ID;
 
 /* Session modes accepted by OAC_V5_CLAIM_REQUEST.Mode. */
 #define OAC_V5_SESSION_PRODUCTION 0x00000001UL
@@ -106,6 +125,17 @@ typedef struct OAC_V5_SESSION_ID_TAG
 #define OAC_V5_REVOKE_POLICY        5UL
 #define OAC_V5_REVOKE_EVIDENCE_LOSS 6UL
 #define OAC_V5_REVOKE_DRIVER_STOP   7UL
+#define OAC_REVOKE_LAUNCH_CANCELLED 8UL
+#define OAC_REVOKE_LAUNCH_EXPIRED   9UL
+#define OAC_REVOKE_LAUNCH_MISMATCH  10UL
+#define OAC_REVOKE_TARGET_CONFIRMATION_FAILED 11UL
+
+typedef ULONG OAC_LAUNCH_DECISION;
+#define OAC_LAUNCH_IGNORE            0UL
+#define OAC_LAUNCH_CONSUME_BIND      1UL
+#define OAC_LAUNCH_REVOKE_EXPIRED    2UL
+#define OAC_LAUNCH_REVOKE_MISMATCH   3UL
+#define OAC_LAUNCH_DENY_SERVICE_CREATION_AFTER_BIND 4UL
 
 /* Negotiated driver capabilities. Unsupported capabilities remain clear. */
 #define OAC_V5_CAP_SESSION_CONTROL 0x00000001UL
@@ -206,7 +236,7 @@ typedef struct OAC_V5_SESSION_ID_TAG
 #define OAC_V5_PAYLOAD_BINARY 1UL
 #define OAC_V5_PAYLOAD_UTF16  2UL
 
-/* No event-record flags are defined in protocol v5. */
+/* No event-record flags are defined in the production protocol. */
 #define OAC_V5_EVENT_FLAGS 0UL
 
 #define OAC_V5_CATEGORY_GENERAL        0UL
@@ -302,6 +332,55 @@ typedef struct OAC_V5_STATUS_RESPONSE_TAG
     ULONGLONG DriverGateTrips;
 } OAC_V5_STATUS_RESPONSE, *POAC_V5_STATUS_RESPONSE;
 
+/* CanonicalNtPathLength counts WCHARs and excludes the null terminator. The
+ * unused portion of CanonicalNtPath, including the terminator, must be zero. */
+typedef struct OAC_ARM_LAUNCH_REQUEST_TAG
+{
+    OAC_V5_REQUEST_HEADER Header;
+    ULONG TimeToLiveMilliseconds;
+    ULONG CanonicalNtPathLength;
+    ULONGLONG Reserved;
+    WCHAR CanonicalNtPath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
+} OAC_ARM_LAUNCH_REQUEST, *POAC_ARM_LAUNCH_REQUEST;
+
+typedef struct OAC_ARM_LAUNCH_RESPONSE_TAG
+{
+    OAC_V5_RESPONSE_HEADER Header;
+    OAC_LAUNCH_ID LaunchId;
+    /* Absolute KeQueryInterruptTime-compatible expiration value. */
+    ULONGLONG ExpirationInterruptTime100ns;
+    OAC_V5_SESSION_STATE State;
+    ULONG Reserved;
+} OAC_ARM_LAUNCH_RESPONSE, *POAC_ARM_LAUNCH_RESPONSE;
+
+typedef struct OAC_CANCEL_LAUNCH_REQUEST_TAG
+{
+    OAC_V5_REQUEST_HEADER Header;
+    OAC_LAUNCH_ID LaunchId;
+} OAC_CANCEL_LAUNCH_REQUEST, *POAC_CANCEL_LAUNCH_REQUEST;
+
+typedef struct OAC_CANCEL_LAUNCH_RESPONSE_TAG
+{
+    OAC_V5_RESPONSE_HEADER Header;
+    OAC_V5_SESSION_STATE State;
+    ULONG Reserved;
+} OAC_CANCEL_LAUNCH_RESPONSE, *POAC_CANCEL_LAUNCH_RESPONSE;
+
+typedef struct OAC_CONFIRM_TARGET_REQUEST_TAG
+{
+    OAC_V5_REQUEST_HEADER Header;
+    OAC_LAUNCH_ID LaunchId;
+    ULONGLONG TargetProcessHandle;
+} OAC_CONFIRM_TARGET_REQUEST, *POAC_CONFIRM_TARGET_REQUEST;
+
+typedef struct OAC_CONFIRM_TARGET_RESPONSE_TAG
+{
+    OAC_V5_RESPONSE_HEADER Header;
+    ULONGLONG TargetProcessId;
+    OAC_V5_SESSION_STATE State;
+    ULONG Reserved;
+} OAC_CONFIRM_TARGET_RESPONSE, *POAC_CONFIRM_TARGET_RESPONSE;
+
 /* Display text is optional and has no policy meaning. PayloadLength is bytes
  * used in Text; UTF-16 payloads include their trailing null WCHAR. */
 typedef struct OAC_V5_EVENT_RECORD_TAG
@@ -361,8 +440,16 @@ OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_GET_STATUS >> 2) & 0xFFFUL) ==
     OAC_V5_MESSAGE_GET_STATUS, "status message ID drifted");
 OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_REVOKE_SESSION >> 2) & 0xFFFUL) ==
     OAC_V5_MESSAGE_REVOKE_SESSION, "revoke message ID drifted");
+OAC_V5_STATIC_ASSERT(((IOCTL_OAC_ARM_LAUNCH >> 2) & 0xFFFUL) ==
+    OAC_MESSAGE_ARM_LAUNCH, "arm-launch message ID drifted");
+OAC_V5_STATIC_ASSERT(((IOCTL_OAC_CANCEL_LAUNCH >> 2) & 0xFFFUL) ==
+    OAC_MESSAGE_CANCEL_LAUNCH, "cancel-launch message ID drifted");
+OAC_V5_STATIC_ASSERT(((IOCTL_OAC_CONFIRM_TARGET >> 2) & 0xFFFUL) ==
+    OAC_MESSAGE_CONFIRM_TARGET, "confirm-target message ID drifted");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_V5_SESSION_ID) == 16,
     "OAC_V5_SESSION_ID layout changed");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_LAUNCH_ID) == 16,
+    "OAC_LAUNCH_ID layout changed");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_V5_REQUEST_HEADER) == 48,
     "OAC_V5_REQUEST_HEADER layout changed");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_REQUEST_HEADER, RequestId) == 8,
@@ -417,6 +504,51 @@ OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_STATUS_RESPONSE, ServiceProcessId) == 7
     "OAC_V5_STATUS_RESPONSE identities moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_STATUS_RESPONSE, DriverGateTrips) == 112,
     "OAC_V5_STATUS_RESPONSE counters moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_ARM_LAUNCH_REQUEST) == 1088,
+    "OAC_ARM_LAUNCH_REQUEST layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    TimeToLiveMilliseconds) == 48, "arm-launch TTL moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalNtPathLength) == 52, "arm-launch path length moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    Reserved) == 56, "arm-launch reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalNtPath) == 64, "arm-launch path moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_ARM_LAUNCH_RESPONSE) == 88,
+    "OAC_ARM_LAUNCH_RESPONSE layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_RESPONSE,
+    LaunchId) == 56, "arm-launch ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_RESPONSE,
+    ExpirationInterruptTime100ns) == 72,
+    "arm-launch expiration moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_RESPONSE,
+    State) == 80, "arm-launch state moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_ARM_LAUNCH_RESPONSE,
+    Reserved) == 84, "arm-launch reserved field moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_CANCEL_LAUNCH_REQUEST) == 64,
+    "OAC_CANCEL_LAUNCH_REQUEST layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CANCEL_LAUNCH_REQUEST,
+    LaunchId) == 48, "cancel-launch ID moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_CANCEL_LAUNCH_RESPONSE) == 64,
+    "OAC_CANCEL_LAUNCH_RESPONSE layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CANCEL_LAUNCH_RESPONSE,
+    State) == 56, "cancel-launch state moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CANCEL_LAUNCH_RESPONSE,
+    Reserved) == 60, "cancel-launch reserved field moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72,
+    "OAC_CONFIRM_TARGET_REQUEST layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_REQUEST,
+    LaunchId) == 48, "confirm-target ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_REQUEST,
+    TargetProcessHandle) == 64, "confirm-target handle moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_CONFIRM_TARGET_RESPONSE) == 72,
+    "OAC_CONFIRM_TARGET_RESPONSE layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_RESPONSE,
+    TargetProcessId) == 56, "confirm-target PID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_RESPONSE,
+    State) == 64, "confirm-target state moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_RESPONSE,
+    Reserved) == 68, "confirm-target reserved field moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ObservationSeverity) == 16,
     "OAC_V5_EVENT_RECORD observation severity moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, PolicySeverity) == 20,

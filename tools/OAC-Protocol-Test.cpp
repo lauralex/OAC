@@ -490,6 +490,62 @@ OAC_V5_STATUS_REQUEST ValidV5Status(const OAC_V5_CLAIM_RESPONSE& claim)
     return request;
 }
 
+OAC_ARM_LAUNCH_REQUEST ValidArmLaunch(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    constexpr wchar_t path[] =
+        L"\\Device\\HarddiskVolume1\\Windows\\System32\\whoami.exe";
+    static_assert(std::size(path) < OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS);
+
+    OAC_ARM_LAUNCH_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_MESSAGE_ARM_LAUNCH;
+    request.TimeToLiveMilliseconds = OAC_LAUNCH_MIN_TTL_MS;
+    request.CanonicalNtPathLength =
+        static_cast<ULONG>(std::size(path) - 1);
+    std::memcpy(
+        request.CanonicalNtPath,
+        path,
+        sizeof(path) - sizeof(path[0]));
+    return request;
+}
+
+OAC_CANCEL_LAUNCH_REQUEST ValidCancelLaunch(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    OAC_CANCEL_LAUNCH_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_MESSAGE_CANCEL_LAUNCH;
+    request.LaunchId.High = 1;
+    request.LaunchId.Low = 2;
+    return request;
+}
+
+OAC_CONFIRM_TARGET_REQUEST ValidConfirmTarget(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    OAC_CONFIRM_TARGET_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_MESSAGE_CONFIRM_TARGET;
+    request.LaunchId.High = 1;
+    request.LaunchId.Low = 2;
+    request.TargetProcessHandle = static_cast<ULONGLONG>(
+        reinterpret_cast<ULONG_PTR>(GetCurrentProcess()));
+    return request;
+}
+
 bool NegotiateV5(
     HANDLE device,
     OAC_V5_NEGOTIATE_REQUEST& request,
@@ -2081,7 +2137,9 @@ void RunV5Tests(TestLog& log)
     negotiateRequest = ValidV5Negotiate();
     negotiateResponse = {};
     if (NegotiateV5(device, negotiateRequest, negotiateResponse, error) &&
-        (negotiateResponse.Capabilities & OAC_V5_CAP_SESSION_CONTROL) != 0 &&
+        (negotiateResponse.Capabilities &
+            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET)) ==
+            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET) &&
         (negotiateResponse.ProtocolFlags &
             (OAC_V5_PROTOCOL_STRICT_LENGTHS |
              OAC_V5_PROTOCOL_V4_DIAGNOSTIC)) ==
@@ -2192,6 +2250,84 @@ void RunV5Tests(TestLog& log)
     {
         log.Fail(L"v5 diagnostic claim and response identity", ErrorText(error));
     }
+
+    auto armLaunch = ValidArmLaunch(claimResponse);
+    OAC_ARM_LAUNCH_RESPONSE armResponse{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production launch rejects truncated request",
+        IOCTL_OAC_ARM_LAUNCH,
+        &armLaunch,
+        sizeof(armLaunch) - 1,
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    auto badArmLaunch = ValidArmLaunch(claimResponse);
+    badArmLaunch.Header.MessageType = OAC_MESSAGE_CANCEL_LAUNCH;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production launch rejects wrong message type",
+        IOCTL_OAC_ARM_LAUNCH,
+        &badArmLaunch,
+        sizeof(badArmLaunch),
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    badArmLaunch = ValidArmLaunch(claimResponse);
+    badArmLaunch.CanonicalNtPath[
+        badArmLaunch.CanonicalNtPathLength + 1] = L'X';
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production launch rejects dirty path tail",
+        IOCTL_OAC_ARM_LAUNCH,
+        &badArmLaunch,
+        sizeof(badArmLaunch),
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    armLaunch = ValidArmLaunch(claimResponse);
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"diagnostic session cannot arm production launch",
+        IOCTL_OAC_ARM_LAUNCH,
+        &armLaunch,
+        sizeof(armLaunch),
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_NOT_SUPPORTED});
+
+    auto cancelLaunch = ValidCancelLaunch(claimResponse);
+    OAC_CANCEL_LAUNCH_RESPONSE cancelResponse{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"diagnostic session cannot cancel production launch",
+        IOCTL_OAC_CANCEL_LAUNCH,
+        &cancelLaunch,
+        sizeof(cancelLaunch),
+        &cancelResponse,
+        sizeof(cancelResponse),
+        {ERROR_NOT_SUPPORTED});
+
+    auto confirmTarget = ValidConfirmTarget(claimResponse);
+    OAC_CONFIRM_TARGET_RESPONSE confirmResponse{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"diagnostic session cannot confirm production target",
+        IOCTL_OAC_CONFIRM_TARGET,
+        &confirmTarget,
+        sizeof(confirmTarget),
+        &confirmResponse,
+        sizeof(confirmResponse),
+        {ERROR_NOT_SUPPORTED});
 
     OAC_STATUS_RESPONSE legacyStatus{};
     ExpectIoctlFailure(

@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\protocol\oac_v5.h"
 
 class ServiceHost final
 {
@@ -31,5 +32,6 @@ private:
     volatile LONG fatalError_ = ERROR_SUCCESS;
     ULONG driverVersion_ = 0;
     ULONGLONG driverCapabilities_ = 0;
-    ULONG statusFlags_ = 0;
+    OAC_V5_SESSION_ID driverSessionId_{};
+    ULONGLONG driverSessionGeneration_ = 0;
 };

@@ -1,10 +1,12 @@
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <string>
 #include <type_traits>
@@ -23,6 +25,19 @@ static_assert(offsetof(OAC_V5_REQUEST_HEADER, MessageType) == 44);
 static_assert(offsetof(OAC_V5_RESPONSE_HEADER, MessageType) == 52);
 static_assert(offsetof(OAC_V5_EVENT_RECORD, PolicySeverity) == 20);
 static_assert(offsetof(OAC_V5_EVENT_RECORD, Reserved) == 36);
+static_assert(std::is_standard_layout_v<OAC_ARM_LAUNCH_REQUEST>);
+static_assert(std::is_trivially_copyable_v<OAC_CONFIRM_TARGET_REQUEST>);
+static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 1088);
+static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST, CanonicalNtPath) == 64);
+static_assert(sizeof(OAC_ARM_LAUNCH_RESPONSE) == 88);
+static_assert(sizeof(OAC_CANCEL_LAUNCH_REQUEST) == 64);
+static_assert(sizeof(OAC_CANCEL_LAUNCH_RESPONSE) == 64);
+static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72);
+static_assert(sizeof(OAC_CONFIRM_TARGET_RESPONSE) == 72);
+static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
+static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
+static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
+static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
 
 namespace
 {
@@ -183,6 +198,97 @@ OAC_V5_STATUS_RESPONSE ValidStatusResponse()
     return response;
 }
 
+OAC_LAUNCH_ID ValidLaunchId()
+{
+    return {0x0123456789abcdefULL, 0xfedcba9876543210ULL};
+}
+
+template <std::size_t Length>
+void SetCanonicalPath(
+    OAC_ARM_LAUNCH_REQUEST& request,
+    const WCHAR (&path)[Length])
+{
+    static_assert(Length <= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS);
+    std::memset(request.CanonicalNtPath, 0, sizeof(request.CanonicalNtPath));
+    request.CanonicalNtPathLength = static_cast<ULONG>(Length - 1);
+    std::memcpy(request.CanonicalNtPath, path, sizeof(path));
+}
+
+constexpr WCHAR kValidLaunchPath[] =
+    L"\\Device\\HarddiskVolume3\\Games\\OAC.exe";
+
+OAC_ARM_LAUNCH_REQUEST ValidArmLaunchRequest()
+{
+    OAC_ARM_LAUNCH_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_MESSAGE_ARM_LAUNCH);
+    request.TimeToLiveMilliseconds = 2000;
+    SetCanonicalPath(request, kValidLaunchPath);
+    return request;
+}
+
+OAC_ARM_LAUNCH_RESPONSE ValidArmLaunchResponse()
+{
+    OAC_ARM_LAUNCH_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_MESSAGE_ARM_LAUNCH);
+    response.LaunchId = ValidLaunchId();
+    response.ExpirationInterruptTime100ns = 100000;
+    response.State = OAC_V5_SESSION_LAUNCH_PENDING;
+    return response;
+}
+
+OAC_CANCEL_LAUNCH_REQUEST ValidCancelLaunchRequest()
+{
+    OAC_CANCEL_LAUNCH_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_MESSAGE_CANCEL_LAUNCH);
+    request.LaunchId = ValidLaunchId();
+    return request;
+}
+
+OAC_CANCEL_LAUNCH_RESPONSE ValidCancelLaunchResponse()
+{
+    OAC_CANCEL_LAUNCH_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_MESSAGE_CANCEL_LAUNCH);
+    response.Header.Flags = OAC_V5_RESPONSE_REVOKED;
+    response.State = OAC_V5_SESSION_REVOKED;
+    return response;
+}
+
+OAC_CONFIRM_TARGET_REQUEST ValidConfirmTargetRequest()
+{
+    OAC_CONFIRM_TARGET_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_MESSAGE_CONFIRM_TARGET);
+    request.LaunchId = ValidLaunchId();
+    request.TargetProcessHandle = 0x1234;
+    return request;
+}
+
+OAC_CONFIRM_TARGET_RESPONSE ValidConfirmTargetResponse()
+{
+    OAC_CONFIRM_TARGET_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_MESSAGE_CONFIRM_TARGET);
+    response.TargetProcessId = 1234;
+    response.State = OAC_V5_SESSION_MONITORING;
+    return response;
+}
+
 OAC_V5_EVENT_RECORD ValidEventRecord()
 {
     OAC_V5_EVENT_RECORD record{};
@@ -209,7 +315,7 @@ OAC_V5_EVENT_RECORD ValidEventRecord()
 
 void TestCodes(TestLog& log)
 {
-    const std::array<DWORD, 14> codes =
+    const std::array<DWORD, 17> codes =
     {
         IOCTL_OAC_PING,
         IOCTL_OAC_CONFIGURE,
@@ -224,10 +330,13 @@ void TestCodes(TestLog& log)
         IOCTL_OAC_V5_READ_EVENTS,
         IOCTL_OAC_V5_CPU_SNAPSHOT,
         IOCTL_OAC_V5_GET_STATUS,
-        IOCTL_OAC_V5_REVOKE_SESSION
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        IOCTL_OAC_ARM_LAUNCH,
+        IOCTL_OAC_CANCEL_LAUNCH,
+        IOCTL_OAC_CONFIRM_TARGET
     };
     const std::set<DWORD> unique(codes.begin(), codes.end());
-    const std::array<OAC_V5_MESSAGE_TYPE, 8> messages =
+    const std::array<OAC_V5_MESSAGE_TYPE, 11> messages =
     {
         OAC_V5_MESSAGE_NEGOTIATE,
         OAC_V5_MESSAGE_CLAIM_SESSION,
@@ -236,7 +345,10 @@ void TestCodes(TestLog& log)
         OAC_V5_MESSAGE_READ_EVENTS,
         OAC_V5_MESSAGE_CPU_SNAPSHOT,
         OAC_V5_MESSAGE_GET_STATUS,
-        OAC_V5_MESSAGE_REVOKE_SESSION
+        OAC_V5_MESSAGE_REVOKE_SESSION,
+        OAC_MESSAGE_ARM_LAUNCH,
+        OAC_MESSAGE_CANCEL_LAUNCH,
+        OAC_MESSAGE_CONFIRM_TARGET
     };
     bool buffered = true;
     bool restricted = true;
@@ -256,11 +368,11 @@ void TestCodes(TestLog& log)
     log.Expect("first v5 message type is valid", OacV5MessageTypeValid(
         OAC_V5_MESSAGE_NEGOTIATE) != FALSE);
     log.Expect("last v5 message type is valid", OacV5MessageTypeValid(
-        OAC_V5_MESSAGE_REVOKE_SESSION) != FALSE);
+        OAC_MESSAGE_CONFIRM_TARGET) != FALSE);
     log.Expect("message below range is invalid", OacV5MessageTypeValid(
         OAC_V5_MESSAGE_NEGOTIATE - 1) == FALSE);
     log.Expect("message above range is invalid", OacV5MessageTypeValid(
-        OAC_V5_MESSAGE_REVOKE_SESSION + 1) == FALSE);
+        OAC_MESSAGE_CONFIRM_TARGET + 1) == FALSE);
 }
 
 void TestBasicHelpers(TestLog& log)
@@ -269,6 +381,10 @@ void TestBasicHelpers(TestLog& log)
     const OAC_V5_SESSION_ID first{1, 2};
     const OAC_V5_SESSION_ID same{1, 2};
     const OAC_V5_SESSION_ID other{1, 3};
+    const OAC_LAUNCH_ID zeroLaunch{};
+    const OAC_LAUNCH_ID launch{3, 4};
+    const OAC_LAUNCH_ID sameLaunch{3, 4};
+    const OAC_LAUNCH_ID otherLaunch{3, 5};
     std::array<UCHAR, 8> reserved{};
 
     log.Expect("C translation unit accepts v5", OacV5CProbe() != 0);
@@ -277,6 +393,24 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("equal session IDs", OacV5SessionIdEqual(&first, &same) != FALSE);
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
+    log.Expect("production protocol exact revision",
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050001UL);
+    log.Expect("compatibility alias selects production revision",
+        OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
+    log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
+        0x00050000UL) == OAC_V5_INVALID_VERSION);
+    log.Expect("zero launch ID", OacLaunchIdIsZero(&zeroLaunch) != FALSE);
+    log.Expect("nonzero launch ID", OacLaunchIdIsZero(&launch) == FALSE);
+    log.Expect("equal launch IDs", OacLaunchIdEqual(
+        &launch, &sameLaunch) != FALSE);
+    log.Expect("different launch IDs", OacLaunchIdEqual(
+        &launch, &otherLaunch) == FALSE);
+    log.Expect("null launch ID is not zero", OacLaunchIdIsZero(
+        nullptr) == FALSE);
+    log.Expect("valid launch ID", OacValidateLaunchId(
+        &launch) == OAC_V5_VALID);
+    log.Expect("zero launch ID is invalid", OacValidateLaunchId(
+        &zeroLaunch) == OAC_V5_INVALID_VALUE);
     log.Expect("valid exact size", OacV5ValidateSize(64, 64, 32, 64) == OAC_V5_VALID);
     log.Expect("stated size mismatch", OacV5ValidateSize(64, 63, 32, 64) == OAC_V5_INVALID_LENGTH);
     log.Expect("invalid size bounds", OacV5ValidateSize(64, 64, 65, 64) == OAC_V5_INVALID_LENGTH);
@@ -373,6 +507,148 @@ void TestServiceFailures(TestLog& log)
     log.Expect("service failure rejects aliased outputs",
         OacDecodeServiceFailure(encoded, &stage, &stage) == 0 &&
         stage == sentinelStage);
+}
+
+OAC_IPC_LAUNCH_REQUEST ValidServiceLaunchRequest()
+{
+    OAC_IPC_LAUNCH_REQUEST request{};
+    request.Header.Version = OAC_IPC_PROTOCOL_REVISION;
+    request.Header.Size = sizeof(request);
+    request.Header.Type = OAC_IPC_TYPE_LAUNCH_REQUEST;
+    request.Header.RequestId = 0x123456789ABCDEF0ULL;
+    constexpr char16_t path[] = u"C:\\Games\\OAC Game.exe";
+    request.ExecutablePathLength =
+        static_cast<uint32_t>(std::size(path) - 1);
+    for (size_t index = 0; index < std::size(path) - 1; ++index)
+        request.ExecutablePath[index] = path[index];
+    return request;
+}
+
+void SetServiceLaunchPath(
+    OAC_IPC_LAUNCH_REQUEST& request,
+    const std::u16string& path)
+{
+    request.ExecutablePathLength = static_cast<uint32_t>(path.size());
+    std::fill(
+        std::begin(request.ExecutablePath),
+        std::end(request.ExecutablePath),
+        uint16_t{});
+    const size_t count = (std::min)(
+        path.size(),
+        static_cast<size_t>(OAC_IPC_MAX_EXECUTABLE_PATH_CHARS));
+    for (size_t index = 0; index < count; ++index)
+        request.ExecutablePath[index] = path[index];
+}
+
+void TestServiceLaunchMessages(TestLog& log)
+{
+    auto request = ValidServiceLaunchRequest();
+    log.Expect("service launch request", OacIpcValidateLaunchRequest(
+        &request, sizeof(request)) != 0);
+
+    auto invalid = request;
+    --invalid.Header.Version;
+    log.Expect("service launch revision", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    --invalid.Header.Size;
+    log.Expect("service launch stated size", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    invalid.Header.Type = OAC_IPC_TYPE_STATUS_REQUEST;
+    log.Expect("service launch message type", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    invalid.Header.RequestId = 0;
+    log.Expect("service launch request identity", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    invalid.Reserved = 1;
+    log.Expect("service launch reserved field", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    log.Expect("service launch exact transport size", OacIpcValidateLaunchRequest(
+        &request, sizeof(request) - 1) == 0);
+
+    constexpr std::array invalidPaths{
+        u"Games\\Game.exe",
+        u"\\\\server\\share\\Game.exe",
+        u"C:/Games/Game.exe",
+        u"C:\\Games\\..\\Game.exe",
+        u"C:\\Games\\.\\Game.exe",
+        u"C:\\Games\\\\Game.exe",
+        u"C:\\Games\\Game.exe\\",
+        u"C:\\Games\\Game.exe.",
+        u"C:\\Games\\Game.exe ",
+        u"C:\\Games\\Bad:Name.exe",
+        u"C:\\Games\\Bad*Name.exe"
+    };
+    bool rejectsPaths = true;
+    for (const auto* path : invalidPaths)
+    {
+        invalid = request;
+        SetServiceLaunchPath(invalid, path);
+        rejectsPaths = rejectsPaths &&
+            OacIpcValidateLaunchRequest(&invalid, sizeof(invalid)) == 0;
+    }
+    log.Expect("service launch rejects unsafe paths", rejectsPaths);
+
+    invalid = request;
+    invalid.ExecutablePath[4] = 0;
+    log.Expect("service launch embedded null", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    invalid.ExecutablePath[OAC_IPC_MAX_EXECUTABLE_PATH_CHARS - 1] = u'X';
+    log.Expect("service launch dirty path tail", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+    invalid = request;
+    SetServiceLaunchPath(invalid, u"C:\\Games\\\U0001F600.exe");
+    log.Expect("service launch valid Unicode path", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) != 0);
+    invalid.ExecutablePath[9] = 0xD83D;
+    invalid.ExecutablePath[10] = u'X';
+    log.Expect("service launch unpaired surrogate", OacIpcValidateLaunchRequest(
+        &invalid, sizeof(invalid)) == 0);
+
+    OAC_IPC_LAUNCH_RESPONSE response{};
+    response.Header.Version = OAC_IPC_PROTOCOL_REVISION;
+    response.Header.Size = sizeof(response);
+    response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
+    response.Header.RequestId = request.Header.RequestId;
+    response.LaunchFlags =
+        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_RESUMED;
+    response.ServiceProcessId = 10;
+    response.ClientProcessId = 11;
+    response.ClientSessionId = 1;
+    response.TargetProcessId = 12;
+    log.Expect("service launch success response", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) != 0);
+
+    auto badResponse = response;
+    badResponse.LaunchFlags = OAC_IPC_LAUNCH_CONFIRMED;
+    log.Expect("service launch incomplete response", OacIpcValidateLaunchResponse(
+        &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
+    badResponse = response;
+    badResponse.TargetProcessId = 0;
+    log.Expect("service launch missing target", OacIpcValidateLaunchResponse(
+        &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
+    badResponse = response;
+    badResponse.Reserved = 1;
+    log.Expect("service launch response reserved", OacIpcValidateLaunchResponse(
+        &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
+    log.Expect("service launch response correlation", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId + 1) == 0);
+
+    response = {};
+    response.Header.Version = OAC_IPC_PROTOCOL_REVISION;
+    response.Header.Size = sizeof(response);
+    response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
+    response.Header.RequestId = request.Header.RequestId;
+    response.Win32Error = ERROR_ACCESS_DENIED;
+    log.Expect("service launch rejection response", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) != 0);
+    response.TargetProcessId = 12;
+    log.Expect("service launch rejection has no identity", OacIpcValidateLaunchResponse(
+        &response, sizeof(response), request.Header.RequestId) == 0);
 }
 
 void TestRanges(TestLog& log)
@@ -496,6 +772,242 @@ void TestClaimAndStatusRequests(TestLog& log)
         &status, sizeof(status) + 8) == OAC_V5_INVALID_LENGTH);
 }
 
+void TestLaunchRequests(TestLog& log)
+{
+    auto arm = ValidArmLaunchRequest();
+    log.Expect("valid arm-launch request", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_VALID);
+    log.Expect("null arm-launch request", OacValidateArmLaunchRequest(
+        nullptr, sizeof(arm)) == OAC_V5_INVALID_POINTER);
+    log.Expect("truncated arm-launch request", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm) - 1) == OAC_V5_INVALID_LENGTH);
+    log.Expect("oversized arm-launch request", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm) + 1) == OAC_V5_INVALID_LENGTH);
+
+    arm = ValidArmLaunchRequest();
+    arm.Header.Version = 0x00050000UL;
+    log.Expect("arm-launch rejects legacy production revision", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_VERSION);
+    arm = ValidArmLaunchRequest();
+    arm.Header.MessageType = OAC_MESSAGE_CANCEL_LAUNCH;
+    log.Expect("arm-launch wrong message type", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    arm = ValidArmLaunchRequest();
+    arm.Header.SessionId = {};
+    log.Expect("arm-launch requires session", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_SESSION);
+    arm = ValidArmLaunchRequest();
+    arm.TimeToLiveMilliseconds = OAC_LAUNCH_MIN_TTL_MS - 1;
+    log.Expect("arm-launch TTL below bound", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_RANGE);
+    arm.TimeToLiveMilliseconds = OAC_LAUNCH_MAX_TTL_MS + 1;
+    log.Expect("arm-launch TTL above bound", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_RANGE);
+    arm = ValidArmLaunchRequest();
+    arm.Reserved = 1;
+    log.Expect("arm-launch reserved field", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
+
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\dEvIcE\\HarddiskVolume3\\Games\\OAC.exe");
+    log.Expect("canonical path prefix requires canonical case",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\DosDevices\\C\\OAC.exe");
+    log.Expect("canonical path requires Device namespace",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPathLength = 8;
+    log.Expect("canonical path rejects empty Device namespace",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_RANGE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPathLength = OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS;
+    log.Expect("canonical path reserves a terminator",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_RANGE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\Games\\OAC.exe:");
+    log.Expect("canonical path rejects colon", OacValidateArmLaunchRequest(
+        &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3/Games/OAC.exe");
+    log.Expect("canonical path rejects forward slash",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPath[10] = static_cast<WCHAR>(0x1f);
+    log.Expect("canonical path rejects control character",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\\\OAC.exe");
+    log.Expect("canonical path rejects repeated separator",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\Games\\");
+    log.Expect("canonical path rejects trailing separator",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\.\\OAC.exe");
+    log.Expect("canonical path rejects dot component",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\..\\OAC.exe");
+    log.Expect("canonical path rejects dot-dot component",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\OAC.\\game.exe");
+    log.Expect("canonical path rejects component trailing dot",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    SetCanonicalPath(arm, L"\\Device\\HarddiskVolume3\\OAC \\game.exe");
+    log.Expect("canonical path rejects component trailing space",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPath[10] = L'\0';
+    log.Expect("canonical path rejects embedded null",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPath[8] = static_cast<WCHAR>(0xd83d);
+    arm.CanonicalNtPath[9] = static_cast<WCHAR>(0xde00);
+    log.Expect("canonical path accepts UTF-16 surrogate pair",
+        OacValidateArmLaunchRequest(&arm, sizeof(arm)) == OAC_V5_VALID);
+    arm.CanonicalNtPath[9] = L'A';
+    log.Expect("canonical path rejects unpaired high surrogate",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPath[8] = static_cast<WCHAR>(0xdc00);
+    log.Expect("canonical path rejects unpaired low surrogate",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchRequest();
+    arm.CanonicalNtPath[std::size(kValidLaunchPath) - 1] = L'X';
+    log.Expect("canonical path rejects nonzero unused tail",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
+
+    auto cancel = ValidCancelLaunchRequest();
+    log.Expect("valid cancel-launch request", OacValidateCancelLaunchRequest(
+        &cancel, sizeof(cancel)) == OAC_V5_VALID);
+    cancel.LaunchId = {};
+    log.Expect("cancel-launch rejects zero launch ID",
+        OacValidateCancelLaunchRequest(
+            &cancel, sizeof(cancel)) == OAC_V5_INVALID_VALUE);
+    cancel = ValidCancelLaunchRequest();
+    cancel.Header.MessageType = OAC_MESSAGE_ARM_LAUNCH;
+    log.Expect("cancel-launch wrong message type",
+        OacValidateCancelLaunchRequest(
+            &cancel, sizeof(cancel)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    log.Expect("cancel-launch rejects extra bytes",
+        OacValidateCancelLaunchRequest(
+            &cancel, sizeof(cancel) + 1) == OAC_V5_INVALID_LENGTH);
+
+    auto confirm = ValidConfirmTargetRequest();
+    log.Expect("valid confirm-target request",
+        OacValidateConfirmTargetRequest(
+            &confirm, sizeof(confirm)) == OAC_V5_VALID);
+    confirm.LaunchId = {};
+    log.Expect("confirm-target rejects zero launch ID",
+        OacValidateConfirmTargetRequest(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_VALUE);
+    confirm = ValidConfirmTargetRequest();
+    confirm.TargetProcessHandle = 0;
+    log.Expect("confirm-target rejects zero process handle",
+        OacValidateConfirmTargetRequest(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_VALUE);
+    confirm = ValidConfirmTargetRequest();
+    confirm.Header.MessageType = OAC_MESSAGE_CANCEL_LAUNCH;
+    log.Expect("confirm-target wrong message type",
+        OacValidateConfirmTargetRequest(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    log.Expect("confirm-target rejects truncation",
+        OacValidateConfirmTargetRequest(
+            &confirm, sizeof(confirm) - 1) == OAC_V5_INVALID_LENGTH);
+}
+
+void TestLaunchResponses(TestLog& log)
+{
+    auto arm = ValidArmLaunchResponse();
+    log.Expect("valid arm-launch response", OacValidateArmLaunchResponse(
+        &arm, sizeof(arm)) == OAC_V5_VALID);
+    arm.LaunchId = {};
+    log.Expect("arm-launch response requires launch ID",
+        OacValidateArmLaunchResponse(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchResponse();
+    arm.ExpirationInterruptTime100ns = 0;
+    log.Expect("arm-launch response requires deadline",
+        OacValidateArmLaunchResponse(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchResponse();
+    arm.State = OAC_V5_SESSION_TARGET_BOUND;
+    log.Expect("arm-launch response requires pending state",
+        OacValidateArmLaunchResponse(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
+    arm = ValidArmLaunchResponse();
+    arm.Reserved = 1;
+    log.Expect("arm-launch response reserved field",
+        OacValidateArmLaunchResponse(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
+    log.Expect("arm-launch response rejects truncation",
+        OacValidateArmLaunchResponse(
+            &arm, sizeof(arm) - 1) == OAC_V5_INVALID_LENGTH);
+
+    auto cancel = ValidCancelLaunchResponse();
+    log.Expect("valid cancel-launch response",
+        OacValidateCancelLaunchResponse(
+            &cancel, sizeof(cancel)) == OAC_V5_VALID);
+    cancel.Header.Flags = 0;
+    log.Expect("cancel-launch response requires revoked flag",
+        OacValidateCancelLaunchResponse(
+            &cancel, sizeof(cancel)) == OAC_V5_INVALID_VALUE);
+    cancel = ValidCancelLaunchResponse();
+    cancel.State = OAC_V5_SESSION_CLAIMED;
+    log.Expect("cancel-launch response is terminal",
+        OacValidateCancelLaunchResponse(
+            &cancel, sizeof(cancel)) == OAC_V5_INVALID_VALUE);
+    cancel = ValidCancelLaunchResponse();
+    cancel.Reserved = 1;
+    log.Expect("cancel-launch response reserved field",
+        OacValidateCancelLaunchResponse(
+            &cancel, sizeof(cancel)) == OAC_V5_INVALID_RESERVED);
+
+    auto confirm = ValidConfirmTargetResponse();
+    log.Expect("valid confirm-target response",
+        OacValidateConfirmTargetResponse(
+            &confirm, sizeof(confirm)) == OAC_V5_VALID);
+    confirm.TargetProcessId = 0;
+    log.Expect("confirm-target response requires PID",
+        OacValidateConfirmTargetResponse(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_VALUE);
+    confirm = ValidConfirmTargetResponse();
+    confirm.State = OAC_V5_SESSION_TARGET_BOUND;
+    log.Expect("confirm-target response requires monitoring state",
+        OacValidateConfirmTargetResponse(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_VALUE);
+    confirm = ValidConfirmTargetResponse();
+    confirm.Reserved = 1;
+    log.Expect("confirm-target response reserved field",
+        OacValidateConfirmTargetResponse(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_RESERVED);
+    confirm = ValidConfirmTargetResponse();
+    confirm.Header.MessageType = OAC_MESSAGE_ARM_LAUNCH;
+    log.Expect("confirm-target response wrong message type",
+        OacValidateConfirmTargetResponse(
+            &confirm, sizeof(confirm)) == OAC_V5_INVALID_MESSAGE_TYPE);
+}
+
 void TestResponses(TestLog& log)
 {
     auto negotiate = ValidNegotiateResponse();
@@ -516,6 +1028,16 @@ void TestResponses(TestLog& log)
     negotiate.MaximumInputSize = sizeof(OAC_V5_CLAIM_REQUEST) - 1;
     log.Expect("negotiate input limit too small", OacV5ValidateNegotiateResponse(
         &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate = ValidNegotiateResponse();
+    negotiate.Capabilities |= OAC_V5_CAP_LAUNCH_TICKET;
+    negotiate.MaximumInputSize = sizeof(OAC_ARM_LAUNCH_REQUEST) - 1;
+    log.Expect("launch capability requires arm request capacity",
+        OacV5ValidateNegotiateResponse(
+            &negotiate, sizeof(negotiate)) == OAC_V5_INVALID_VALUE);
+    negotiate.MaximumInputSize = sizeof(OAC_ARM_LAUNCH_REQUEST);
+    log.Expect("launch capability accepts exact arm request capacity",
+        OacV5ValidateNegotiateResponse(
+            &negotiate, sizeof(negotiate)) == OAC_V5_VALID);
     negotiate = ValidNegotiateResponse();
     negotiate.MaximumOutputSize = OAC_V5_MAX_OUTPUT_SIZE + 1;
     log.Expect("negotiate output limit too large", OacV5ValidateNegotiateResponse(
@@ -606,6 +1128,43 @@ void TestResponses(TestLog& log)
     status.Header.MessageType = OAC_V5_MESSAGE_READ_EVENTS;
     log.Expect("status response wrong message type", OacV5ValidateStatusResponse(
         &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    status = ValidStatusResponse();
+    status.TargetProcessId = 200;
+    log.Expect("claimed status rejects target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_LAUNCH_PENDING;
+    status.TargetProcessId = 200;
+    log.Expect("pending status rejects target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_TARGET_BOUND;
+    log.Expect("bound status requires target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status.TargetProcessId = 200;
+    log.Expect("bound status accepts target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_MONITORING;
+    log.Expect("monitoring status requires target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status.TargetProcessId = 200;
+    log.Expect("monitoring status accepts target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_REVOKED;
+    status.RevokeReason = OAC_REVOKE_TARGET_CONFIRMATION_FAILED;
+    status.Header.Flags = OAC_V5_RESPONSE_REVOKED;
+    status.TargetProcessId = 200;
+    log.Expect("terminal tombstone may retain target identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
 }
 
 void TestCorrelationAndIds(TestLog& log)
@@ -735,6 +1294,102 @@ void TestSessionTransitions(TestLog& log)
         OacV5SessionTransitionValid(
             OAC_V5_SESSION_CLAIMED,
             OAC_V5_SESSION_CLOSING + 1) == FALSE);
+    log.Expect("launch cancellation cannot re-arm the session",
+        OacV5SessionTransitionValid(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            OAC_V5_SESSION_CLAIMED) == FALSE);
+}
+
+void TestLaunchDecision(TestLog& log)
+{
+    constexpr ULONGLONG beforeDeadline = 99;
+    constexpr ULONGLONG deadline = 100;
+
+    log.Expect("non-pending candidate is ignored",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_CLAIMED,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            TRUE,
+            TRUE) == OAC_LAUNCH_IGNORE);
+    log.Expect("wrong creator is ignored",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            beforeDeadline,
+            deadline,
+            FALSE,
+            FALSE,
+            FALSE) == OAC_LAUNCH_IGNORE);
+    log.Expect("service creation after binding is denied",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_TARGET_BOUND,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            TRUE,
+            TRUE) == OAC_LAUNCH_DENY_SERVICE_CREATION_AFTER_BIND);
+    log.Expect("service creation while monitoring is denied",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_MONITORING,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            TRUE,
+            TRUE) == OAC_LAUNCH_DENY_SERVICE_CREATION_AFTER_BIND);
+    log.Expect("candidate at deadline expires",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            deadline,
+            deadline,
+            TRUE,
+            TRUE,
+            TRUE) == OAC_LAUNCH_REVOKE_EXPIRED);
+    log.Expect("expired decision precedes path decision",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            deadline + 1,
+            deadline,
+            TRUE,
+            FALSE,
+            FALSE) == OAC_LAUNCH_REVOKE_EXPIRED);
+    log.Expect("missing creation name revokes mismatch",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            FALSE,
+            TRUE) == OAC_LAUNCH_REVOKE_MISMATCH);
+    log.Expect("wrong creation path revokes mismatch",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            TRUE,
+            FALSE) == OAC_LAUNCH_REVOKE_MISMATCH);
+    log.Expect("trusted candidate binds before deadline",
+        OacDecideLaunchCandidate(
+            OAC_V5_SESSION_LAUNCH_PENDING,
+            beforeDeadline,
+            deadline,
+            TRUE,
+            TRUE,
+            TRUE) == OAC_LAUNCH_CONSUME_BIND);
+
+    log.Expect("launch cancellation provenance is valid",
+        OacV5RevokeReasonValid(OAC_REVOKE_LAUNCH_CANCELLED) != FALSE);
+    log.Expect("launch expiry provenance is valid",
+        OacV5RevokeReasonValid(OAC_REVOKE_LAUNCH_EXPIRED) != FALSE);
+    log.Expect("launch mismatch provenance is valid",
+        OacV5RevokeReasonValid(OAC_REVOKE_LAUNCH_MISMATCH) != FALSE);
+    log.Expect("target confirmation provenance is valid",
+        OacV5RevokeReasonValid(
+            OAC_REVOKE_TARGET_CONFIRMATION_FAILED) != FALSE);
+    log.Expect("future revocation provenance is invalid",
+        OacV5RevokeReasonValid(
+            OAC_REVOKE_TARGET_CONFIRMATION_FAILED + 1) == FALSE);
 }
 
 void TestEventRecords(TestLog& log)
@@ -952,12 +1607,16 @@ int main()
     TestCodes(log);
     TestBasicHelpers(log);
     TestServiceFailures(log);
+    TestServiceLaunchMessages(log);
     TestRanges(log);
     TestNegotiateRequest(log);
     TestClaimAndStatusRequests(log);
+    TestLaunchRequests(log);
+    TestLaunchResponses(log);
     TestResponses(log);
     TestCorrelationAndIds(log);
     TestSessionTransitions(log);
+    TestLaunchDecision(log);
     TestEventRecords(log);
     return log.ExitCode();
 }

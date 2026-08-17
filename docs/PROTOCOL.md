@@ -1,40 +1,75 @@
 # OAC protocol
 
-**Status:** Protocol v5 is the production-control ABI; protocol v4 is lab-only compatibility
+**Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
 current disposable-VM acceptance is pending
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
-validation sources of truth. `shared/oac_protocol.h` defines the separate protocol-v4 diagnostic
+validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
 ABI. All wire headers are C-compatible and have compile-time size and offset assertions.
 
-## Protocol v5 production control
+## Production control protocol
 
-`OAC_V5_VERSION` is `0x00050000`. Every request uses `METHOD_BUFFERED` and requires both read and
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050001`; the existing `OAC_V5_VERSION` name remains a
+compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
 function number and is validated even when every other field is well formed.
 
-The current driver advertises only `OAC_V5_CAP_SESSION_CONTROL` and implements this production
-surface:
+The current driver advertises `OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET`. Negotiate,
+claim, status, arm, cancel, and confirm are available:
 
 | Function | IOCTL | Input | Output | Current behavior |
 |---:|---|---|---|---|
-| `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects exact v5 and records negotiation on the file context |
+| `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
 | `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 120-byte status response | Returns correlated session state, identity, capability, and counter data |
+| `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 1088-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
+| `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
+| `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
 The shared header reserves config, scan, event-read, CPU-snapshot, and revoke IOCTL/message IDs for
-later work. They are not dispatched by the production v5 path and their capabilities are not
-advertised. In particular, `OAC_V5_CAP_TYPED_EVENTS` and `OAC_V5_CAP_LAUNCH_TICKET` remain clear.
+later work. They are not dispatched by the production path and their capabilities are not
+advertised. `OAC_V5_CAP_TYPED_EVENTS` therefore remains clear.
+
+### Launch transaction
+
+One production session may arm one ticket with a 100 ms to 10 second lifetime and one canonical
+`\Device\...` image path. The driver generates a nonzero 128-bit launch ID and a boot-relative
+`KeQueryInterruptTime` expiration value. The process-creation callback ignores unrelated creators;
+for the exact referenced service process and creating-process ID it requires an available,
+case-insensitively equal canonical NT image path before atomically consuming the ticket, referencing
+the new process object, and entering
+`LAUNCH_PENDING -> TARGET_BOUND`. The service must then present a real user-mode process handle with
+the same launch ID. The driver resolves that handle to an exact process object before entering
+`MONITORING`.
+
+The controller is permitted to create exactly one child process per production session. After a
+target is bound, any additional process creation by that exact service process is denied for the
+remaining target lifetime; helpers must run in a separate service that holds no production authority.
+
+Cancellation, expiry, a trusted-creator path mismatch, and failed process-handle confirmation are
+terminal revocations. Pending path data is cleared on consumption; the retained launch ID is cleared
+on confirmation; all launch data is cleared on cancellation, revocation, cleanup, service exit, and
+driver shutdown. A live session-owned target remains protected after controller cleanup until its
+process-exit notification retires the tombstone.
+
+The service performs one serialized transaction: it authenticates the local launcher, resolves and
+keeps one executable open under that caller identity, arms the ticket, creates the process suspended
+with the caller's primary token, confirms the exact process handle, validates the monitoring state,
+and resumes the initial thread. Cancellation is issued only after a failed synchronous create or a
+pre-create stop decision; later failures terminate the suspended target and stop the service. The
+kernel callback deliberately performs no hashing, signature verification, filesystem I/O, or
+registry access. Signed-manifest identity and kill-on-close job ownership remain separate work
+packages.
 
 ### Strict validation and correlation
 
 Shared validators reject:
 
 - truncated, oversized, or falsely stated fixed lengths;
-- versions other than exact v5 and negotiation ranges that do not include exact v5;
+- revisions other than the exact production revision and negotiation ranges that exclude it;
 - zero request IDs, unknown flags, nonzero reserved data, and unknown enum values;
 - a `MessageType` that does not match the IOCTL;
 - a session ID or generation where an open request requires zero, or a session request requires
@@ -42,19 +77,20 @@ Shared validators reject:
 - response/request mismatches in message type, request ID, session ID, or generation;
 - overflow, misalignment, out-of-range payloads, hidden bytes after a payload, and malformed UTF-16.
 
-Negotiation currently returns strict-length support. It reports v4 diagnostic compatibility only
+Negotiation currently returns strict-length support. It reports diagnostic compatibility only
 when `LabMode=1` was read at driver start.
 
 Protocol families are mutually exclusive per file. Negotiation is serialized with claim under the
-session lock. Once a file negotiates v5, privileged v4 calls cannot create or use a diagnostic
-session. Once a file claims the unnegotiated v4 diagnostic path, it cannot later negotiate v5. This
+session lock. Once a file negotiates production authority, privileged diagnostic calls cannot create
+or use a diagnostic session. Once a file claims the unnegotiated diagnostic path, it cannot later
+negotiate production authority. This
 prevents a handle from switching authorization semantics after either path has established state.
 
 ### Per-file authority and lifetime
 
 `IRP_MJ_CREATE` allocates a file context and references the process that opened that exact file
 object. Outside lab mode, create succeeds only for the restricted `OACService` identity. A claim
-requires prior v5 negotiation on the same file. Production claim then requires all of:
+requires prior production negotiation on the same file. Production claim then requires all of:
 
 - the reviewed service SID present as an enabled token group and restricted SID;
 - the current process object to be the CREATE owner and the service process;
@@ -74,8 +110,8 @@ references. Close releases the remaining file-context reference.
 If cleanup occurs while a referenced target is still live, the cleaned session remains as an
 unusable tombstone. It blocks a replacement claim until the target exit callback releases the
 target and retires the session. This prevents a new controller from inheriting authority while
-stale protection state still exists. The invariant is implemented in source; its target-live VM
-acceptance test is pending because production launch/target binding is not implemented yet.
+stale protection state still exists. The kernel invariant is implemented in source; its target-live
+service-transaction VM acceptance remains pending.
 
 ### Typed event schema
 
@@ -87,17 +123,26 @@ Optional service provenance uses an ingestion timestamp and service sequence tha
 together, and ingestion cannot predate the source timestamp. Display text is optional payload and
 has no policy meaning.
 
-The driver does not yet publish v5 event records. Separate alert, event, and snapshot transports,
+The driver does not yet publish production event records. Separate alert, event, and snapshot transports,
 acknowledgement, cursors, and paging remain WP-06 work.
 
-## Protocol v4 lab compatibility
+### Launcher/service IPC
+
+The local launcher/service wire revision is `0x00010001`. Hello and status retain fixed 32-byte
+requests and 56-byte responses. A launch request is a fixed 1056-byte message containing one counted
+absolute drive path with no arguments; its 56-byte response correlates the request, service, client,
+session, target PID, confirmed binding, and resumed-thread result. Both endpoints reject unknown
+types or flags, wrong sizes or revisions, zero request IDs, nonzero reserved data, malformed UTF-16,
+unsafe path components, and dirty unused path units.
+
+## Diagnostic compatibility protocol
 
 `OAC_PROTOCOL_VERSION` is `0x00040000`. Ping remains a bounded compatibility query, while configure,
 scan, finding drain, CPU snapshot, and status require `LabMode=1` plus a diagnostic session on the
 same file object. `OAC-Client` retains one handle for its run and refuses production mode.
 
-The v4 finding ring and report path retain their known limitations: one overwrite ring, destructive
-batch reads without acknowledgement, and display-oriented user-mode re-sequencing. V4 is not a
+The diagnostic finding ring and report path retain their known limitations: one overwrite ring,
+destructive batch reads without acknowledgement, and display-oriented user-mode re-sequencing. It is not a
 fallback production authority and must remain unavailable when lab mode is off.
 
 ## Test coverage and pending gate
@@ -106,12 +151,15 @@ The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact mes
 request/response validation, correlation, the session transition matrix, and hostile binary and
 UTF-16 event payloads.
 
-The driver-backed suite now contains v5 negotiation/claim/status malformed-input checks, bidirectional
-v4/v5 per-file exclusion, same-file and wrong-file authorization, a duplicated-handle wrong-process
-check, cleanup authority loss, fresh session ID/generation checks, and a bounded four-thread
-status/close race after 32 successful status calls per thread. The source coverage is present, but
-its current disposable-VM execution and Driver Verifier evidence remain pending.
+The driver-backed suite now contains production negotiation/claim/status malformed-input checks,
+bidirectional diagnostic/production per-file exclusion, same-file and wrong-file authorization, a
+duplicated-handle wrong-process check, cleanup authority loss, fresh session ID/generation checks,
+and a bounded four-thread status/close race after 32 successful status calls per thread. It also
+verifies that malformed launch messages are rejected and that diagnostic sessions cannot invoke
+production launch operations. The source coverage is present, but its current disposable-VM
+execution and Driver Verifier evidence remain pending.
 
-Launch tickets, production target binding, service-owned job/liveness, event transport, signed
-manifests and policy, and authenticated backend sessions are not part of the current protocol
-surface.
+Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
+response correlation, and IPC validation. The VM production boundary supplies the successful
+standard-user service transaction. Service-owned job/liveness, event transport, signed manifests
+and policy, and authenticated backend sessions remain separate work packages.

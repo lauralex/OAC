@@ -1,5 +1,6 @@
 #include "session.h"
 #include "compat.h"
+#include "..\shared\protocol\oac_validate.h"
 
 #include <bcrypt.h>
 
@@ -8,6 +9,7 @@
 #define OAC_FILE_CONTEXT_MAGIC 0x4643414FUL
 #define OAC_TOKEN_GROUP_ENABLED 0x00000004UL
 #define OAC_TOKEN_GROUP_DENY_ONLY 0x00000010UL
+#define OAC_100NS_PER_MILLISECOND 10000ULL
 
 typedef struct OAC_SESSION_TAG OAC_SESSION, *POAC_SESSION;
 
@@ -20,6 +22,14 @@ typedef struct OAC_FILE_CONTEXT_TAG
     PEPROCESS OpenProcess;
     POAC_SESSION Session;
 } OAC_FILE_CONTEXT, *POAC_FILE_CONTEXT;
+
+typedef struct OAC_PENDING_LAUNCH_TAG
+{
+    OAC_LAUNCH_ID LaunchId;
+    ULONGLONG ExpirationInterruptTime100ns;
+    ULONG CanonicalNtPathLength;
+    WCHAR CanonicalNtPath[OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS];
+} OAC_PENDING_LAUNCH, *POAC_PENDING_LAUNCH;
 
 struct OAC_SESSION_TAG
 {
@@ -36,6 +46,8 @@ struct OAC_SESSION_TAG
     ULONG Mode;
     ULONG State;
     ULONG RevokeReason;
+    OAC_PENDING_LAUNCH PendingLaunch;
+    OAC_LAUNCH_ID BoundLaunchId;
     BOOLEAN Cleaned;
     BOOLEAN ServiceExited;
 };
@@ -190,6 +202,91 @@ static NTSTATUS OacGenerateSessionId(_Out_ POAC_V5_SESSION_ID SessionId)
     return STATUS_UNSUCCESSFUL;
 }
 
+static NTSTATUS OacGenerateLaunchId(_Out_ POAC_LAUNCH_ID LaunchId)
+{
+    NTSTATUS status;
+    ULONG attempts;
+
+    for (attempts = 0; attempts != 4; ++attempts)
+    {
+        status = BCryptGenRandom(
+            NULL,
+            (PUCHAR)LaunchId,
+            sizeof(*LaunchId),
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        if (!NT_SUCCESS(status)) return status;
+        if (LaunchId->High != 0 || LaunchId->Low != 0)
+        {
+            return STATUS_SUCCESS;
+        }
+    }
+    return STATUS_UNSUCCESSFUL;
+}
+
+static BOOLEAN OacLaunchIdsEqual(
+    _In_ const OAC_LAUNCH_ID* Left,
+    _In_ const OAC_LAUNCH_ID* Right)
+{
+    return Left->High == Right->High && Left->Low == Right->Low;
+}
+
+static VOID OacClearPendingLaunch(_Inout_ POAC_SESSION Session)
+{
+    (VOID)RtlSecureZeroMemory(
+        &Session->PendingLaunch,
+        sizeof(Session->PendingLaunch));
+}
+
+static VOID OacClearBoundLaunch(_Inout_ POAC_SESSION Session)
+{
+    (VOID)RtlSecureZeroMemory(
+        &Session->BoundLaunchId,
+        sizeof(Session->BoundLaunchId));
+}
+
+static VOID OacClearLaunchState(_Inout_ POAC_SESSION Session)
+{
+    OacClearPendingLaunch(Session);
+    OacClearBoundLaunch(Session);
+}
+
+static VOID OacFillSnapshotLocked(
+    _In_ const OAC_SESSION* Session,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    Snapshot->SessionId = Session->SessionId;
+    Snapshot->Generation = Session->Generation;
+    Snapshot->State = Session->State;
+    Snapshot->RevokeReason = Session->RevokeReason;
+    Snapshot->ServiceProcessId = HandleToULong(Session->ServiceProcessId);
+    Snapshot->TargetProcessId = HandleToULong(Session->TargetProcessId);
+}
+
+static VOID OacRevokeLaunchLocked(
+    _Inout_ POAC_SESSION Session,
+    _In_ OAC_V5_REVOKE_REASON RevokeReason)
+{
+    OacClearLaunchState(Session);
+    if (Session->State < OAC_V5_SESSION_REVOKED)
+    {
+        Session->State = OAC_V5_SESSION_REVOKED;
+        Session->RevokeReason = RevokeReason;
+    }
+}
+
+static BOOLEAN OacExpirePendingLaunchLocked(
+    _Inout_ POAC_SESSION Session,
+    _In_ ULONGLONG Now100ns)
+{
+    if (Session->State == OAC_V5_SESSION_LAUNCH_PENDING &&
+        Now100ns >= Session->PendingLaunch.ExpirationInterruptTime100ns)
+    {
+        OacRevokeLaunchLocked(Session, OAC_REVOKE_LAUNCH_EXPIRED);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static VOID OacSessionReleaseReference(_Inout_ POAC_SESSION Session)
 {
     if (InterlockedDecrement(&Session->References) == 0)
@@ -197,6 +294,7 @@ static VOID OacSessionReleaseReference(_Inout_ POAC_SESSION Session)
         NT_ASSERT(Session->ControlFile == NULL);
         NT_ASSERT(Session->ServiceProcess == NULL);
         NT_ASSERT(Session->TargetProcess == NULL);
+        OacClearLaunchState(Session);
         ExFreePoolWithTag(Session, OAC_SESSION_POOL_TAG);
     }
 }
@@ -275,7 +373,11 @@ VOID OacSessionShutdown(_In_ PDEVICE_OBJECT DeviceObject)
     if (session != NULL)
     {
         session->State = OAC_V5_SESSION_CLOSING;
-        session->RevokeReason = OAC_V5_REVOKE_DRIVER_STOP;
+        if (session->RevokeReason == OAC_V5_REVOKE_NONE)
+        {
+            session->RevokeReason = OAC_V5_REVOKE_DRIVER_STOP;
+        }
+        OacClearLaunchState(session);
         targetProcess = (PEPROCESS)InterlockedExchangePointer(
             (PVOID volatile*)&session->TargetProcess,
             NULL);
@@ -362,6 +464,7 @@ NTSTATUS OacSessionCleanup(
     {
         session->RevokeReason = OAC_V5_REVOKE_FILE_CLEANUP;
     }
+    OacClearLaunchState(session);
     OacRetireIfEligible(
         extension,
         session,
@@ -679,14 +782,10 @@ NTSTATUS OacSessionSnapshot(
 
     if (session == NULL) return STATUS_INVALID_PARAMETER;
     extension = OacExtension(session->DeviceObject);
-    OacLockShared(&extension->SessionLock);
-    Snapshot->SessionId = session->SessionId;
-    Snapshot->Generation = session->Generation;
-    Snapshot->State = session->State;
-    Snapshot->RevokeReason = session->RevokeReason;
-    Snapshot->ServiceProcessId = HandleToULong(session->ServiceProcessId);
-    Snapshot->TargetProcessId = HandleToULong(session->TargetProcessId);
-    OacUnlockShared(&extension->SessionLock);
+    OacLockExclusive(&extension->SessionLock);
+    (VOID)OacExpirePendingLaunchLocked(session, KeQueryInterruptTime());
+    OacFillSnapshotLocked(session, Snapshot);
+    OacUnlockExclusive(&extension->SessionLock);
     return STATUS_SUCCESS;
 }
 
@@ -729,6 +828,324 @@ NTSTATUS OacSessionBindTarget(
     return status;
 }
 
+NTSTATUS OacSessionArmLaunch(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ ULONG TimeToLiveMilliseconds,
+    _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
+    _In_ ULONG CanonicalNtPathLength,
+    _Out_ POAC_LAUNCH_ID LaunchId,
+    _Out_ PULONGLONG ExpirationInterruptTime100ns,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    OAC_LAUNCH_ID generatedId = { 0 };
+    ULONGLONG now100ns;
+    ULONGLONG expirationInterruptTime100ns;
+    NTSTATUS status;
+
+    if (Lease == NULL || LaunchId == NULL ||
+        ExpirationInterruptTime100ns == NULL ||
+        Snapshot == NULL || CanonicalNtPath == NULL ||
+        TimeToLiveMilliseconds < OAC_LAUNCH_MIN_TTL_MS ||
+        TimeToLiveMilliseconds > OAC_LAUNCH_MAX_TTL_MS ||
+        CanonicalNtPathLength == 0 ||
+        CanonicalNtPathLength >= OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(LaunchId, sizeof(*LaunchId));
+    *ExpirationInterruptTime100ns = 0;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+
+    status = OacGenerateLaunchId(&generatedId);
+    if (!NT_SUCCESS(status))
+    {
+        (VOID)RtlSecureZeroMemory(&generatedId, sizeof(generatedId));
+        return status;
+    }
+    now100ns = KeQueryInterruptTime();
+    expirationInterruptTime100ns = now100ns +
+        ((ULONGLONG)TimeToLiveMilliseconds * OAC_100NS_PER_MILLISECOND);
+    if (expirationInterruptTime100ns <= now100ns)
+    {
+        (VOID)RtlSecureZeroMemory(&generatedId, sizeof(generatedId));
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (session->State != OAC_V5_SESSION_CLAIMED)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        OacClearLaunchState(session);
+        session->PendingLaunch.LaunchId = generatedId;
+        session->PendingLaunch.ExpirationInterruptTime100ns =
+            expirationInterruptTime100ns;
+        session->PendingLaunch.CanonicalNtPathLength =
+            CanonicalNtPathLength;
+        RtlCopyMemory(
+            session->PendingLaunch.CanonicalNtPath,
+            CanonicalNtPath,
+            CanonicalNtPathLength * sizeof(WCHAR));
+        session->State = OAC_V5_SESSION_LAUNCH_PENDING;
+        *LaunchId = generatedId;
+        *ExpirationInterruptTime100ns = expirationInterruptTime100ns;
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    (VOID)RtlSecureZeroMemory(&generatedId, sizeof(generatedId));
+    return status;
+}
+
+NTSTATUS OacSessionCancelLaunch(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ const OAC_LAUNCH_ID* LaunchId,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    NTSTATUS status;
+
+    if (Lease == NULL || LaunchId == NULL || Snapshot == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (OacExpirePendingLaunchLocked(
+        session,
+        KeQueryInterruptTime()))
+    {
+        status = STATUS_TIMEOUT;
+    }
+    else if (session->State != OAC_V5_SESSION_LAUNCH_PENDING)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (!OacLaunchIdsEqual(
+        &session->PendingLaunch.LaunchId,
+        LaunchId))
+    {
+        status = STATUS_ACCESS_DENIED;
+    }
+    else
+    {
+        OacRevokeLaunchLocked(
+            session,
+            OAC_REVOKE_LAUNCH_CANCELLED);
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return status;
+}
+
+NTSTATUS OacSessionConfirmTarget(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ const OAC_LAUNCH_ID* LaunchId,
+    _In_ ULONGLONG TargetProcessHandle,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    PEPROCESS targetProcess = NULL;
+    NTSTATUS referenceStatus;
+    NTSTATUS status;
+
+    if (Lease == NULL || LaunchId == NULL || Snapshot == NULL ||
+        TargetProcessHandle == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+
+    referenceStatus = ObReferenceObjectByHandle(
+        (HANDLE)(ULONG_PTR)TargetProcessHandle,
+        0,
+        *PsProcessType,
+        UserMode,
+        (PVOID*)&targetProcess,
+        NULL);
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (session->State != OAC_V5_SESSION_TARGET_BOUND)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (!NT_SUCCESS(referenceStatus) ||
+        !OacLaunchIdsEqual(&session->BoundLaunchId, LaunchId) ||
+        session->TargetProcess != targetProcess)
+    {
+        OacRevokeLaunchLocked(
+            session,
+            OAC_REVOKE_TARGET_CONFIRMATION_FAILED);
+        status = NT_SUCCESS(referenceStatus)
+            ? STATUS_ACCESS_DENIED
+            : referenceStatus;
+    }
+    else
+    {
+        OacClearBoundLaunch(session);
+        session->State = OAC_V5_SESSION_MONITORING;
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+
+    if (targetProcess != NULL) ObDereferenceObject(targetProcess);
+    return status;
+}
+
+static BOOLEAN OacPendingPathMatches(
+    _In_ const OAC_SESSION* Session,
+    _In_opt_ PCUNICODE_STRING ImageFileName)
+{
+    UNICODE_STRING expectedPath;
+    ULONG expectedLength;
+
+    if (ImageFileName == NULL || ImageFileName->Buffer == NULL)
+    {
+        return FALSE;
+    }
+    expectedLength = Session->PendingLaunch.CanonicalNtPathLength *
+        sizeof(WCHAR);
+    if (expectedLength > MAXUSHORT ||
+        ImageFileName->Length != (USHORT)expectedLength)
+    {
+        return FALSE;
+    }
+    expectedPath.Buffer = (PWCH)Session->PendingLaunch.CanonicalNtPath;
+    expectedPath.Length = (USHORT)expectedLength;
+    expectedPath.MaximumLength = (USHORT)expectedLength;
+    /* Windows executable paths are case-insensitive. Both values are resolved
+     * canonical NT paths, so only casing may legitimately differ. */
+    return RtlEqualUnicodeString(&expectedPath, ImageFileName, TRUE);
+}
+
+OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(
+    _In_ PEPROCESS Process,
+    _In_ HANDLE ProcessId,
+    _In_ PEPROCESS CreatorProcess,
+    _In_ HANDLE CreatorProcessId,
+    _In_opt_ PCUNICODE_STRING ImageFileName,
+    _In_ BOOLEAN FileOpenNameAvailable)
+{
+    PDEVICE_OBJECT deviceObject = g_SessionDevice;
+    POAC_DEVICE_EXTENSION extension;
+    POAC_SESSION session;
+    OAC_LAUNCH_DECISION decision;
+    OAC_SESSION_PROCESS_CREATE_RESULT result =
+        OacSessionProcessCreateIgnored;
+    BOOLEAN creatorMatches;
+    BOOLEAN nameAvailable;
+    BOOLEAN pathMatches;
+
+    if (deviceObject == NULL || Process == NULL || CreatorProcess == NULL)
+    {
+        return OacSessionProcessCreateIgnored;
+    }
+    extension = OacExtension(deviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    session = (POAC_SESSION)extension->ActiveSession;
+    if (session == NULL)
+    {
+        OacUnlockExclusive(&extension->SessionLock);
+        return OacSessionProcessCreateIgnored;
+    }
+
+    creatorMatches = !session->Cleaned && !session->ServiceExited &&
+        session->ServiceProcess == CreatorProcess &&
+        session->ServiceProcessId == CreatorProcessId;
+    nameAvailable = FileOpenNameAvailable && ImageFileName != NULL &&
+        ImageFileName->Buffer != NULL;
+    pathMatches = nameAvailable && OacPendingPathMatches(
+        session,
+        ImageFileName);
+    decision = OacDecideLaunchCandidate(
+        session->State,
+        KeQueryInterruptTime(),
+        session->PendingLaunch.ExpirationInterruptTime100ns,
+        creatorMatches,
+        nameAvailable,
+        pathMatches);
+
+    if (decision == OAC_LAUNCH_CONSUME_BIND)
+    {
+        if (session->TargetProcess != NULL)
+        {
+            OacRevokeLaunchLocked(
+                session,
+                OAC_REVOKE_LAUNCH_MISMATCH);
+            result = OacSessionProcessCreateDenied;
+        }
+        else
+        {
+            ObReferenceObject(Process);
+            session->TargetProcess = Process;
+            session->TargetProcessId = ProcessId;
+            session->BoundLaunchId = session->PendingLaunch.LaunchId;
+            OacClearPendingLaunch(session);
+            session->State = OAC_V5_SESSION_TARGET_BOUND;
+            result = OacSessionProcessCreateBound;
+        }
+    }
+    else if (decision == OAC_LAUNCH_REVOKE_EXPIRED)
+    {
+        OacRevokeLaunchLocked(session, OAC_REVOKE_LAUNCH_EXPIRED);
+        result = OacSessionProcessCreateDenied;
+    }
+    else if (decision == OAC_LAUNCH_REVOKE_MISMATCH)
+    {
+        OacRevokeLaunchLocked(session, OAC_REVOKE_LAUNCH_MISMATCH);
+        result = OacSessionProcessCreateDenied;
+    }
+    else if (decision == OAC_LAUNCH_DENY_SERVICE_CREATION_AFTER_BIND)
+    {
+        result = OacSessionProcessCreateDenied;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return result;
+}
+
 BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process)
 {
     PDEVICE_OBJECT deviceObject = g_SessionDevice;
@@ -748,6 +1165,44 @@ BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process)
     }
     OacUnlockShared(&extension->SessionLock);
     return matches;
+}
+
+BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process)
+{
+    PDEVICE_OBJECT deviceObject = g_SessionDevice;
+    POAC_DEVICE_EXTENSION extension;
+    POAC_SESSION session;
+    BOOLEAN matches = FALSE;
+
+    if (deviceObject == NULL || Process == NULL) return FALSE;
+    extension = OacExtension(deviceObject);
+    OacLockShared(&extension->SessionLock);
+    session = (POAC_SESSION)extension->ActiveSession;
+    if (session != NULL && session->TargetProcess == Process)
+    {
+        matches = TRUE;
+    }
+    OacUnlockShared(&extension->SessionLock);
+    return matches;
+}
+
+HANDLE OacSessionTargetProcessId(VOID)
+{
+    PDEVICE_OBJECT deviceObject = g_SessionDevice;
+    POAC_DEVICE_EXTENSION extension;
+    POAC_SESSION session;
+    HANDLE processId = NULL;
+
+    if (deviceObject == NULL) return NULL;
+    extension = OacExtension(deviceObject);
+    OacLockShared(&extension->SessionLock);
+    session = (POAC_SESSION)extension->ActiveSession;
+    if (session != NULL && session->TargetProcess != NULL)
+    {
+        processId = session->TargetProcessId;
+    }
+    OacUnlockShared(&extension->SessionLock);
+    return processId;
 }
 
 VOID OacSessionNotifyProcessExit(
@@ -772,6 +1227,7 @@ VOID OacSessionNotifyProcessExit(
         {
             session->ServiceExited = TRUE;
             releaseControlObjects = TRUE;
+            OacClearLaunchState(session);
             if (session->State < OAC_V5_SESSION_REVOKED)
             {
                 session->State = OAC_V5_SESSION_REVOKED;
@@ -783,6 +1239,7 @@ VOID OacSessionNotifyProcessExit(
             targetProcess = session->TargetProcess;
             session->TargetProcess = NULL;
             session->TargetProcessId = NULL;
+            OacClearLaunchState(session);
             if (session->State < OAC_V5_SESSION_REVOKED)
             {
                 session->State = OAC_V5_SESSION_REVOKED;

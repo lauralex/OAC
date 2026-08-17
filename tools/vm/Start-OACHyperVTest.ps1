@@ -4,13 +4,13 @@
 param(
     [string]$VMName = 'OAC-Win11-24H2-Test',
 
-    [string]$WindowsIso = 'D:\OAC-VM\win11-24h2-noprompt.iso',
+    [string]$WindowsIso = 'C:\OAC-VM\inputs\win11-24h2-noprompt.iso',
 
-    [string]$SeedIso = 'D:\OAC-VM\oac-seed-20260814.iso',
+    [string]$SeedIso = 'C:\OAC-VM\inputs\oac-seed.iso',
 
-    [string]$VMRoot = 'D:\OAC-VM\hyperv',
+    [string]$VMRoot = 'C:\OAC-VM\vm',
 
-    [string]$ResultDirectory = 'D:\OAC-VM\hyperv-results',
+    [string]$ResultDirectory = 'C:\OAC-VM\results',
 
     [TimeSpan]$InstallTimeout = '01:00:00',
 
@@ -54,6 +54,7 @@ $baselineZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-launch',
     'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator')
@@ -641,6 +642,16 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
         Assert-IntegerValue (Get-RequiredValue $Summary $name $Context) 0 `
             "$Context $name"
     }
+    Assert-IntegerValue (Get-RequiredValue $Summary 'launch_exit' $Context) 0 `
+        "$Context launch_exit"
+    $targetProcessId = Get-RequiredValue $Summary `
+        'launch_target_process_id' $Context
+    if (($targetProcessId -isnot [int] -and $targetProcessId -isnot [long]) -or
+        [int64]$targetProcessId -le 0) {
+        throw "$Context does not contain a valid launched target process ID."
+    }
+    Assert-Boolean $Summary 'launch_binding_confirmed' $Context
+    Assert-Boolean $Summary 'launch_thread_resumed' $Context
 }
 
 function Assert-DriverGateSummary([object]$Summary, [string]$Context) {
@@ -1635,7 +1646,7 @@ function Assert-FinalStatus([object]$Status) {
         'protocol_test_count' 'final status') 5 `
         'final status protocol_test_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
-        'client_scan_count' 'final status') 9 `
+        'client_scan_count' 'final status') 10 `
         'final status client_scan_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
         'minidump_count' 'final status') 0 `

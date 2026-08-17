@@ -8,6 +8,13 @@ typedef struct OAC_SESSION_LEASE_TAG
     PVOID Session;
 } OAC_SESSION_LEASE, *POAC_SESSION_LEASE;
 
+typedef enum OAC_SESSION_PROCESS_CREATE_RESULT_TAG
+{
+    OacSessionProcessCreateIgnored = 0,
+    OacSessionProcessCreateBound = 1,
+    OacSessionProcessCreateDenied = 2
+} OAC_SESSION_PROCESS_CREATE_RESULT;
+
 typedef struct OAC_SESSION_SNAPSHOT_TAG
 {
     OAC_V5_SESSION_ID SessionId;
@@ -91,7 +98,39 @@ NTSTATUS OacSessionBindTarget(
     _In_opt_ PEPROCESS TargetProcess,
     _In_opt_ HANDLE TargetProcessId);
 
+NTSTATUS OacSessionArmLaunch(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ ULONG TimeToLiveMilliseconds,
+    _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
+    _In_ ULONG CanonicalNtPathLength,
+    _Out_ POAC_LAUNCH_ID LaunchId,
+    _Out_ PULONGLONG ExpirationInterruptTime100ns,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
+NTSTATUS OacSessionCancelLaunch(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ const OAC_LAUNCH_ID* LaunchId,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
+NTSTATUS OacSessionConfirmTarget(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ const OAC_LAUNCH_ID* LaunchId,
+    _In_ ULONGLONG TargetProcessHandle,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
+OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(
+    _In_ PEPROCESS Process,
+    _In_ HANDLE ProcessId,
+    _In_ PEPROCESS CreatorProcess,
+    _In_ HANDLE CreatorProcessId,
+    _In_opt_ PCUNICODE_STRING ImageFileName,
+    _In_ BOOLEAN FileOpenNameAvailable);
+
 BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process);
+
+BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process);
+
+HANDLE OacSessionTargetProcessId(VOID);
 
 VOID OacSessionNotifyProcessExit(
     _In_ PEPROCESS Process,
