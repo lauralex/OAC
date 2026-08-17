@@ -58,6 +58,8 @@ $auxiliaryExitValues = [ordered]@{
     'verifier-bcd' = @(0)
     'verifier-active-settings' = @(0, 2)
     'verifier-sc-start' = @(0, 1056)
+    'verifier-inter-client-sc-stop' = @(0)
+    'verifier-inter-client-sc-start' = @(0)
     'verifier-sc-stop' = @(0, 1062)
     'verifier-target-1-stop' = @(0)
     'verifier-target-2-stop' = @(0)
@@ -97,6 +99,8 @@ $fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
     'verifier-bcd',
     'verifier-active-settings',
     'verifier-sc-start',
+    'verifier-inter-client-sc-stop',
+    'verifier-inter-client-sc-start',
     'verifier-sc-stop',
     'verifier-target-1-stop',
     'verifier-target-2-stop',
@@ -1627,6 +1631,25 @@ function Run-UnderDriverVerifier {
                     Out-Null
             } finally {
                 Stop-ScanTarget $target "verifier-target-$iteration-stop"
+            }
+            if ($iteration -eq 1) {
+                # Findings can arrive after the client's final drain while its
+                # target is still protected. Establish a fresh driver lifetime
+                # so the second client cannot inherit target-one telemetry.
+                $stopExit = Invoke-ConsoleCapture `
+                    'verifier-inter-client-sc-stop' 'sc.exe' @('stop', 'OAC')
+                if ($stopExit -ne 0) {
+                    throw "Could not stop OAC between Verifier clients; exit code $stopExit."
+                }
+                Wait-TestServiceState 'OAC' `
+                    ([ServiceProcess.ServiceControllerStatus]::Stopped)
+                $startExit = Invoke-ConsoleCapture `
+                    'verifier-inter-client-sc-start' 'sc.exe' @('start', 'OAC')
+                if ($startExit -ne 0) {
+                    throw "Could not restart OAC between Verifier clients; exit code $startExit."
+                }
+                Wait-TestServiceState 'OAC' `
+                    ([ServiceProcess.ServiceControllerStatus]::Running)
             }
         }
     } finally {
