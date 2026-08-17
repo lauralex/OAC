@@ -1,3 +1,4 @@
+#include "../../shared/oac_ipc.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 
@@ -18,6 +19,8 @@ int OacV5CProbe(void)
 {
     OAC_V5_NEGOTIATE_REQUEST request = { 0 };
     UCHAR reserved[4] = { 0 };
+    uint32_t failureStage = 0;
+    uint32_t failureError = 0;
 
     request.Header.Version = OAC_V5_VERSION;
     request.Header.Size = sizeof(request);
@@ -29,6 +32,13 @@ int OacV5CProbe(void)
     return OacV5ValidateNegotiateRequest(&request, sizeof(request)) == OAC_V5_VALID &&
         OacV5ValidateReserved(reserved, sizeof(reserved)) == OAC_V5_VALID &&
         OacV5ValidateRange(64, 32, 4, 8, 32, 8) == OAC_V5_VALID &&
+        OacDecodeServiceFailure(
+            OacEncodeServiceFailure(
+                OAC_SERVICE_STAGE_DRIVER_OPEN,
+                5),
+            &failureStage,
+            &failureError) != 0 &&
+        failureStage == OAC_SERVICE_STAGE_DRIVER_OPEN && failureError == 5 &&
         OacV5SessionTransitionValid(
             OAC_V5_SESSION_CLAIMED,
             OAC_V5_SESSION_LAUNCH_PENDING) != FALSE;

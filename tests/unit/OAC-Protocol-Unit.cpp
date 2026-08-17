@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "../../shared/oac_protocol.h"
+#include "../../shared/oac_ipc.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 
@@ -288,6 +289,90 @@ void TestBasicHelpers(TestLog& log)
         static_cast<ULONG>(reserved.size())) == OAC_V5_INVALID_RESERVED);
     log.Expect("empty reserved field", OacV5ValidateReserved(nullptr, 0) == OAC_V5_VALID);
     log.Expect("null reserved buffer", OacV5ValidateReserved(nullptr, 1) == OAC_V5_INVALID_POINTER);
+}
+
+void TestServiceFailures(TestLog& log)
+{
+    constexpr uint32_t encoded = OAC_SERVICE_FAILURE_MAGIC |
+        (OAC_SERVICE_STAGE_DRIVER_OPEN <<
+            OAC_SERVICE_FAILURE_STAGE_SHIFT) |
+        ERROR_ACCESS_DENIED;
+    log.Expect("service failure encoding", OacEncodeServiceFailure(
+        OAC_SERVICE_STAGE_DRIVER_OPEN, ERROR_ACCESS_DENIED) == encoded);
+
+    uint32_t stage = 0;
+    uint32_t error = 0;
+    log.Expect("service failure decoding", OacDecodeServiceFailure(
+        encoded, &stage, &error) != 0 &&
+        stage == OAC_SERVICE_STAGE_DRIVER_OPEN &&
+        error == ERROR_ACCESS_DENIED);
+    log.Expect("service failure zero stage", OacEncodeServiceFailure(
+        OAC_SERVICE_STAGE_NONE, ERROR_ACCESS_DENIED) == 0);
+    log.Expect("service failure unknown stage", OacEncodeServiceFailure(
+        OAC_SERVICE_STAGE_RUNTIME + 1, ERROR_ACCESS_DENIED) == 0);
+    log.Expect("service failure zero error", OacEncodeServiceFailure(
+        OAC_SERVICE_STAGE_IDENTITY, ERROR_SUCCESS) == 0);
+    log.Expect("service failure oversized error", OacEncodeServiceFailure(
+        OAC_SERVICE_STAGE_IDENTITY,
+        OAC_SERVICE_FAILURE_ERROR_MASK + 1) == 0);
+    log.Expect("service failure bad signature", OacDecodeServiceFailure(
+        encoded ^ 0x01000000u, &stage, &error) == 0);
+    log.Expect("service failure null output", OacDecodeServiceFailure(
+        encoded, nullptr, &error) == 0 && OacDecodeServiceFailure(
+        encoded, &stage, nullptr) == 0);
+
+    bool roundTrips = true;
+    constexpr std::array<uint32_t, 3> errors{
+        1,
+        ERROR_ACCESS_DENIED,
+        OAC_SERVICE_FAILURE_ERROR_MASK
+    };
+    for (uint32_t expectedStage = OAC_SERVICE_STAGE_BOOTSTRAP;
+         expectedStage <= OAC_SERVICE_STAGE_RUNTIME;
+         ++expectedStage)
+    {
+        for (const uint32_t expectedError : errors)
+        {
+            stage = 0;
+            error = 0;
+            const uint32_t value = OacEncodeServiceFailure(
+                expectedStage, expectedError);
+            roundTrips = roundTrips && value != 0 &&
+                OacDecodeServiceFailure(value, &stage, &error) != 0 &&
+                stage == expectedStage && error == expectedError;
+        }
+    }
+    log.Expect("service failure round trips", roundTrips);
+
+    constexpr uint32_t sentinelStage = 0x11223344u;
+    constexpr uint32_t sentinelError = 0x55667788u;
+    constexpr std::array<uint32_t, 5> invalid{
+        0,
+        OAC_SERVICE_FAILURE_MAGIC | ERROR_ACCESS_DENIED,
+        OAC_SERVICE_FAILURE_MAGIC |
+            (OAC_SERVICE_STAGE_DRIVER_OPEN <<
+                OAC_SERVICE_FAILURE_STAGE_SHIFT),
+        OAC_SERVICE_FAILURE_MAGIC |
+            (10u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
+            ERROR_ACCESS_DENIED,
+        OAC_SERVICE_FAILURE_MAGIC |
+            (15u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
+            ERROR_ACCESS_DENIED
+    };
+    bool rejectsInvalid = true;
+    for (const uint32_t value : invalid)
+    {
+        stage = sentinelStage;
+        error = sentinelError;
+        rejectsInvalid = rejectsInvalid &&
+            OacDecodeServiceFailure(value, &stage, &error) == 0 &&
+            stage == sentinelStage && error == sentinelError;
+    }
+    log.Expect("service failure rejects malformed values", rejectsInvalid);
+    stage = sentinelStage;
+    log.Expect("service failure rejects aliased outputs",
+        OacDecodeServiceFailure(encoded, &stage, &stage) == 0 &&
+        stage == sentinelStage);
 }
 
 void TestRanges(TestLog& log)
@@ -866,6 +951,7 @@ int main()
     TestLog log;
     TestCodes(log);
     TestBasicHelpers(log);
+    TestServiceFailures(log);
     TestRanges(log);
     TestNegotiateRequest(log);
     TestClaimAndStatusRequests(log);

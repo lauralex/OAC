@@ -54,6 +54,7 @@ $baselineZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator')
 $verifierZeroTests = @(
@@ -77,11 +78,76 @@ $summaryNames = @(
     'production-boundary-summary',
     'removal-boundary-summary',
     'baseline-provenance-summary')
-$resultNamePattern = '^(baseline-(install|remove|reinstall|protocol-unit|protocol|' +
-    'preflight|launch|client|remove-repeat-expected-refusal|driver-gate-(create|' +
-    'trigger|detection|stop|delete))|production-launcher-\d+|' +
-    'production-direct-open-[a-z]+|verifier-(protocol-\d+|preflight|launch|' +
-    'client-\d+))$'
+$auxiliaryExitValues = [ordered]@{
+    'baseline-bcd' = @(0)
+    'baseline-sc-query' = @(0)
+    'production-launcher-started-service' = @(0)
+    'production-legacy-driver-start' = @(0, 1056)
+    'baseline-sc-stop' = @(0, 1062)
+    'baseline-target-stop' = @(0)
+    'production-service-pre-stop' = @(0, 1062)
+    'production-driver-pre-stop' = @(0, 1062)
+    'production-service-stop' = @(0, 1062)
+    'production-driver-stop' = @(0, 1062)
+    'verifier-pre-reset' = @(0, 2)
+    'verifier-arm' = @(0, 2)
+    'verifier-armed-settings' = @(0, 2)
+    'verifier-bcd' = @(0)
+    'verifier-active-settings' = @(0, 2)
+    'verifier-sc-start' = @(0, 1056)
+    'verifier-sc-stop' = @(0, 1062)
+    'verifier-target-stop' = @(0)
+    'verifier-query-after-stress' = @(0, 2)
+    'verifier-reset' = @(0, 2)
+    'final-bcd' = @(0)
+    'final-verifier-settings' = @(0, 2)
+    'final-verifier-query' = @(0, 2)
+    'final-sc-query' = @(0)
+    'final-service-query' = @(0)
+    'final-driverquery' = @(0)
+    'final-system-export' = @(0)
+    'final-code-integrity-export' = @(0)
+    'final-oacservice-stop' = @(0, 1062)
+    'final-oac-stop' = @(0, 1062)
+    'final-gate-stop' = @(0, 1062)
+    'final-gate-delete' = @(0, 1060, 1072)
+}
+$baselineAuxiliaryRequired = @(
+    'baseline-bcd',
+    'baseline-sc-query',
+    'production-launcher-started-service',
+    'production-legacy-driver-start',
+    'baseline-sc-stop',
+    'baseline-target-stop')
+$baselineAuxiliaryOptional = @(
+    'production-service-pre-stop',
+    'production-driver-pre-stop',
+    'production-service-stop',
+    'production-driver-stop')
+$fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
+    'verifier-pre-reset',
+    'verifier-arm',
+    'verifier-armed-settings',
+    'verifier-bcd',
+    'verifier-active-settings',
+    'verifier-sc-start',
+    'verifier-sc-stop',
+    'verifier-target-stop',
+    'verifier-query-after-stress',
+    'verifier-reset',
+    'final-bcd',
+    'final-verifier-settings',
+    'final-verifier-query',
+    'final-sc-query',
+    'final-service-query',
+    'final-driverquery',
+    'final-system-export',
+    'final-code-integrity-export')
+$fullAuxiliaryOptional = @($baselineAuxiliaryOptional) + @(
+    'final-oacservice-stop',
+    'final-oac-stop',
+    'final-gate-stop',
+    'final-gate-delete')
 $script:OrchestrationStartUtc = [DateTime]::UtcNow
 $script:ExpectedManifestHash = $null
 $script:ExpectedSourceCommit = $null
@@ -471,6 +537,37 @@ function Read-ExitCode([string]$Text, [string]$Name) {
     return $value
 }
 
+function Assert-AuxiliaryExitResults(
+    [Collections.IDictionary]$ExitValues,
+    [bool]$Full,
+    [string]$Context) {
+    $required = if ($Full) {
+        @($fullAuxiliaryRequired)
+    } else {
+        @($baselineAuxiliaryRequired)
+    }
+    $optional = if ($Full) {
+        @($fullAuxiliaryOptional)
+    } else {
+        @($baselineAuxiliaryOptional)
+    }
+    $allowed = @($required) + @($optional)
+    $observed = @($ExitValues.Keys | ForEach-Object { [string]$_ })
+    $missing = @($required | Where-Object { $observed -cnotcontains $_ })
+    $unexpected = @($observed | Where-Object { $allowed -cnotcontains $_ })
+    if ($missing.Count -ne 0 -or $unexpected.Count -ne 0) {
+        throw ("$Context auxiliary result set is invalid; missing=[$($missing -join ', ')] " +
+            "unexpected=[$($unexpected -join ', ')].")
+    }
+    foreach ($name in $observed) {
+        $value = $ExitValues[$name]
+        if (($value -isnot [int] -and $value -isnot [long]) -or
+            @($auxiliaryExitValues[$name]) -notcontains $value) {
+            throw "$Context has an invalid auxiliary exit value: $name=$value"
+        }
+    }
+}
+
 function Get-SafeTreeItems(
     [string]$Root,
     [int]$MaximumItems,
@@ -507,6 +604,35 @@ function Get-SafeTreeItems(
     return @($items)
 }
 
+function Assert-IntegerValue(
+    [object]$Value,
+    [int64]$Expected,
+    [string]$Context) {
+    if (($Value -isnot [int] -and $Value -isnot [long]) -or
+        [int64]$Value -ne $Expected) {
+        throw "$Context is not the required integer value $Expected."
+    }
+}
+
+function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
+    Assert-Boolean $Summary 'pass' $Context
+    $launcherExits = @(Get-RequiredValue $Summary 'launcher_exits' $Context)
+    if ($launcherExits.Count -ne 2) {
+        throw "$Context does not contain two successful launcher results."
+    }
+    for ($index = 0; $index -lt $launcherExits.Count; ++$index) {
+        Assert-IntegerValue $launcherExits[$index] 0 `
+            "$Context launcher_exits[$index]"
+    }
+    foreach ($name in @(
+            'direct_open_localsystem_exit',
+            'direct_open_limited_exit',
+            'direct_open_administrator_exit')) {
+        Assert-IntegerValue (Get-RequiredValue $Summary $name $Context) 0 `
+            "$Context $name"
+    }
+}
+
 function Assert-BaselineResults([object]$Campaign) {
     $results = [IO.Path]::Combine($Campaign.Root, 'results')
     $resultsItem = Get-Item -LiteralPath $results -Force `
@@ -529,28 +655,35 @@ function Assert-BaselineResults([object]$Campaign) {
     }
 
     $exitFiles = @($resultItems | Where-Object Name -Like '*.exitcode.txt')
-    $unexpectedExitFiles = @($exitFiles | Where-Object {
+    $unsafeExitFiles = @($exitFiles | Where-Object {
             $_.DirectoryName -ine $results -or
             -not $_.Name.EndsWith(
                 '.exitcode.txt',
-                [StringComparison]::Ordinal) -or
-            $_.Name.Substring(0, $_.Name.Length - '.exitcode.txt'.Length) `
-                -cnotmatch $resultNamePattern
+                [StringComparison]::Ordinal)
         })
-    if ($unexpectedExitFiles.Count -ne 0) {
-        throw "Baseline produced unexpected exit-code files: $($unexpectedExitFiles.Name -join ', ')"
+    if ($unsafeExitFiles.Count -ne 0) {
+        throw "Baseline produced unsafe exit-code files: $($unsafeExitFiles.Name -join ', ')"
     }
-    $observed = @($exitFiles | ForEach-Object {
-            $name = $_.Name.Substring(0, $_.Name.Length - '.exitcode.txt'.Length)
-            $name
-        })
+    $exitValues = [Collections.Generic.Dictionary[string, int64]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($file in $exitFiles) {
+        $name = $file.Name.Substring(0, $file.Name.Length - '.exitcode.txt'.Length)
+        $exitValues.Add($name, (Read-ExitCode ([IO.File]::ReadAllText($file.FullName)) $name))
+    }
     $expected = Get-ExpectedTestNames $true
-    Assert-ExactNames $observed $expected 'baseline test result set'
+    $formalObserved = @($exitValues.Keys | Where-Object { $expected -ccontains $_ })
+    Assert-ExactNames $formalObserved $expected 'baseline test result set'
     foreach ($name in $expected) {
-        $text = [IO.File]::ReadAllText(
-            [IO.Path]::Combine($results, "$name.exitcode.txt"))
-        Assert-ExitValue $name (Read-ExitCode $text $name)
+        Assert-ExitValue $name $exitValues[$name]
     }
+    $auxiliaryValues = [Collections.Generic.Dictionary[string, int64]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($name in $exitValues.Keys) {
+        if ($expected -cnotcontains $name) {
+            $auxiliaryValues.Add($name, $exitValues[$name])
+        }
+    }
+    Assert-AuxiliaryExitResults $auxiliaryValues $false 'baseline results'
 
     $baselineSummary = Read-JsonFile `
         ([IO.Path]::Combine($results, 'baseline-summary.json')) 'baseline summary'
@@ -578,7 +711,11 @@ function Assert-BaselineResults([object]$Campaign) {
 
     foreach ($name in $summaryNames) {
         $summary = Read-JsonFile ([IO.Path]::Combine($results, "$name.json")) $name
-        Assert-Boolean $summary 'pass' $name
+        if ($name -ceq 'production-boundary-summary') {
+            Assert-ProductionBoundarySummary $summary $name
+        } else {
+            Assert-Boolean $summary 'pass' $name
+        }
     }
     return $baselineCompleted
 }
@@ -1428,14 +1565,21 @@ function Assert-FinalStatus([object]$Status) {
     }
 
     $expectedCount = @(Get-ExpectedTestNames $false).Count
-    if ([int](Get-RequiredValue $Status 'required_test_count' 'final status') -ne
-            $expectedCount -or
-        [int](Get-RequiredValue $Status 'protocol_test_count' 'final status') -ne 5 -or
-        [int](Get-RequiredValue $Status 'client_scan_count' 'final status') -ne 9 -or
-        [int](Get-RequiredValue $Status 'minidump_count' 'final status') -ne 0 -or
-        [int](Get-RequiredValue $Status 'crash_event_count' 'final status') -ne 0) {
-        throw 'Final status result counts do not match the host contract.'
-    }
+    Assert-IntegerValue (Get-RequiredValue $Status `
+        'required_test_count' 'final status') $expectedCount `
+        'final status required_test_count'
+    Assert-IntegerValue (Get-RequiredValue $Status `
+        'protocol_test_count' 'final status') 5 `
+        'final status protocol_test_count'
+    Assert-IntegerValue (Get-RequiredValue $Status `
+        'client_scan_count' 'final status') 9 `
+        'final status client_scan_count'
+    Assert-IntegerValue (Get-RequiredValue $Status `
+        'minidump_count' 'final status') 0 `
+        'final status minidump_count'
+    Assert-IntegerValue (Get-RequiredValue $Status `
+        'crash_event_count' 'final status') 0 `
+        'final status crash_event_count'
     foreach ($name in @(
             'exact_result_set_pass', 'verifier_reset_pass', 'verifier_inactive',
             'system_export_success', 'system_query_success',
@@ -1450,7 +1594,10 @@ function Assert-FinalStatus([object]$Status) {
     }
     foreach ($name in @(
             'missing_test_results', 'unexpected_test_results',
-            'malformed_test_results', 'wrong_test_results', 'summary_errors',
+            'malformed_test_results', 'wrong_test_results',
+            'missing_auxiliary_results', 'unexpected_auxiliary_results',
+            'malformed_auxiliary_results', 'wrong_auxiliary_results',
+            'summary_errors',
             'crash_event_ids', 'temporary_oac_tasks', 'containment_errors',
             'fatal_failure_files')) {
         Assert-EmptyArray $Status $name 'final status'
@@ -1535,26 +1682,35 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
                     '.exitcode.txt',
                     [StringComparison]::OrdinalIgnoreCase)
             })
-        $unexpectedExitEntries = @($exitEntries | Where-Object {
+        $unsafeExitEntries = @($exitEntries | Where-Object {
                 $_ -match '/' -or
                 -not $_.EndsWith(
                     '.exitcode.txt',
-                    [StringComparison]::Ordinal) -or
-                $_.Substring(0, $_.Length - '.exitcode.txt'.Length) `
-                    -cnotmatch $resultNamePattern
+                    [StringComparison]::Ordinal)
             })
-        if ($unexpectedExitEntries.Count -ne 0) {
-            throw "The ZIP contains unexpected exit-code entries: $($unexpectedExitEntries -join ', ')"
+        if ($unsafeExitEntries.Count -ne 0) {
+            throw "The ZIP contains unsafe exit-code entries: $($unsafeExitEntries -join ', ')"
         }
-        $observed = @($exitEntries | ForEach-Object {
-                $_.Substring(0, $_.Length - '.exitcode.txt'.Length)
-            })
-        Assert-ExactNames $observed $expected 'archived test result set'
-        foreach ($name in $expected) {
-            $entryName = "$name.exitcode.txt"
+        $exitValues = [Collections.Generic.Dictionary[string, int64]]::new(
+            [StringComparer]::Ordinal)
+        foreach ($entryName in $exitEntries) {
+            $name = $entryName.Substring(0, $entryName.Length - '.exitcode.txt'.Length)
             $text = Convert-ZipText (Read-ZipEntryBytes $entries[$entryName] 128)
-            Assert-ExitValue $name (Read-ExitCode $text $name)
+            $exitValues.Add($name, (Read-ExitCode $text $name))
         }
+        $formalObserved = @($exitValues.Keys | Where-Object { $expected -ccontains $_ })
+        Assert-ExactNames $formalObserved $expected 'archived test result set'
+        foreach ($name in $expected) {
+            Assert-ExitValue $name $exitValues[$name]
+        }
+        $auxiliaryValues = [Collections.Generic.Dictionary[string, int64]]::new(
+            [StringComparer]::Ordinal)
+        foreach ($name in $exitValues.Keys) {
+            if ($expected -cnotcontains $name) {
+                $auxiliaryValues.Add($name, $exitValues[$name])
+            }
+        }
+        Assert-AuxiliaryExitResults $auxiliaryValues $true 'archived results'
 
         foreach ($name in $summaryNames) {
             $entryName = "$name.json"
@@ -1563,7 +1719,11 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
             }
             $summary = Read-JsonText `
                 (Convert-ZipText (Read-ZipEntryBytes $entries[$entryName] 1MB)) $name
-            Assert-Boolean $summary 'pass' $name
+            if ($name -ceq 'production-boundary-summary') {
+                Assert-ProductionBoundarySummary $summary $name
+            } else {
+                Assert-Boolean $summary 'pass' $name
+            }
         }
         if (-not $entries.ContainsKey('baseline-summary.json')) {
             throw 'The ZIP has no baseline-summary.json.'

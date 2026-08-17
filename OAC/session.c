@@ -108,17 +108,19 @@ static VOID OacUnlockShared(_Inout_ PEX_PUSH_LOCK Lock)
 }
 
 static BOOLEAN OacSidPresent(
-    _In_ const TOKEN_GROUPS* Groups,
+    _In_reads_opt_(SidCount) const SID_AND_ATTRIBUTES* Sids,
+    _In_ ULONG SidCount,
     _In_ PSID ExpectedSid,
     _In_ BOOLEAN RequireEnabledGroup)
 {
     ULONG index;
 
-    for (index = 0; index < Groups->GroupCount; ++index)
+    if (Sids == NULL) return FALSE;
+    for (index = 0; index < SidCount; ++index)
     {
-        const ULONG attributes = Groups->Groups[index].Attributes;
+        const ULONG attributes = Sids[index].Attributes;
 
-        if (RtlEqualSid(Groups->Groups[index].Sid, ExpectedSid) &&
+        if (RtlEqualSid(Sids[index].Sid, ExpectedSid) &&
             (!RequireEnabledGroup ||
                 ((attributes & OAC_TOKEN_GROUP_ENABLED) != 0 &&
                  (attributes & OAC_TOKEN_GROUP_DENY_ONLY) == 0)))
@@ -133,32 +135,36 @@ static BOOLEAN OacIsServiceProcess(VOID)
 {
     UCHAR sidBuffer[SECURITY_MAX_SID_SIZE];
     PACCESS_TOKEN token;
-    PTOKEN_GROUPS groups = NULL;
-    PTOKEN_GROUPS restrictedSids = NULL;
+    PTOKEN_GROUPS_AND_PRIVILEGES identity = NULL;
     PSID serviceSid = (PSID)sidBuffer;
     NTSTATUS status;
     BOOLEAN groupFound = FALSE;
     BOOLEAN restrictedFound = FALSE;
 
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) return FALSE;
     status = OacSessionBuildServiceSid(serviceSid, sizeof(sidBuffer));
     if (!NT_SUCCESS(status)) return FALSE;
 
     token = PsReferencePrimaryToken(PsGetCurrentProcess());
-    status = SeQueryInformationToken(token, TokenGroups, (PVOID*)&groups);
-    if (NT_SUCCESS(status) && groups != NULL)
-    {
-        groupFound = OacSidPresent(groups, serviceSid, TRUE);
-    }
+    /* This supported aggregate class carries both normal and restricting SIDs. */
     status = SeQueryInformationToken(
         token,
-        TokenRestrictedSids,
-        (PVOID*)&restrictedSids);
-    if (NT_SUCCESS(status) && restrictedSids != NULL)
+        TokenGroupsAndPrivileges,
+        (PVOID*)&identity);
+    if (NT_SUCCESS(status) && identity != NULL)
     {
-        restrictedFound = OacSidPresent(restrictedSids, serviceSid, FALSE);
+        groupFound = OacSidPresent(
+            identity->Sids,
+            identity->SidCount,
+            serviceSid,
+            TRUE);
+        restrictedFound = OacSidPresent(
+            identity->RestrictedSids,
+            identity->RestrictedSidCount,
+            serviceSid,
+            FALSE);
     }
-    if (restrictedSids != NULL) ExFreePool(restrictedSids);
-    if (groups != NULL) ExFreePool(groups);
+    if (identity != NULL) ExFreePool(identity);
     PsDereferencePrimaryToken(token);
     return groupFound && restrictedFound;
 }

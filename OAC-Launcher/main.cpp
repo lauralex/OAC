@@ -96,8 +96,11 @@ bool MakeRequestId(ULONGLONG& requestId)
     return BCRYPT_SUCCESS(status) && requestId != 0;
 }
 
-bool EnsureServiceRunning(DWORD& error)
+bool EnsureServiceRunning(
+    DWORD& error,
+    OAC_SERVICE_FAILURE_STAGE& failureStage)
 {
+    failureStage = OAC_SERVICE_STAGE_NONE;
     UniqueServiceHandle manager(OpenSCManagerW(
         nullptr, nullptr, SC_MANAGER_CONNECT));
     if (!manager)
@@ -150,9 +153,28 @@ bool EnsureServiceRunning(DWORD& error)
         }
         else if (status.dwCurrentState != SERVICE_START_PENDING)
         {
-            error = status.dwWin32ExitCode != ERROR_SUCCESS
-                ? status.dwWin32ExitCode
-                : ERROR_SERVICE_NOT_ACTIVE;
+            if (status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR)
+            {
+                uint32_t stage = 0;
+                uint32_t decodedError = 0;
+                if (!OacDecodeServiceFailure(
+                        status.dwServiceSpecificExitCode,
+                        &stage,
+                        &decodedError))
+                {
+                    error = ERROR_INVALID_DATA;
+                    return false;
+                }
+                failureStage =
+                    static_cast<OAC_SERVICE_FAILURE_STAGE>(stage);
+                error = decodedError;
+            }
+            else
+            {
+                error = status.dwWin32ExitCode != ERROR_SUCCESS
+                    ? status.dwWin32ExitCode
+                    : ERROR_SERVICE_NOT_ACTIVE;
+            }
             return false;
         }
 
@@ -168,6 +190,23 @@ bool EnsureServiceRunning(DWORD& error)
         if (delay < 50) delay = 50;
         if (delay > 250) delay = 250;
         Sleep(delay);
+    }
+}
+
+const wchar_t* ServiceStageText(OAC_SERVICE_FAILURE_STAGE stage) noexcept
+{
+    switch (stage)
+    {
+    case OAC_SERVICE_STAGE_BOOTSTRAP: return L"bootstrap";
+    case OAC_SERVICE_STAGE_IDENTITY: return L"identity validation";
+    case OAC_SERVICE_STAGE_DRIVER_OPEN: return L"driver open";
+    case OAC_SERVICE_STAGE_DRIVER_NEGOTIATE: return L"driver negotiation";
+    case OAC_SERVICE_STAGE_DRIVER_CLAIM: return L"driver session claim";
+    case OAC_SERVICE_STAGE_DRIVER_STATUS: return L"driver status validation";
+    case OAC_SERVICE_STAGE_PIPE_CREATE: return L"control-pipe creation";
+    case OAC_SERVICE_STAGE_PIPE_THREAD: return L"control worker startup";
+    case OAC_SERVICE_STAGE_RUNTIME: return L"control worker runtime";
+    default: return L"unknown stage";
     }
 }
 
@@ -230,10 +269,13 @@ bool VerifyPipeServer(HANDLE pipe, DWORD& serverProcessId, DWORD& error)
 int SendRequest(ULONG requestType)
 {
     DWORD serviceError = ERROR_SUCCESS;
-    if (!EnsureServiceRunning(serviceError))
+    OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_NONE;
+    if (!EnsureServiceRunning(serviceError, failureStage))
     {
-        std::wcerr << L"OACService could not be started safely: "
-                   << ErrorText(serviceError) << L'\n';
+        std::wcerr << L"OACService could not be started safely";
+        if (failureStage != OAC_SERVICE_STAGE_NONE)
+            std::wcerr << L" during " << ServiceStageText(failureStage);
+        std::wcerr << L": " << ErrorText(serviceError) << L'\n';
         return 3;
     }
     if (!WaitNamedPipeW(OAC_PIPE_NAME, 5000))

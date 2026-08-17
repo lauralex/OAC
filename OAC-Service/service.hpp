@@ -2,6 +2,8 @@
 
 #include <Windows.h>
 
+#include "..\shared\oac_ipc.h"
+
 class ServiceHost final
 {
 public:
@@ -11,7 +13,7 @@ public:
     ServiceHost(const ServiceHost&) = delete;
     ServiceHost& operator=(const ServiceHost&) = delete;
 
-    DWORD Start() noexcept;
+    DWORD Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept;
     DWORD Wait() const noexcept;
     void Stop() noexcept;
 

@@ -580,8 +580,10 @@ DWORD OpenAndClaimDriver(
     HANDLE& driver,
     ULONG& version,
     ULONGLONG& capabilities,
-    ULONG& statusFlags)
+    ULONG& statusFlags,
+    OAC_SERVICE_FAILURE_STAGE& failureStage)
 {
+    failureStage = OAC_SERVICE_STAGE_DRIVER_OPEN;
     UniqueHandle candidate(CreateFileW(
         kDevicePath,
         GENERIC_READ | GENERIC_WRITE,
@@ -592,6 +594,7 @@ DWORD OpenAndClaimDriver(
         nullptr));
     if (!candidate) return GetLastError();
 
+    failureStage = OAC_SERVICE_STAGE_DRIVER_NEGOTIATE;
     OAC_V5_NEGOTIATE_REQUEST negotiate{};
     negotiate.Header.Version = OAC_V5_VERSION;
     negotiate.Header.Size = static_cast<ULONG>(sizeof(negotiate));
@@ -625,6 +628,7 @@ DWORD OpenAndClaimDriver(
         (negotiated.ProtocolFlags & requiredProtocol) != requiredProtocol)
         return ERROR_REVISION_MISMATCH;
 
+    failureStage = OAC_SERVICE_STAGE_DRIVER_CLAIM;
     OAC_V5_CLAIM_REQUEST claim{};
     claim.Header.Version = OAC_V5_VERSION;
     claim.Header.Size = static_cast<ULONG>(sizeof(claim));
@@ -655,6 +659,7 @@ DWORD OpenAndClaimDriver(
         (claimed.Capabilities & ~negotiated.Capabilities) != 0)
         return ERROR_ACCESS_DENIED;
 
+    failureStage = OAC_SERVICE_STAGE_DRIVER_STATUS;
     OAC_V5_STATUS_REQUEST statusRequest{};
     statusRequest.Header.Version = OAC_V5_VERSION;
     statusRequest.Header.Size = static_cast<ULONG>(sizeof(statusRequest));
@@ -695,6 +700,7 @@ DWORD OpenAndClaimDriver(
     capabilities = status.Capabilities;
     statusFlags = OAC_IPC_STATUS_DRIVER_READY |
         OAC_IPC_STATUS_SESSION_CLAIMED;
+    failureStage = OAC_SERVICE_STAGE_NONE;
     return ERROR_SUCCESS;
 }
 } // namespace
@@ -710,8 +716,9 @@ ServiceHost::~ServiceHost()
     if (fatalEvent_ != nullptr) CloseHandle(fatalEvent_);
 }
 
-DWORD ServiceHost::Start() noexcept
+DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
 {
+    failureStage = OAC_SERVICE_STAGE_BOOTSTRAP;
     try
     {
         if (stopEvent_ == nullptr || fatalEvent_ == nullptr)
@@ -719,22 +726,30 @@ DWORD ServiceHost::Start() noexcept
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
 
+        failureStage = OAC_SERVICE_STAGE_IDENTITY;
         DWORD error = VerifyServiceIdentity();
         if (error != ERROR_SUCCESS) return error;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
 
         error = OpenAndClaimDriver(
-            driver_, driverVersion_, driverCapabilities_, statusFlags_);
+            driver_,
+            driverVersion_,
+            driverCapabilities_,
+            statusFlags_,
+            failureStage);
         if (error != ERROR_SUCCESS) return error;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
 
+        failureStage = OAC_SERVICE_STAGE_PIPE_CREATE;
         firstPipe_ = CreateControlPipe(true, error);
         if (firstPipe_ == INVALID_HANDLE_VALUE) return error;
 
+        failureStage = OAC_SERVICE_STAGE_PIPE_THREAD;
         pipeThread_ = CreateThread(nullptr, 0, PipeThreadEntry, this, 0, nullptr);
         if (pipeThread_ == nullptr) return GetLastError();
+        failureStage = OAC_SERVICE_STAGE_NONE;
         return ERROR_SUCCESS;
     }
     catch (const std::bad_alloc&)

@@ -11,13 +11,17 @@ SRWLOCK g_StatusLock = SRWLOCK_INIT;
 HANDLE g_StopEvent = nullptr;
 volatile LONG g_StopRequested = FALSE;
 
-void ReportStatus(DWORD state, DWORD error, DWORD waitHint) noexcept
+void ReportStatus(
+    DWORD state,
+    DWORD win32Error,
+    DWORD serviceError,
+    DWORD waitHint) noexcept
 {
     AcquireSRWLockExclusive(&g_StatusLock);
     g_Status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     g_Status.dwCurrentState = state;
-    g_Status.dwWin32ExitCode = error;
-    g_Status.dwServiceSpecificExitCode = 0;
+    g_Status.dwWin32ExitCode = win32Error;
+    g_Status.dwServiceSpecificExitCode = serviceError;
     g_Status.dwWaitHint = waitHint;
     g_Status.dwControlsAccepted = state == SERVICE_RUNNING
         ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN
@@ -47,7 +51,7 @@ DWORD WINAPI ControlHandler(
     case SERVICE_CONTROL_SHUTDOWN:
         if (InterlockedCompareExchange(&g_StopRequested, TRUE, FALSE) == FALSE)
         {
-            ReportStatus(SERVICE_STOP_PENDING, ERROR_SUCCESS, 10000);
+            ReportStatus(SERVICE_STOP_PENDING, ERROR_SUCCESS, 0, 10000);
             if (g_StopEvent != nullptr) SetEvent(g_StopEvent);
         }
         return NO_ERROR;
@@ -75,9 +79,10 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
     g_Status = {};
     g_Status.dwCheckPoint = 0;
     InterlockedExchange(&g_StopRequested, FALSE);
-    ReportStatus(SERVICE_START_PENDING, ERROR_SUCCESS, 10000);
+    ReportStatus(SERVICE_START_PENDING, ERROR_SUCCESS, 0, 10000);
 
     DWORD result = ERROR_SUCCESS;
+    OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_BOOTSTRAP;
     if (argumentCount == 0 || arguments == nullptr || arguments[0] == nullptr ||
         _wcsicmp(arguments[0], OAC_SERVICE_NAME) != 0)
     {
@@ -98,13 +103,15 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
         try
         {
             ServiceHost host(g_StopEvent);
-            result = host.Start();
+            result = host.Start(failureStage);
             if (result == ERROR_SUCCESS)
             {
-                ReportStatus(SERVICE_RUNNING, ERROR_SUCCESS, 0);
+                ReportStatus(SERVICE_RUNNING, ERROR_SUCCESS, 0, 0);
                 result = host.Wait();
+                if (result != ERROR_SUCCESS && result != ERROR_OPERATION_ABORTED)
+                    failureStage = OAC_SERVICE_STAGE_RUNTIME;
                 if (InterlockedCompareExchange(&g_StopRequested, TRUE, FALSE) == FALSE)
-                    ReportStatus(SERVICE_STOP_PENDING, result, 10000);
+                    ReportStatus(SERVICE_STOP_PENDING, ERROR_SUCCESS, 0, 10000);
             }
             host.Stop();
         }
@@ -122,7 +129,11 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
     if (result == ERROR_OPERATION_ABORTED &&
         InterlockedCompareExchange(&g_StopRequested, FALSE, FALSE) != FALSE)
         result = ERROR_SUCCESS;
-    ReportStatus(SERVICE_STOPPED, result, 0);
+    const DWORD serviceError = OacEncodeServiceFailure(failureStage, result);
+    const DWORD win32Error = serviceError != 0
+        ? ERROR_SERVICE_SPECIFIC_ERROR
+        : result;
+    ReportStatus(SERVICE_STOPPED, win32Error, serviceError, 0);
 }
 } // namespace
 

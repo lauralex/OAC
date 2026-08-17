@@ -26,6 +26,7 @@ $requiredZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator',
     'verifier-protocol-1',
@@ -38,6 +39,76 @@ $requiredZeroTests = @(
 $baselineZeroTests = @($requiredZeroTests | Where-Object {
         $_ -notlike 'verifier-*'
     })
+$auxiliaryExitValues = [ordered]@{
+    'baseline-bcd' = @(0)
+    'baseline-sc-query' = @(0)
+    'production-launcher-started-service' = @(0)
+    'production-legacy-driver-start' = @(0, 1056)
+    'baseline-sc-stop' = @(0, 1062)
+    'baseline-target-stop' = @(0)
+    'production-service-pre-stop' = @(0, 1062)
+    'production-driver-pre-stop' = @(0, 1062)
+    'production-service-stop' = @(0, 1062)
+    'production-driver-stop' = @(0, 1062)
+    'verifier-pre-reset' = @(0, 2)
+    'verifier-arm' = @(0, 2)
+    'verifier-armed-settings' = @(0, 2)
+    'verifier-bcd' = @(0)
+    'verifier-active-settings' = @(0, 2)
+    'verifier-sc-start' = @(0, 1056)
+    'verifier-sc-stop' = @(0, 1062)
+    'verifier-target-stop' = @(0)
+    'verifier-query-after-stress' = @(0, 2)
+    'verifier-reset' = @(0, 2)
+    'final-bcd' = @(0)
+    'final-verifier-settings' = @(0, 2)
+    'final-verifier-query' = @(0, 2)
+    'final-sc-query' = @(0)
+    'final-service-query' = @(0)
+    'final-driverquery' = @(0)
+    'final-system-export' = @(0)
+    'final-code-integrity-export' = @(0)
+    'final-oacservice-stop' = @(0, 1062)
+    'final-oac-stop' = @(0, 1062)
+    'final-gate-stop' = @(0, 1062)
+    'final-gate-delete' = @(0, 1060, 1072)
+}
+$baselineAuxiliaryRequired = @(
+    'baseline-bcd',
+    'baseline-sc-query',
+    'production-launcher-started-service',
+    'production-legacy-driver-start',
+    'baseline-sc-stop',
+    'baseline-target-stop')
+$baselineAuxiliaryOptional = @(
+    'production-service-pre-stop',
+    'production-driver-pre-stop',
+    'production-service-stop',
+    'production-driver-stop')
+$fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
+    'verifier-pre-reset',
+    'verifier-arm',
+    'verifier-armed-settings',
+    'verifier-bcd',
+    'verifier-active-settings',
+    'verifier-sc-start',
+    'verifier-sc-stop',
+    'verifier-target-stop',
+    'verifier-query-after-stress',
+    'verifier-reset',
+    'final-bcd',
+    'final-verifier-settings',
+    'final-verifier-query',
+    'final-sc-query',
+    'final-service-query',
+    'final-driverquery',
+    'final-system-export',
+    'final-code-integrity-export')
+$fullAuxiliaryOptional = @($baselineAuxiliaryOptional) + @(
+    'final-oacservice-stop',
+    'final-oac-stop',
+    'final-gate-stop',
+    'final-gate-delete')
 $script:CampaignId = $null
 $script:CampaignStartUtc = [DateTime]::MinValue
 $script:ManifestHash = $null
@@ -246,6 +317,57 @@ function Read-CapturedExit([string]$Name) {
     return $value
 }
 
+function Get-AuxiliaryExitValidation(
+    [string[]]$FormalNames,
+    [bool]$Full) {
+    $required = if ($Full) {
+        @($fullAuxiliaryRequired)
+    } else {
+        @($baselineAuxiliaryRequired)
+    }
+    $optional = if ($Full) {
+        @($fullAuxiliaryOptional)
+    } else {
+        @($baselineAuxiliaryOptional)
+    }
+    $allowed = @($required) + @($optional)
+    $observed = [Collections.Generic.List[string]]::new()
+    $unexpected = [Collections.Generic.List[string]]::new()
+    $malformed = [Collections.Generic.List[string]]::new()
+    $wrong = [Collections.Generic.List[string]]::new()
+    foreach ($file in @(Get-ChildItem -LiteralPath $results `
+            -Filter '*.exitcode.txt' -File)) {
+        if (-not $file.Name.EndsWith(
+                '.exitcode.txt',
+                [StringComparison]::Ordinal)) {
+            $unexpected.Add($file.Name)
+            continue
+        }
+        $name = $file.Name.Substring(0, $file.Name.Length - '.exitcode.txt'.Length)
+        if ($FormalNames -ccontains $name) { continue }
+        $observed.Add($name)
+        if ($allowed -cnotcontains $name) {
+            $unexpected.Add($name)
+            continue
+        }
+        try {
+            $value = Read-CapturedExit $name
+            if (@($auxiliaryExitValues[$name]) -notcontains $value) {
+                $wrong.Add("$name=$value")
+            }
+        } catch {
+            $malformed.Add($name)
+        }
+    }
+    $missing = @($required | Where-Object { $observed -cnotcontains $_ })
+    return [pscustomobject]@{
+        Missing = $missing
+        Unexpected = @($unexpected)
+        Malformed = @($malformed)
+        Wrong = @($wrong)
+    }
+}
+
 function Assert-VerifierTargets([string]$CaptureName, [bool]$ExpectOac) {
     $exitCode = Read-CapturedExit $CaptureName
     if ($exitCode -notin @(0, 2)) {
@@ -352,12 +474,15 @@ function Start-ScanTarget {
     return $process
 }
 
-function Stop-ScanTarget([Diagnostics.Process]$Process) {
-    if ($null -eq $Process -or $Process.HasExited) { return }
-    $exitCode = Invoke-ConsoleCapture "target-$($Process.Id)-stop" `
+function Stop-ScanTarget(
+    [Diagnostics.Process]$Process,
+    [string]$CaptureName) {
+    if ($null -eq $Process) { throw 'The scan target handle is missing.' }
+    if ($Process.HasExited) { throw 'The disposable scan target exited before cleanup.' }
+    $exitCode = Invoke-ConsoleCapture $CaptureName `
         'taskkill.exe' @('/PID', [string]$Process.Id, '/T', '/F') `
         ([TimeSpan]::FromSeconds(30))
-    if ($exitCode -ne 0 -and -not $Process.HasExited) {
+    if ($exitCode -ne 0) {
         throw "Could not stop scan target PID $($Process.Id); exit code $exitCode."
     }
 }
@@ -729,6 +854,49 @@ function Write-TaskScript([string]$Path, [string]$Content) {
         [Text.UnicodeEncoding]::new($false, $true))
 }
 
+function Test-CurrentDeviceOpenDenied([string]$Name) {
+    $probe = @'
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class OacSystemDeviceProbe
+{
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string name, uint access, uint share, IntPtr security,
+        uint creation, uint flags, IntPtr templateFile);
+
+    public static SafeFileHandle Open()
+    {
+        return CreateFileW(@"\\.\OAC", 0xC0000000, 0, IntPtr.Zero, 3, 0x80, IntPtr.Zero);
+    }
+}
+"@
+
+    $handle = [OacSystemDeviceProbe]::Open()
+    $errorCode = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $opened = -not $handle.IsInvalid
+    $handle.Dispose()
+    $exitCode = 0
+    if ($opened) {
+        $exitCode = 41
+    } elseif ($errorCode -ne 5) {
+        $exitCode = 42
+    }
+    [Console]::Out.WriteLine("win32_error=$errorCode pass=$($exitCode -eq 0)")
+    exit $exitCode
+'@
+    $encoded = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($probe))
+    $powershell = Join-Path $env:SystemRoot `
+        'System32\WindowsPowerShell\v1.0\PowerShell.exe'
+    return Invoke-NativeCapture $Name $powershell @(
+        '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encoded) `
+        ([TimeSpan]::FromSeconds(30))
+}
+
 function Test-ProductionBoundary {
     Write-RunLog 'Beginning bounded LabMode=0 service and IPC boundary tests.'
     $installDirectory = Join-Path $env:ProgramFiles 'OAC-Test'
@@ -739,6 +907,7 @@ function Test-ProductionBoundary {
 
     $launcherExits = [Collections.Generic.List[int64]]::new()
     $probeExits = [ordered]@{
+        localsystem = [int64]-1
         limited = [int64]-1
         administrator = [int64]-1
     }
@@ -774,6 +943,9 @@ exit `$code
                     'sc.exe' @('query', 'OACService') | Out-Null
             }
         }
+
+        $probeExits.localsystem = Test-CurrentDeviceOpenDenied `
+            'production-direct-open-localsystem'
 
         foreach ($probe in @(
             @('limited', 'Limited'),
@@ -852,6 +1024,7 @@ exit $code
     [ordered]@{
         timestamp_utc = [DateTime]::UtcNow.ToString('o')
         launcher_exits = @($launcherExits)
+        direct_open_localsystem_exit = $probeExits.localsystem
         direct_open_limited_exit = $probeExits.limited
         direct_open_administrator_exit = $probeExits.administrator
         test_error = $testError
@@ -863,7 +1036,7 @@ exit $code
     if (-not $passed) {
         throw "Production boundary failed; test='$testError' cleanup='$cleanupError'."
     }
-    Write-RunLog 'Production service boundary passed twice; limited-user and administrator direct opens were denied.'
+    Write-RunLog 'Production service boundary passed twice; LocalSystem, limited-user, and administrator direct opens were denied.'
 }
 
 function Assert-KernelFindingProvenance([string]$ReportPath) {
@@ -1133,7 +1306,7 @@ function Install-And-RunBaseline {
         $gateSummary = Test-DriverGate
     } finally {
         Invoke-ConsoleCapture 'baseline-sc-stop' 'sc.exe' @('stop', 'OAC') | Out-Null
-        Stop-ScanTarget $target
+        Stop-ScanTarget $target 'baseline-target-stop'
     }
 
     $baselineExitFailures = [Collections.Generic.List[string]]::new()
@@ -1159,6 +1332,26 @@ function Install-And-RunBaseline {
     }
     if ((Read-CapturedExit 'baseline-driver-gate-delete') -ne 0) {
         $baselineExitFailures.Add('baseline-driver-gate-delete')
+    }
+    $baselineFormalNames = @($baselineZeroTests) + @(
+        'baseline-remove-repeat-expected-refusal',
+        'baseline-driver-gate-create',
+        'baseline-driver-gate-trigger',
+        'baseline-driver-gate-detection',
+        'baseline-driver-gate-stop',
+        'baseline-driver-gate-delete')
+    $auxiliary = Get-AuxiliaryExitValidation $baselineFormalNames $false
+    foreach ($name in $auxiliary.Missing) {
+        $baselineExitFailures.Add("auxiliary-missing:$name")
+    }
+    foreach ($name in $auxiliary.Unexpected) {
+        $baselineExitFailures.Add("auxiliary-unexpected:$name")
+    }
+    foreach ($name in $auxiliary.Malformed) {
+        $baselineExitFailures.Add("auxiliary-malformed:$name")
+    }
+    foreach ($name in $auxiliary.Wrong) {
+        $baselineExitFailures.Add("auxiliary-wrong:$name")
     }
     $productionPass = [bool]((Get-Content -LiteralPath `
             (Join-Path $results 'production-boundary-summary.json') -Raw |
@@ -1288,7 +1481,7 @@ function Run-UnderDriverVerifier {
         }
     } finally {
         Invoke-ConsoleCapture 'verifier-sc-stop' 'sc.exe' @('stop', 'OAC') | Out-Null
-        Stop-ScanTarget $target
+        Stop-ScanTarget $target 'verifier-target-stop'
     }
 
     $queryExit = Invoke-ConsoleCapture 'verifier-query-after-stress' `
@@ -1484,15 +1677,15 @@ function Collect-FinalResults {
             -Filter '*.exitcode.txt' -File | ForEach-Object {
                 $name = $_.Name.Substring(
                     0, $_.Name.Length - '.exitcode.txt'.Length)
-                if ($name -match '^(baseline-(install|remove|reinstall|protocol-unit|protocol|preflight|launch|client|remove-repeat-expected-refusal|driver-gate-(create|trigger|detection|stop|delete))|production-launcher-\d+|production-direct-open-[a-z]+|verifier-(protocol-\d+|preflight|launch|client-\d+))$') {
+                if ($expectedResultNames -ccontains $name) {
                     $name
                 }
             } | Sort-Object -Unique)
     $missingResultNames = @($expectedResultNames | Where-Object {
-            $_ -notin $observedTestResultNames
+            $observedTestResultNames -cnotcontains $_
         })
     $unexpectedResultNames = @($observedTestResultNames | Where-Object {
-            $_ -notin $expectedResultNames
+            $expectedResultNames -cnotcontains $_
         })
     $malformedResultNames = [Collections.Generic.List[string]]::new()
     $exitValues = @{}
@@ -1639,6 +1832,12 @@ function Collect-FinalResults {
     $gateContained = $null -eq (Get-Service -Name 'OACGateProbe' `
             -ErrorAction SilentlyContinue) -and
         -not (Test-Path -LiteralPath $gateProbePath)
+    $auxiliaryValidation = Get-AuxiliaryExitValidation $expectedResultNames $true
+    $exactResultSetPass = $exactResultSetPass -and
+        $auxiliaryValidation.Missing.Count -eq 0 -and
+        $auxiliaryValidation.Unexpected.Count -eq 0 -and
+        $auxiliaryValidation.Malformed.Count -eq 0 -and
+        $auxiliaryValidation.Wrong.Count -eq 0
 
     $interactiveStagingRemoved = $false
     try {
@@ -1740,6 +1939,10 @@ function Collect-FinalResults {
         unexpected_test_results = $unexpectedResultNames
         malformed_test_results = @($malformedResultNames)
         wrong_test_results = @($wrongResultValues)
+        missing_auxiliary_results = @($auxiliaryValidation.Missing)
+        unexpected_auxiliary_results = @($auxiliaryValidation.Unexpected)
+        malformed_auxiliary_results = @($auxiliaryValidation.Malformed)
+        wrong_auxiliary_results = @($auxiliaryValidation.Wrong)
         baseline_unexpected_restart = $baselineUnexpectedRestart
         verifier_unexpected_restart = $unexpectedRestart
         verifier_reset_pass = $verifierResetPass
