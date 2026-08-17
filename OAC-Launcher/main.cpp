@@ -269,6 +269,20 @@ const wchar_t* LaunchDetailText(uint32_t detail) noexcept
         return L"executable path mismatch";
     case OAC_IPC_LAUNCH_DETAIL_CONFIRMATION_FAILED:
         return L"process identity mismatch";
+    case OAC_IPC_LAUNCH_DETAIL_REQUESTED:
+        return L"driver session explicitly revoked";
+    case OAC_IPC_LAUNCH_DETAIL_FILE_CLEANUP:
+        return L"driver handle cleaned up";
+    case OAC_IPC_LAUNCH_DETAIL_SERVICE_EXIT:
+        return L"service process exited";
+    case OAC_IPC_LAUNCH_DETAIL_TARGET_EXIT:
+        return L"target exited during creation";
+    case OAC_IPC_LAUNCH_DETAIL_POLICY:
+        return L"driver policy revoked the session";
+    case OAC_IPC_LAUNCH_DETAIL_EVIDENCE_LOSS:
+        return L"driver evidence loss";
+    case OAC_IPC_LAUNCH_DETAIL_DRIVER_STOP:
+        return L"driver stopped";
     case OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION:
         return L"driver session revoked";
     default:

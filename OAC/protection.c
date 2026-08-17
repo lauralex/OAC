@@ -200,6 +200,15 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
     {
         return OB_PREOP_SUCCESS;
     }
+    /* Windows must finish creating the service-bound suspended process before
+     * the service can confirm its handle. Keep protection active against
+     * ordinary callers, but allow protected OS bootstrap processes during
+     * this one bounded state. Full filtering applies before thread resume. */
+    if (OacSessionTargetAwaitingConfirmation(targetProcess) &&
+        OacIsProtectedWindowsRequestor())
+    {
+        return OB_PREOP_SUCCESS;
+    }
 
     if (Information->Operation == OB_OPERATION_HANDLE_CREATE)
     {

@@ -47,6 +47,11 @@ the new process object, and entering
 the same launch ID. The driver resolves that handle to an exact process object before entering
 `MONITORING`.
 
+Handle filtering starts at creation-time binding. While the target is still suspended in
+`TARGET_BOUND`, protected Windows bootstrap processes may retain the handles required to finish
+process creation; ordinary callers remain filtered. Exact-handle confirmation enters `MONITORING`
+before the service resumes the initial thread, at which point the bootstrap exception is closed.
+
 The controller is permitted to create exactly one child process per production session. After a
 target is bound, any additional process creation by that exact service process is denied for the
 remaining target lifetime; helpers must run in a separate service that holds no production authority.

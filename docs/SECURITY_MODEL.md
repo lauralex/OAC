@@ -100,6 +100,9 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - File cleanup drains in-flight requests, revokes authority, and preserves a live-target tombstone.
 - A production launch ticket is random, bounded, one-use, and bound to the exact service creator and
   canonical image path; monitoring requires confirmation through an exact user-mode process handle.
+- Handle filtering covers the creation-bound target immediately. Only protected Windows bootstrap
+  processes are exempt while that target remains suspended and awaits exact-handle confirmation;
+  the exemption ends before its first thread resumes.
 - The service authenticates the pipe client, opens and resolves the executable under impersonation,
   duplicates the same identity to a primary token, and keeps the selected file locked against writes
   and deletion through process creation.

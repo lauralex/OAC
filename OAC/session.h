@@ -133,6 +133,8 @@ BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process);
 
 BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process);
 
+BOOLEAN OacSessionTargetAwaitingConfirmation(_In_ PEPROCESS Process);
+
 HANDLE OacSessionTargetProcessId(VOID);
 
 VOID OacSessionNotifyProcessExit(
