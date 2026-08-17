@@ -187,6 +187,474 @@ if (-not $EnableTestSigning -and
     throw 'Driver installation and removal must run as LocalSystem in the disposable VM.'
 }
 
+if ($null -eq ('Oac.ServicePolicy' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+
+namespace Oac
+{
+    public static class ServicePolicy
+    {
+        private const uint OwnerSecurityInformation = 0x00000001;
+        private const uint GroupSecurityInformation = 0x00000002;
+        private const uint DaclSecurityInformation = 0x00000004;
+        private const uint UnprotectedDaclSecurityInformation = 0x20000000;
+        private const int ServiceObject = 2;
+        private const uint ScManagerConnect = 0x00000001;
+        private const uint ServiceQueryConfig = 0x00000001;
+        private const uint ServiceChangeConfig = 0x00000002;
+        private const uint ServiceStart = 0x00000010;
+        private const uint FailureActionsLevel = 2;
+        private const uint FailureActionsFlagLevel = 4;
+        private const int NoAction = 0;
+        private const int RestartAction = 1;
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint GetNamedSecurityInfoW(
+            string objectName,
+            int objectType,
+            uint securityInformation,
+            out IntPtr owner,
+            out IntPtr group,
+            out IntPtr dacl,
+            out IntPtr sacl,
+            out IntPtr securityDescriptor);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode)]
+        private static extern uint SetNamedSecurityInfoW(
+            string objectName,
+            int objectType,
+            uint securityInformation,
+            IntPtr owner,
+            IntPtr group,
+            IntPtr dacl,
+            IntPtr sacl);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode,
+            SetLastError = true)]
+        private static extern IntPtr OpenSCManagerW(
+            string machineName,
+            string databaseName,
+            uint desiredAccess);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode,
+            SetLastError = true)]
+        private static extern IntPtr OpenServiceW(
+            IntPtr serviceManager,
+            string serviceName,
+            uint desiredAccess);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool QueryServiceConfig2W(
+            IntPtr service,
+            uint informationLevel,
+            IntPtr buffer,
+            uint bufferSize,
+            out uint bytesNeeded);
+
+        [DllImport("advapi32.dll", EntryPoint = "ChangeServiceConfig2W",
+            SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ChangeFailureActions(
+            IntPtr service,
+            uint informationLevel,
+            ref ServiceFailureActions actions);
+
+        [DllImport("advapi32.dll", EntryPoint = "ChangeServiceConfig2W",
+            SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ChangeFailureActionsFlag(
+            IntPtr service,
+            uint informationLevel,
+            ref ServiceFailureActionsFlag flag);
+
+        [DllImport("advapi32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool CloseServiceHandle(IntPtr handle);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode,
+            SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            string text,
+            uint revision,
+            out IntPtr securityDescriptor,
+            out uint size);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetSecurityDescriptorOwner(
+            IntPtr securityDescriptor,
+            out IntPtr owner,
+            [MarshalAs(UnmanagedType.Bool)] out bool ownerDefaulted);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetSecurityDescriptorGroup(
+            IntPtr securityDescriptor,
+            out IntPtr group,
+            [MarshalAs(UnmanagedType.Bool)] out bool groupDefaulted);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetSecurityDescriptorDacl(
+            IntPtr securityDescriptor,
+            [MarshalAs(UnmanagedType.Bool)] out bool daclPresent,
+            out IntPtr dacl,
+            [MarshalAs(UnmanagedType.Bool)] out bool daclDefaulted);
+
+        [DllImport("advapi32.dll")]
+        private static extern uint GetSecurityDescriptorLength(IntPtr securityDescriptor);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ServiceFailureActions
+        {
+            public uint ResetPeriod;
+            public IntPtr RebootMessage;
+            public IntPtr Command;
+            public uint ActionCount;
+            public IntPtr Actions;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ServiceAction
+        {
+            public int Type;
+            public uint Delay;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ServiceFailureActionsFlag
+        {
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool Enabled;
+        }
+
+        public static byte[] ReadSecurity(string serviceName)
+        {
+            IntPtr owner;
+            IntPtr group;
+            IntPtr dacl;
+            IntPtr sacl;
+            IntPtr descriptor;
+            uint information = OwnerSecurityInformation |
+                GroupSecurityInformation | DaclSecurityInformation;
+            uint error = GetNamedSecurityInfoW(
+                serviceName,
+                ServiceObject,
+                information,
+                out owner,
+                out group,
+                out dacl,
+                out sacl,
+                out descriptor);
+            if (error != 0)
+            {
+                throw new Win32Exception((int)error);
+            }
+            if (descriptor == IntPtr.Zero)
+            {
+                throw new InvalidOperationException(
+                    "The service security descriptor was not returned.");
+            }
+
+            try
+            {
+                uint size = GetSecurityDescriptorLength(descriptor);
+                if (size == 0 || size > 65536)
+                {
+                    throw new InvalidOperationException(
+                        "The service security descriptor has an invalid size.");
+                }
+                byte[] bytes = new byte[(int)size];
+                Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+                return bytes;
+            }
+            finally
+            {
+                LocalFree(descriptor);
+            }
+        }
+
+        public static void WriteSecurity(string serviceName, string sddl)
+        {
+            IntPtr descriptor;
+            uint size;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    sddl, 1, out descriptor, out size))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                IntPtr owner;
+                IntPtr group;
+                IntPtr dacl;
+                bool ignored;
+                bool daclPresent;
+                if (!GetSecurityDescriptorOwner(descriptor, out owner, out ignored) ||
+                    !GetSecurityDescriptorGroup(descriptor, out group, out ignored) ||
+                    !GetSecurityDescriptorDacl(
+                        descriptor, out daclPresent, out dacl, out ignored))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                if (owner == IntPtr.Zero || group == IntPtr.Zero ||
+                    !daclPresent || dacl == IntPtr.Zero)
+                {
+                    throw new InvalidOperationException(
+                        "The requested service security descriptor is incomplete.");
+                }
+
+                uint information = OwnerSecurityInformation |
+                    GroupSecurityInformation | DaclSecurityInformation |
+                    UnprotectedDaclSecurityInformation;
+                uint error = SetNamedSecurityInfoW(
+                    serviceName,
+                    ServiceObject,
+                    information,
+                    owner,
+                    group,
+                    dacl,
+                    IntPtr.Zero);
+                if (error != 0)
+                {
+                    throw new Win32Exception((int)error);
+                }
+            }
+            finally
+            {
+                LocalFree(descriptor);
+            }
+        }
+
+        public static bool HasRecoveryPolicy(
+            string serviceName,
+            uint expectedResetPeriod,
+            uint expectedRestartDelay)
+        {
+            IntPtr manager = OpenSCManagerW(
+                null, null, ScManagerConnect);
+            if (manager == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                IntPtr service = OpenServiceW(
+                    manager, serviceName, ServiceQueryConfig);
+                if (service == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                try
+                {
+                    return FailureActionsMatch(
+                            service,
+                            expectedResetPeriod,
+                            expectedRestartDelay) &&
+                        FailureActionsEnabled(service);
+                }
+                finally
+                {
+                    CloseServiceHandle(service);
+                }
+            }
+            finally
+            {
+                CloseServiceHandle(manager);
+            }
+        }
+
+        public static void WriteRecoveryPolicy(
+            string serviceName,
+            uint resetPeriod,
+            uint restartDelay)
+        {
+            IntPtr manager = OpenSCManagerW(
+                null, null, ScManagerConnect);
+            if (manager == IntPtr.Zero)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                IntPtr service = OpenServiceW(
+                    manager,
+                    serviceName,
+                    ServiceChangeConfig | ServiceStart);
+                if (service == IntPtr.Zero)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                try
+                {
+                    int actionSize = Marshal.SizeOf(typeof(ServiceAction));
+                    IntPtr actionBuffer = Marshal.AllocHGlobal(actionSize * 2);
+                    try
+                    {
+                        ServiceAction restart = new ServiceAction
+                        {
+                            Type = RestartAction,
+                            Delay = restartDelay
+                        };
+                        ServiceAction stop = new ServiceAction
+                        {
+                            Type = NoAction,
+                            Delay = 0
+                        };
+                        Marshal.StructureToPtr(restart, actionBuffer, false);
+                        Marshal.StructureToPtr(
+                            stop, IntPtr.Add(actionBuffer, actionSize), false);
+
+                        ServiceFailureActions actions =
+                            new ServiceFailureActions
+                            {
+                                ResetPeriod = resetPeriod,
+                                RebootMessage = IntPtr.Zero,
+                                Command = IntPtr.Zero,
+                                ActionCount = 2,
+                                Actions = actionBuffer
+                            };
+                        if (!ChangeFailureActions(
+                                service, FailureActionsLevel, ref actions))
+                        {
+                            throw new Win32Exception(Marshal.GetLastWin32Error());
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(actionBuffer);
+                    }
+
+                    ServiceFailureActionsFlag flag =
+                        new ServiceFailureActionsFlag { Enabled = true };
+                    if (!ChangeFailureActionsFlag(
+                            service, FailureActionsFlagLevel, ref flag))
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+                }
+                finally
+                {
+                    CloseServiceHandle(service);
+                }
+            }
+            finally
+            {
+                CloseServiceHandle(manager);
+            }
+        }
+
+        private static bool FailureActionsMatch(
+            IntPtr service,
+            uint expectedResetPeriod,
+            uint expectedRestartDelay)
+        {
+            IntPtr buffer = ReadConfig(service, FailureActionsLevel);
+            try
+            {
+                ServiceFailureActions actions =
+                    (ServiceFailureActions)Marshal.PtrToStructure(
+                        buffer, typeof(ServiceFailureActions));
+                if (actions.ResetPeriod != expectedResetPeriod ||
+                    !IsNullOrEmpty(actions.RebootMessage) ||
+                    !IsNullOrEmpty(actions.Command) ||
+                    actions.ActionCount != 2 ||
+                    actions.Actions == IntPtr.Zero)
+                {
+                    return false;
+                }
+                ServiceAction action =
+                    (ServiceAction)Marshal.PtrToStructure(
+                        actions.Actions, typeof(ServiceAction));
+                int actionSize = Marshal.SizeOf(typeof(ServiceAction));
+                ServiceAction terminal =
+                    (ServiceAction)Marshal.PtrToStructure(
+                        IntPtr.Add(actions.Actions, actionSize),
+                        typeof(ServiceAction));
+                return action.Type == RestartAction &&
+                    action.Delay == expectedRestartDelay &&
+                    terminal.Type == NoAction && terminal.Delay == 0;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static bool FailureActionsEnabled(IntPtr service)
+        {
+            IntPtr buffer = ReadConfig(service, FailureActionsFlagLevel);
+            try
+            {
+                ServiceFailureActionsFlag flag =
+                    (ServiceFailureActionsFlag)Marshal.PtrToStructure(
+                        buffer, typeof(ServiceFailureActionsFlag));
+                return flag.Enabled;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+
+        private static bool IsNullOrEmpty(IntPtr text)
+        {
+            return text == IntPtr.Zero ||
+                String.IsNullOrEmpty(Marshal.PtrToStringUni(text));
+        }
+
+        private static IntPtr ReadConfig(IntPtr service, uint level)
+        {
+            uint bytesNeeded;
+            bool unexpectedSuccess = QueryServiceConfig2W(
+                service, level, IntPtr.Zero, 0, out bytesNeeded);
+            int error = Marshal.GetLastWin32Error();
+            if (unexpectedSuccess || error != 122 ||
+                bytesNeeded == 0 || bytesNeeded > 65536)
+            {
+                throw new Win32Exception(error);
+            }
+
+            uint capacity = bytesNeeded;
+            IntPtr buffer = Marshal.AllocHGlobal((int)capacity);
+            try
+            {
+                if (!QueryServiceConfig2W(
+                        service, level, buffer, capacity, out bytesNeeded) ||
+                    bytesNeeded > capacity)
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+                IntPtr result = buffer;
+                buffer = IntPtr.Zero;
+                return result;
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+            }
+        }
+    }
+}
+'@ -Language CSharp
+}
+
 function Add-TestCertificateToMachineStore([string]$StoreName) {
     $output = & certutil.exe -f -addstore $StoreName $certificate 2>&1
     $exitCode = $LASTEXITCODE
@@ -362,46 +830,115 @@ function Assert-ProtectedFileAcl([string]$Path) {
 
 function Assert-ServiceConfiguration(
     [string]$ServicePath,
-    [string]$ExpectedImagePath
+    [string]$ExpectedImagePath,
+    [switch]$AllowDisabled
 ) {
     $configuration = Get-ItemProperty -LiteralPath $ServicePath
     $dependencies = @($configuration.DependOnService)
     $privileges = @($configuration.RequiredPrivileges)
+    $start = [int]$configuration.Start
     if ([int]$configuration.Type -ne 0x10 -or
-        [int]$configuration.Start -ne 3 -or
+        ($start -ne 3 -and (-not $AllowDisabled -or $start -ne 4)) -or
         [string]$configuration.ObjectName -ne 'LocalSystem' -or
         [string]$configuration.ImagePath -cne $ExpectedImagePath -or
         $dependencies.Count -ne 1 -or $dependencies[0] -ne 'OAC' -or
         $privileges.Count -ne 1 -or
         $privileges[0] -ne 'SeChangeNotifyPrivilege' -or
         [int]$configuration.ServiceSidType -ne 3) {
-        throw 'OACService does not match the required demand-start restricted configuration.'
+        throw 'OACService does not match the required restricted configuration.'
     }
 }
 
-function Assert-ServicePolicy([string]$ExpectedDacl) {
-    $securityLines = @(& sc.exe sdshow OACService 2>&1)
-    if ($LASTEXITCODE -ne 0 -or
-        -not ($securityLines | Where-Object {
-                $_.ToString().Trim() -eq $ExpectedDacl
-            })) {
-        throw 'OACService did not retain the protected service-object DACL.'
+function Get-UnsignedAccessMask([int]$AccessMask) {
+    return [BitConverter]::ToUInt32([BitConverter]::GetBytes($AccessMask), 0)
+}
+
+function Get-ServiceAceMap(
+    [Security.AccessControl.RawSecurityDescriptor]$Descriptor
+) {
+    $policyFlags =
+        [Security.AccessControl.ControlFlags]::OwnerDefaulted -bor
+        [Security.AccessControl.ControlFlags]::GroupDefaulted -bor
+        [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent -bor
+        [Security.AccessControl.ControlFlags]::DiscretionaryAclDefaulted -bor
+        [Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInheritRequired -bor
+        [Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited -bor
+        [Security.AccessControl.ControlFlags]::DiscretionaryAclProtected
+    if ($null -eq $Descriptor.DiscretionaryAcl -or
+        ($Descriptor.ControlFlags -band $policyFlags) -ne
+            [Security.AccessControl.ControlFlags]::DiscretionaryAclPresent) {
+        return $null
     }
 
-    $failureText = & sc.exe qfailure OACService 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or
-        $failureText -notmatch '(?im)RESET_PERIOD[^\r\n]*86400' -or
-        [regex]::Matches($failureText, '(?im)\bRESTART\b').Count -ne 1 -or
-        $failureText -notmatch '(?im)Delay[^\r\n]*5000' -or
-        $failureText -match '(?im)RUN PROCESS|REBOOT\s+--' -or
-        $failureText -notmatch '(?im)^[ \t]*REBOOT_MESSAGE[ \t]*:[ \t]*$' -or
-        $failureText -notmatch '(?im)^[ \t]*COMMAND_LINE[ \t]*:[ \t]*$') {
-        throw 'OACService does not have the bounded one-restart recovery policy.'
+    $entries = [Collections.Generic.Dictionary[string, uint32]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($ace in $Descriptor.DiscretionaryAcl) {
+        if ($ace -isnot [Security.AccessControl.CommonAce] -or
+            $ace.AceType -ne [Security.AccessControl.AceType]::AccessAllowed -or
+            $ace.AceFlags -ne [Security.AccessControl.AceFlags]::None -or
+            $ace.IsCallback -or $ace.OpaqueLength -ne 0 -or
+            $null -eq $ace.SecurityIdentifier) {
+            return $null
+        }
+        $sid = $ace.SecurityIdentifier.Value
+        if ($entries.ContainsKey($sid)) { return $null }
+        $entries.Add($sid, (Get-UnsignedAccessMask $ace.AccessMask))
     }
-    $failureFlagText = & sc.exe qfailureflag OACService 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or
-        $failureFlagText -notmatch '(?im)\bTRUE\b') {
-        throw 'OACService failure actions are not enabled for non-crash failures.'
+    return $entries
+}
+
+function Test-ServiceDescriptor(
+    [Security.AccessControl.RawSecurityDescriptor]$Actual,
+    [Security.AccessControl.RawSecurityDescriptor]$Expected
+) {
+    if ($null -eq $Actual.Owner -or $null -eq $Actual.Group -or
+        $null -eq $Expected.Owner -or $null -eq $Expected.Group -or
+        $Actual.Owner.Value -ne $Expected.Owner.Value -or
+        $Actual.Group.Value -ne $Expected.Group.Value) {
+        return $false
+    }
+
+    $actualEntries = Get-ServiceAceMap $Actual
+    $expectedEntries = Get-ServiceAceMap $Expected
+    if ($null -eq $actualEntries -or $null -eq $expectedEntries -or
+        $actualEntries.Count -ne $expectedEntries.Count) {
+        return $false
+    }
+    foreach ($entry in $expectedEntries.GetEnumerator()) {
+        [uint32]$actualMask = 0
+        if (-not $actualEntries.TryGetValue($entry.Key, [ref]$actualMask) -or
+            $actualMask -ne $entry.Value) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Assert-ServicePolicy([string]$ExpectedDescriptor) {
+    try {
+        $expected = [Security.AccessControl.RawSecurityDescriptor]::new(
+            $ExpectedDescriptor)
+        $actual = [Security.AccessControl.RawSecurityDescriptor]::new(
+            [Oac.ServicePolicy]::ReadSecurity('OACService'), 0)
+    } catch {
+        throw "OACService security descriptor could not be read or parsed: $($_.Exception.Message)"
+    }
+    if (-not (Test-ServiceDescriptor $actual $expected)) {
+        $actualText = $actual.GetSddlForm(
+            [Security.AccessControl.AccessControlSections]::Owner -bor
+            [Security.AccessControl.AccessControlSections]::Group -bor
+            [Security.AccessControl.AccessControlSections]::Access)
+        throw "OACService does not retain the required owner, group, and DACL: $actualText"
+    }
+
+    try {
+        $recoveryValid = [Oac.ServicePolicy]::HasRecoveryPolicy(
+            'OACService', 86400, 5000)
+    } catch {
+        throw "OACService recovery policy could not be queried: $($_.Exception.Message)"
+    }
+    if (-not $recoveryValid) {
+        throw 'OACService does not have the bounded one-restart recovery policy.'
     }
 }
 
@@ -713,8 +1250,8 @@ $serviceInstallPath = Join-Path $installDirectory 'OAC-Service.exe'
 $launcherInstallPath = Join-Path $installDirectory 'OAC-Launcher.exe'
 $quotedServicePath = '"{0}"' -f $serviceInstallPath
 $serviceKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\OACService'
-$serviceDacl =
-    'D:P(A;;GA;;;SY)(A;;CCLCSWRPWPDTLOCRRC;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)'
+$serviceDescriptor =
+    'O:SYG:SYD:(A;;0x000F01FF;;;SY)(A;;0x00000014;;;BA)(A;;0x00000014;;;IU)'
 $registeredService = Get-Service -Name OACService -ErrorAction SilentlyContinue
 $serviceKeyExists = Test-Path -LiteralPath $serviceKey
 $serviceRegistrationExists = $null -ne $registeredService
@@ -731,8 +1268,9 @@ if ($serviceKeyExists) {
     if ($registeredImagePath -cne $quotedServicePath) {
         throw 'Refusing an OACService registration outside OAC-Test.'
     }
-    Assert-ServiceConfiguration $serviceKey $quotedServicePath
-    Assert-ServicePolicy $serviceDacl
+    Assert-ServiceConfiguration `
+        $serviceKey $quotedServicePath -AllowDisabled:$Remove
+    Assert-ServicePolicy $serviceDescriptor
 }
 $expectedInstalledFiles = @{
     'OAC-Service.exe' = $serviceSource
@@ -753,6 +1291,11 @@ $verifiedDriverPackage = Get-VerifiedDriverPackage -Required:$Remove
 if ($Remove) {
     Assert-TestCertificateStores
 
+    Invoke-BoundedProcess 'sc.exe' @(
+        'config', 'OACService', 'start=', 'disabled')
+    if ([int](Get-ItemProperty -LiteralPath $serviceKey -Name Start).Start -ne 4) {
+        throw 'OACService did not become disabled before removal.'
+    }
     Stop-ServiceBounded 'OACService'
     Stop-ServiceBounded 'OAC'
     Invoke-BoundedProcess 'sc.exe' @('delete', 'OACService')
@@ -923,14 +1466,11 @@ try {
     Invoke-ScChecked @('privs', 'OACService', 'SeChangeNotifyPrivilege')
     Invoke-ScChecked @(
         'description', 'OACService', 'Disposable-VM OAC v5 control service')
-    Invoke-ScChecked @(
-        'failure', 'OACService', 'reset=', '86400',
-        'actions=', 'restart/5000')
-    Invoke-ScChecked @('failureflag', 'OACService', '1')
+    [Oac.ServicePolicy]::WriteRecoveryPolicy('OACService', 86400, 5000)
     Assert-ServiceConfiguration $serviceKey $quotedServicePath
 
-    Invoke-ScChecked @('sdset', 'OACService', $serviceDacl)
-    Assert-ServicePolicy $serviceDacl
+    [Oac.ServicePolicy]::WriteSecurity('OACService', $serviceDescriptor)
+    Assert-ServicePolicy $serviceDescriptor
 
     $sidText = & sc.exe showsid OACService 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0 -or

@@ -78,15 +78,20 @@ imports only the package certificate into LocalMachine test trust stores, verifi
 uses `pnputil` to stage the INF, starts the `OAC` service, and can perform a client smoke scan.
 The smoke client requires the explicit `-LegacyV4LabMode` switch. Without that switch, the installer
 sets `LabMode=0`, installs the restricted, manual `OACService`, and leaves it stopped for the
-production-boundary test phase. The installer reads
+production-boundary test phase. The service object is assigned to SYSTEM and its exact DACL grants
+interactive users and administrators only query-status and start rights. The installer reads
 `HKLM\SYSTEM\CurrentControlSet\Services\OAC\Start` and refuses to load the driver unless the value
-is exactly `3` (`SERVICE_DEMAND_START`). Verify both services independently with:
+is exactly `3` (`SERVICE_DEMAND_START`). From the same LocalSystem shell, verify both services
+independently with:
 
 ```powershell
 reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\OAC /v Start
 sc.exe query OAC
 sc.exe qc OACService
 ```
+
+Ordinary and elevated interactive users are intentionally limited to query-status and start access
+on `OACService`; they cannot run the configuration query above.
 
 The first command must report `0x3`; never change it to boot, system, or automatic start.
 

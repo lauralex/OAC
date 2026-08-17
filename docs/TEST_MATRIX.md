@@ -82,9 +82,13 @@ The VM harness source now contains a bounded `LabMode=0` production-boundary pha
 - stops the service and restores explicit lab mode before diagnostic tests;
 - records cleanup separately so a failed boundary test cannot silently leave the wrong mode active.
 
-The installer also verifies the service type, manual start, LocalSystem account, OAC dependency,
-restricted service SID type, required privilege list, fixed SID, binary paths, and protected ACLs.
-Source coverage is present; its current VM result is pending.
+The installer structurally reads back the service type, manual start, LocalSystem account, OAC
+dependency, restricted service SID type, required privilege list, fixed SID, binary paths, SYSTEM
+owner/group, and exact query-status/start-only Administrators and Interactive ACL. It also verifies
+a one-day reset policy with one restart after five seconds followed by no further action, including
+non-crash failures. A targeted LocalSystem native-policy probe passed on Windows 11 24H2 build
+26100. Full installer, effective service-right, reboot-persistence, and production-boundary VM
+acceptance remain pending.
 
 ## Runtime matrix
 
@@ -93,6 +97,7 @@ Source coverage is present; its current VM result is pending.
 | Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Historical for protocol v4; current v5 run pending |
 | Standard Driver Verifier on `OAC.sys` | Historical for earlier source; current session/rundown run pending |
 | V5 service identity, device ACL, standard-user launcher, admin direct-open denial | Source present; current VM run pending |
+| SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
 | V5 per-file cleanup/close and concurrent status teardown | Source present; current VM run pending |
 | Live-target tombstone and later retirement | Source and driver-backed test present; current VM result pending |
 | Renamed, signed normal post-start driver image | Historical load-latch evidence; current rerun pending |

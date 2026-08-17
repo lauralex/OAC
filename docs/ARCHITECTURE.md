@@ -39,10 +39,12 @@ explicit disposable-VM lab use.
 
 ## Production service boundary
 
-The installer configures `OACService` as a manual own-process LocalSystem service dependent on the
-manual OAC driver. It assigns the restricted per-service SID, declares only
-`SeChangeNotifyPrivilege`, protects the installed binaries and service object, and keeps the service
-stopped until a test explicitly starts the production-control phase.
+The disposable-VM installer configures the test instance of `OACService` as a manual own-process
+LocalSystem service dependent on the manual OAC driver. It assigns the restricted per-service SID,
+declares only `SeChangeNotifyPrivilege`, sets the service owner and group to SYSTEM, explicitly
+grants Administrators and Interactive only query-status and start access, protects the installed
+binaries, and keeps the service stopped until a test explicitly starts the production-control
+phase. Production deployment tooling must reproduce and verify this policy.
 
 At startup, the service fails closed unless its primary token is session 0, restricted, and contains
 the exact reviewed service SID in both enabled groups and restricted SIDs. It opens the driver,

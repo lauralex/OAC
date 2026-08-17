@@ -24,7 +24,7 @@ trust boundaries, adversaries, and failure behavior.
 |---|---|---|
 | Driver load | Windows Code Integrity decides whether the demand-start driver image may load | Existing control; current driver remains unsigned by default |
 | Driver device | Production DACL grants SYSTEM and the exact service SID; Administrators are added only with `LabMode=1` | Implemented in source; VM ACL checks pending |
-| Service identity | Restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Implemented in source; VM identity checks pending |
+| Service identity | The test installer sets SYSTEM owner/group and explicitly grants Administrators and Interactive query-status/start only; the restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Test-installer source present; targeted Windows 11 24H2 build 26100 native-policy probe passed; full install, effective-access, and production-deployment acceptance pending |
 | Driver controller | One v5 session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Implemented in source; lifecycle VM checks pending |
 | Launcher IPC | Local, remote-rejecting, status-only named pipe with server/client identity cross-checks | Implemented in source; unauthorized-client VM checks pending |
 | Protected target | No production target binding or launch exists; v4 lab mode can bind an already-created diagnostic target | Production control planned in WP-04 |
@@ -76,9 +76,9 @@ acceptance evidence is pending.
 - Races involving process creation, service or controller exit, PID reuse, cleanup/close, telemetry
   flooding, malformed requests, and partial failures.
 
-An administrator capable of obtaining SYSTEM, replacing trusted binaries, changing protected
-service configuration, or loading arbitrary kernel code is only partially observable. The service
-SID and per-file session raise the control boundary but do not make a compromised local
+An administrator capable of obtaining SYSTEM, replacing trusted binaries, taking ownership of or
+changing the service configuration, or loading arbitrary kernel code is only partially observable.
+The service SID and per-file session raise the control boundary but do not make a compromised local
 administrator, kernel, firmware, or hypervisor trustworthy.
 
 ## Security invariants implemented in source
@@ -92,6 +92,9 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   correlation, reserved-field checks, flag masks, and bounded payload validation.
 - Production device and claim authorization require the exact restricted service identity; direct
   administrator control is lab-only.
+- The disposable-VM installer sets the service owner and group to SYSTEM; its exact DACL gives
+  SYSTEM full control and explicitly grants Administrators and Interactive only query-status and
+  start rights. Production deployment tooling must reproduce and verify this policy.
 - Each file selects one protocol authority path; v4 and v5 cannot be combined to bypass state or
   identity checks.
 - File cleanup drains in-flight requests, revokes authority, and preserves a live-target tombstone.
