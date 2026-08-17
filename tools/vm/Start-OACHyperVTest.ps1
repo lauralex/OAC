@@ -1251,10 +1251,11 @@ function Copy-GuestEvidence(
 
     $session = $null
     try {
-        $options = New-PSSessionOption -OpenTimeout 15000 `
-            -OperationTimeout 300000 -IdleTimeout 300000
-        $session = New-PSSession -VMName $VMName -Credential $script:GuestCredential `
-            -SessionOption $options -ErrorAction Stop
+        # PowerShell Direct's VMName parameter set does not accept
+        # SessionOption. Its VM transport supplies bounded connection and
+        # operation timeouts, and this session is always removed below.
+        $session = New-PSSession -VMName $VMName `
+            -Credential $script:GuestCredential -ErrorAction Stop
         $copies = [ordered]@{
             'C:\OACTest\final-status.json' = 'final-status.json'
             'C:\OACTest\results.zip' = 'oac-vm-results.zip'
