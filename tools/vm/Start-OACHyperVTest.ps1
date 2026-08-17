@@ -82,6 +82,8 @@ $summaryNames = @(
 $auxiliaryExitValues = [ordered]@{
     'baseline-bcd' = @(0)
     'baseline-sc-query' = @(0)
+    'baseline-protocol-boundary-stop' = @(0)
+    'baseline-protocol-boundary-start' = @(0)
     'baseline-driver-gate-oac-stop' = @(0)
     'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
@@ -121,6 +123,8 @@ $auxiliaryExitValues = [ordered]@{
 $baselineAuxiliaryRequired = @(
     'baseline-bcd',
     'baseline-sc-query',
+    'baseline-protocol-boundary-stop',
+    'baseline-protocol-boundary-start',
     'baseline-driver-gate-oac-stop',
     'baseline-driver-gate-oac-start',
     'production-launcher-started-service',

@@ -43,6 +43,8 @@ $baselineZeroTests = @($requiredZeroTests | Where-Object {
 $auxiliaryExitValues = [ordered]@{
     'baseline-bcd' = @(0)
     'baseline-sc-query' = @(0)
+    'baseline-protocol-boundary-stop' = @(0)
+    'baseline-protocol-boundary-start' = @(0)
     'baseline-driver-gate-oac-stop' = @(0)
     'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
@@ -82,6 +84,8 @@ $auxiliaryExitValues = [ordered]@{
 $baselineAuxiliaryRequired = @(
     'baseline-bcd',
     'baseline-sc-query',
+    'baseline-protocol-boundary-stop',
+    'baseline-protocol-boundary-start',
     'baseline-driver-gate-oac-stop',
     'baseline-driver-gate-oac-start',
     'production-launcher-started-service',
@@ -1468,6 +1472,23 @@ function Install-And-RunBaseline {
     Test-RemovalBoundary
     $protocolExit = Invoke-NativeCapture 'baseline-protocol' `
         (Join-Path $root 'OAC-Protocol-Test.exe')
+    # The protocol lifecycle test intentionally exercises target cleanup after
+    # its last finding drain. Start the independent scanner test with a fresh
+    # driver lifetime so late lifecycle telemetry cannot cross test boundaries.
+    $protocolBoundaryStop = Invoke-ConsoleCapture `
+        'baseline-protocol-boundary-stop' 'sc.exe' @('stop', 'OAC')
+    if ($protocolBoundaryStop -ne 0) {
+        throw "Could not end the protocol-test driver lifetime; exit=$protocolBoundaryStop."
+    }
+    Wait-TestServiceState OAC `
+        ([ServiceProcess.ServiceControllerStatus]::Stopped)
+    $protocolBoundaryStart = Invoke-ConsoleCapture `
+        'baseline-protocol-boundary-start' 'sc.exe' @('start', 'OAC')
+    if ($protocolBoundaryStart -ne 0) {
+        throw "Could not start the scanner-test driver lifetime; exit=$protocolBoundaryStart."
+    }
+    Wait-TestServiceState OAC `
+        ([ServiceProcess.ServiceControllerStatus]::Running)
     $preflightExit = Invoke-NativeCapture 'baseline-preflight' `
         (Join-Path $root 'package\OAC-Client.exe') @(
             '--preflight', '--mode', 'test', '--fail-on', 'medium',
