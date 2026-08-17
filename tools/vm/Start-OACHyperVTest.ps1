@@ -131,8 +131,14 @@ function Read-JsonText([string]$Text, [string]$Context) {
 }
 
 function Read-JsonFile([string]$Path, [string]$Context) {
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
         throw "$Context is missing: $Path"
+    }
+    if ($item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt 1MB) {
+        throw "$Context has an unsafe type or size: $Path"
     }
     return Read-JsonText ([IO.File]::ReadAllText($Path)) $Context
 }
@@ -330,10 +336,17 @@ function Invoke-WithVhdRoot(
                 if ($null -eq $volume) { continue }
                 $root = Get-VolumeRoot $volume
                 if (-not $root) { continue }
-                if (Test-Path -LiteralPath ([IO.Path]::Combine($root, 'OACTest')) `
-                        -PathType Container) {
-                    $candidateRoots.Add($root)
+                $campaignRoot = [IO.Path]::Combine($root, 'OACTest')
+                $campaignItem = Get-Item -LiteralPath $campaignRoot -Force `
+                    -ErrorAction SilentlyContinue
+                if ($null -eq $campaignItem -or -not $campaignItem.PSIsContainer) {
+                    continue
                 }
+                if (($campaignItem.Attributes -band
+                        [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'The mounted OACTest directory is a reparse point.'
+                }
+                $candidateRoots.Add($root)
             }
             $roots = @($candidateRoots | Sort-Object -Unique)
             if ($roots.Count -eq 1) { break }
@@ -353,16 +366,29 @@ function Invoke-WithVhdRoot(
 
 function Get-CampaignMetadata([string]$GuestRoot) {
     $root = [IO.Path]::Combine($GuestRoot, 'OACTest')
-    $requiredFiles = @(
-        'campaign-id.txt',
-        'campaign-start-utc.txt',
-        'campaign-manifest-sha256.txt',
-        'campaign-source-commit.txt',
-        'package-manifest.json')
-    foreach ($name in $requiredFiles) {
-        if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($root, $name)) `
-                -PathType Leaf)) {
+    $rootItem = Get-Item -LiteralPath $root -Force
+    if (-not $rootItem.PSIsContainer -or
+        ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The guest OACTest path is not a direct directory.'
+    }
+    $requiredFiles = @{
+        'campaign-id.txt' = 128
+        'campaign-start-utc.txt' = 128
+        'campaign-manifest-sha256.txt' = 128
+        'campaign-source-commit.txt' = 128
+        'package-manifest.json' = 1MB
+        'phase.txt' = 64
+    }
+    foreach ($name in $requiredFiles.Keys) {
+        $path = [IO.Path]::Combine($root, $name)
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
             throw "Guest campaign metadata is missing: $name"
+        }
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $item.Length -le 0 -or $item.Length -gt $requiredFiles[$name]) {
+            throw "Guest campaign metadata is unsafe: $name"
         }
     }
 
@@ -445,24 +471,64 @@ function Read-ExitCode([string]$Text, [string]$Name) {
     return $value
 }
 
+function Get-SafeTreeItems(
+    [string]$Root,
+    [int]$MaximumItems,
+    [int64]$MaximumBytes) {
+    $items = [Collections.Generic.List[object]]::new()
+    $directories = [Collections.Generic.Queue[string]]::new()
+    $directories.Enqueue($Root)
+    [int64]$totalBytes = 0
+    while ($directories.Count -ne 0) {
+        $directory = $directories.Dequeue()
+        foreach ($path in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($path)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "The baseline result tree contains a reparse point: $path"
+            }
+            $item = Get-Item -LiteralPath $path -Force
+            $items.Add($item)
+            if ($items.Count -gt $MaximumItems) {
+                throw "The baseline result tree exceeds $MaximumItems items."
+            }
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                $directories.Enqueue($item.FullName)
+                continue
+            }
+            if ($item.Length -gt 1GB) {
+                throw "A baseline result exceeds the per-file limit: $path"
+            }
+            $totalBytes += $item.Length
+            if ($totalBytes -gt $MaximumBytes) {
+                throw 'The baseline result tree exceeds its byte limit.'
+            }
+        }
+    }
+    return @($items)
+}
+
 function Assert-BaselineResults([object]$Campaign) {
     $results = [IO.Path]::Combine($Campaign.Root, 'results')
-    if (-not (Test-Path -LiteralPath $results -PathType Container)) {
+    $resultsItem = Get-Item -LiteralPath $results -Force `
+        -ErrorAction SilentlyContinue
+    if ($null -eq $resultsItem -or -not $resultsItem.PSIsContainer) {
         throw 'The baseline results directory is missing.'
     }
-    $failures = @(Get-ChildItem -LiteralPath $results -Filter '*-failure.txt' `
-        -File -Recurse)
+    if (($resultsItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The baseline results directory is a reparse point.'
+    }
+    $resultItems = @(Get-SafeTreeItems $results 4096 2GB)
+    $failures = @($resultItems | Where-Object Name -Like '*-failure.txt')
     if ($failures.Count -ne 0) {
         throw "Baseline produced failure evidence: $($failures.Name -join ', ')"
     }
     foreach ($name in @('baseline-unexpected-reboot.txt', 'verifier-unexpected-reboot.txt')) {
-        if (Test-Path -LiteralPath ([IO.Path]::Combine($results, $name))) {
+        if ($resultItems.Name -ccontains $name) {
             throw "Baseline produced unexpected restart evidence: $name"
         }
     }
 
-    $exitFiles = @(Get-ChildItem -LiteralPath $results -Filter '*.exitcode.txt' `
-        -File -Recurse)
+    $exitFiles = @($resultItems | Where-Object Name -Like '*.exitcode.txt')
     $unexpectedExitFiles = @($exitFiles | Where-Object {
             $_.DirectoryName -ine $results -or
             -not $_.Name.EndsWith(
@@ -521,13 +587,54 @@ function Read-BaselineState([string]$GuestRoot) {
     $campaign = Get-CampaignMetadata $GuestRoot
     $phase = ([IO.File]::ReadAllText(
             [IO.Path]::Combine($campaign.Root, 'phase.txt')) -replace "`0", '').Trim()
+    if ($phase -ceq 'complete') {
+        if (($null -ne $script:GuestCampaignId -and
+                $script:GuestCampaignId -cne $campaign.CampaignId) -or
+            ($script:GuestCampaignStartUtc -ne [DateTime]::MinValue -and
+                $script:GuestCampaignStartUtc -ne $campaign.CampaignStartUtc)) {
+            throw 'Powered-off terminal campaign identity changed after the live guest probe.'
+        }
+        $script:GuestCampaignId = $campaign.CampaignId
+        $script:GuestCampaignStartUtc = $campaign.CampaignStartUtc
+        $script:HostRecord['campaign_id'] = $campaign.CampaignId
+        $script:HostRecord['campaign_start_utc'] = $campaign.CampaignStartUtc.ToString('o')
+        foreach ($name in @(
+                'verifier-authorized.json',
+                'verifier-authorized.consumed.json')) {
+            $authorizationItem = Get-Item -LiteralPath `
+                ([IO.Path]::Combine($campaign.Root, $name)) -Force `
+                -ErrorAction SilentlyContinue
+            if ($null -ne $authorizationItem) {
+                throw "Terminal baseline failure unexpectedly contains $name."
+            }
+        }
+        $markerPath = [IO.Path]::Combine($campaign.Root, 'containment-ready.json')
+        $markerItem = Get-Item -LiteralPath $markerPath -Force `
+            -ErrorAction SilentlyContinue
+        if ($null -ne $markerItem) {
+            if ($markerItem.PSIsContainer -or
+                ($markerItem.Attributes -band
+                    [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+                $markerItem.Length -le 0 -or $markerItem.Length -gt 64KB) {
+                throw 'Terminal baseline containment marker is unsafe.'
+            }
+            Assert-Marker ([IO.File]::ReadAllText($markerPath)) `
+                'terminal baseline containment marker'
+        }
+        $failure = Save-OffFailureEvidence $campaign
+        $script:HostRecord['failure_evidence_directory'] = $failure.Destination
+        $script:HostRecord['failure_results_zip_sha256'] = $failure.ArchiveHash
+        throw "Guest published terminal baseline failure: $($failure.Message)"
+    }
     if ($phase -cne 'baseline-complete') {
         throw "Guest phase is $phase; expected baseline-complete."
     }
     foreach ($name in @(
             'verifier-authorized.json', 'containment-ready.json',
             'final-status.json', 'results.zip')) {
-        if (Test-Path -LiteralPath ([IO.Path]::Combine($campaign.Root, $name))) {
+        $item = Get-Item -LiteralPath ([IO.Path]::Combine($campaign.Root, $name)) `
+            -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item) {
             throw "The safe baseline unexpectedly contains $name."
         }
     }
@@ -551,14 +658,17 @@ function Assert-SafeCheckpointRoot([string]$GuestRoot) {
     if ($phase -cne 'baseline-complete') {
         throw 'The checkpoint is not at baseline-complete.'
     }
-    if (Test-Path -LiteralPath `
-            ([IO.Path]::Combine($campaign.Root, 'verifier-authorized.json'))) {
+    $authorization = Get-Item -LiteralPath `
+        ([IO.Path]::Combine($campaign.Root, 'verifier-authorized.json')) `
+        -Force -ErrorAction SilentlyContinue
+    if ($null -ne $authorization) {
         throw 'The checkpoint contains a Verifier authorization marker.'
     }
 }
 
 function Write-NewUtf8File([string]$Path, [string]$Text) {
-    if ([IO.File]::Exists($Path)) { throw "Refusing to replace existing file: $Path" }
+    $existing = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -ne $existing) { throw "Refusing to replace existing file: $Path" }
     $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
     $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
     $stream = $null
@@ -607,7 +717,10 @@ function Assert-ActiveAuthorization([string]$GuestRoot) {
         throw 'The active child campaign identity changed.'
     }
     $path = [IO.Path]::Combine($campaign.Root, 'verifier-authorized.json')
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item -or $item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -le 0 -or $item.Length -gt 64KB) {
         throw 'The active child has no Verifier authorization marker.'
     }
     Assert-Marker ([IO.File]::ReadAllText($path)) 'Verifier authorization marker'
@@ -696,9 +809,15 @@ function Wait-ForBaselineOff(
                     if ($null -eq $status) {
                         throw 'Guest completed before the baseline snapshot without a final status.'
                     }
+                    if ([bool]$status.overall_pass) {
+                        throw 'Guest reported success before the safe baseline snapshot boundary.'
+                    }
                     $message = Get-LiveFailureMessage $probe $status `
                         'baseline did not reach the safe snapshot boundary'
-                    throw "Guest published terminal baseline failure: $message"
+                    Write-HostLog `
+                        "Guest published terminal baseline failure; preserving powered-off evidence: $message"
+                    Stop-TestVM $false
+                    return
                 }
             }
         }
@@ -847,6 +966,14 @@ function Read-LiveStatus([object]$Probe, [string]$Purpose) {
     return $status
 }
 
+function Get-SafeFailureMessage([string]$Text, [string]$Fallback) {
+    $message = (($Text -replace '[\x00-\x1F\x7F]+', ' ') `
+        -replace '\s+', ' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($message)) { $message = $Fallback }
+    if ($message.Length -gt 512) { $message = $message.Substring(0, 512) }
+    return $message
+}
+
 function Get-LiveFailureMessage(
     [object]$Probe,
     [object]$Status,
@@ -862,9 +989,7 @@ function Get-LiveFailureMessage(
     } else {
         $Fallback
     }
-    $message = ($failureText -replace '[\r\n]+', ' ').Trim()
-    if ($message.Length -gt 512) { $message = $message.Substring(0, 512) }
-    return $message
+    return Get-SafeFailureMessage $failureText $Fallback
 }
 
 function Wait-ForStableResults([TimeSpan]$Timeout) {
@@ -1025,6 +1150,266 @@ function Convert-ZipText([byte[]]$Bytes) {
         $text = $text.Substring(1)
     }
     return $text
+}
+
+function Clear-ReadOnlyFile([string]$Path) {
+    $attributes = [IO.File]::GetAttributes($Path)
+    if (($attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+        [IO.File]::SetAttributes(
+            $Path,
+            $attributes -band (-bnot [IO.FileAttributes]::ReadOnly))
+    }
+}
+
+function Write-CleanupLog([string]$Message) {
+    try {
+        Write-HostLog $Message
+    } catch {
+        try { [Console]::Error.WriteLine($Message) } catch { }
+    }
+}
+
+function Test-ZipCrc([string]$ArchivePath, [string]$Context) {
+    $errorPath = Join-Path $resultPath `
+        ".zip-crc-$([Guid]::NewGuid().ToString('N')).txt"
+    try {
+        $savedErrorPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell surfaces native stderr as an ErrorRecord when
+            # Stop is active, before the exit code can be checked.
+            $ErrorActionPreference = 'Continue'
+            & tar.exe -xOf $ArchivePath 1>$null 2>$errorPath
+            $exitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $savedErrorPreference
+        }
+        if ($exitCode -ne 0) {
+            $detail = if (Test-Path -LiteralPath $errorPath -PathType Leaf) {
+                $item = Get-Item -LiteralPath $errorPath -Force
+                if ($item.Length -gt 64KB) {
+                    'diagnostic output exceeded 64 KiB'
+                } else {
+                    Get-SafeFailureMessage ([IO.File]::ReadAllText($errorPath)) `
+                        'no diagnostic output'
+                }
+            } else {
+                'no diagnostic output'
+            }
+            throw "$Context CRC validation failed with exit code ${exitCode}: $detail"
+        }
+    } finally {
+        try {
+            if ([IO.File]::Exists($errorPath)) {
+                Clear-ReadOnlyFile $errorPath
+                [IO.File]::Delete($errorPath)
+            }
+        } catch {
+            $cleanupMessage = Get-SafeFailureMessage $_.Exception.Message `
+                'unknown cleanup error'
+            Write-CleanupLog "Could not remove ZIP diagnostic output: $cleanupMessage"
+        }
+    }
+}
+
+function Save-OffFailureEvidence([object]$Campaign) {
+    $statusPath = [IO.Path]::Combine($Campaign.Root, 'final-status.json')
+    $archivePath = [IO.Path]::Combine($Campaign.Root, 'results.zip')
+    $rootItem = Get-Item -LiteralPath $Campaign.Root -Force
+    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'The powered-off campaign root is a reparse point.'
+    }
+
+    $statusItem = Get-Item -LiteralPath $statusPath -Force
+    $archiveItem = Get-Item -LiteralPath $archivePath -Force
+    if (($statusItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        ($archiveItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $statusItem.PSIsContainer -or $archiveItem.PSIsContainer -or
+        $statusItem.Length -le 0 -or $statusItem.Length -gt 1MB -or
+        $archiveItem.Length -le 0 -or $archiveItem.Length -gt 2GB) {
+        throw 'Powered-off failure evidence has an unsafe type or size.'
+    }
+
+    $statusBytes = [IO.File]::ReadAllBytes($statusPath)
+    $status = Read-JsonText (Convert-ZipText $statusBytes) `
+        'powered-off final status'
+    Assert-BoundIdentity $status 'powered-off final status' $Campaign.CampaignId `
+        $Campaign.ManifestHash $Campaign.SourceCommit
+    $statusStart = ConvertTo-UtcTime `
+        (Get-RequiredValue $status 'campaign_start_utc' 'powered-off final status') `
+        'powered-off final status campaign start'
+    $completed = ConvertTo-UtcTime `
+        (Get-RequiredValue $status 'completed_utc' 'powered-off final status') `
+        'powered-off final status completion'
+    $overallPass = Get-RequiredValue $status 'overall_pass' 'powered-off final status'
+    if ($overallPass -isnot [bool] -or $overallPass -or
+        $statusStart -ne $Campaign.CampaignStartUtc -or
+        $completed -lt $Campaign.CampaignStartUtc -or
+        $completed -gt [DateTime]::UtcNow.AddMinutes(5)) {
+        throw 'Powered-off final status is not a fresh terminal failure.'
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    $archive = [IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        if ($archive.Entries.Count -eq 0 -or $archive.Entries.Count -gt 4096) {
+            throw "Failure ZIP entry count is unsafe: $($archive.Entries.Count)"
+        }
+        $entries = [Collections.Generic.Dictionary[string, object]]::new(
+            [StringComparer]::Ordinal)
+        $namesIgnoreCase = [Collections.Generic.HashSet[string]]::new(
+            [StringComparer]::OrdinalIgnoreCase)
+        $buffer = New-Object byte[] (1024 * 1024)
+        [int64]$totalBytes = 0
+        foreach ($entry in $archive.Entries) {
+            $name = [string]$entry.FullName
+            $parts = @($name.Split('/'))
+            if ([string]::IsNullOrWhiteSpace($name) -or $name.Contains('\') -or
+                $name.StartsWith('/') -or $name.Contains(':') -or
+                $parts -contains '..' -or -not $namesIgnoreCase.Add($name)) {
+                throw "Failure ZIP contains an unsafe or duplicate path: $name"
+            }
+            if ($entry.Length -gt 1GB) {
+                throw "Failure ZIP entry is unreasonably large: $name"
+            }
+            $totalBytes += $entry.Length
+            if ($totalBytes -gt 2GB) {
+                throw 'Failure ZIP expands beyond the evidence limit.'
+            }
+            $entries.Add($name, $entry)
+            if ($name.EndsWith('/')) { continue }
+            $stream = $null
+            try {
+                $stream = $entry.Open()
+                [int64]$readTotal = 0
+                do {
+                    $read = $stream.Read($buffer, 0, $buffer.Length)
+                    $readTotal += $read
+                } while ($read -ne 0)
+                if ($readTotal -ne $entry.Length) {
+                    throw "Failure ZIP entry length changed while reading: $name"
+                }
+            } finally {
+                if ($null -ne $stream) { $stream.Dispose() }
+            }
+        }
+        if (-not $entries.ContainsKey('final-status.json')) {
+            throw 'Failure ZIP has no exact final-status.json entry.'
+        }
+        $archivedStatus = Read-ZipEntryBytes $entries['final-status.json'] 1MB
+        if ([Convert]::ToBase64String($statusBytes) -cne
+            [Convert]::ToBase64String($archivedStatus)) {
+            throw 'Root and archived failure status bytes differ.'
+        }
+
+        $archivedFailureMessage = $null
+        if ($status.PSObject.Properties.Name -ccontains 'fatal_failure_files') {
+            $fatalNames = @($status.fatal_failure_files)
+            if ($fatalNames.Count -gt 32) {
+                throw 'Powered-off final status names too many fatal failure files.'
+            }
+            foreach ($fatalNameValue in $fatalNames) {
+                if ($fatalNameValue -isnot [string] -or
+                    $fatalNameValue -cnotmatch
+                        '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}-failure\.txt$' -or
+                    -not $entries.ContainsKey($fatalNameValue)) {
+                    throw 'Powered-off final status names an invalid fatal failure file.'
+                }
+            }
+            $messageName = if ($fatalNames -ccontains
+                'baseline-running-failure.txt') {
+                'baseline-running-failure.txt'
+            } elseif ($fatalNames.Count -ne 0) {
+                [string]($fatalNames | Sort-Object -CaseSensitive | Select-Object -First 1)
+            }
+            if ($null -ne $messageName) {
+                $archivedFailureMessage = Convert-ZipText (
+                    Read-ZipEntryBytes $entries[$messageName] 64KB)
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
+    Test-ZipCrc $archivePath 'Failure ZIP'
+
+    $statusHash = (Get-FileHash -LiteralPath $statusPath -Algorithm SHA256).Hash
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    $destination = Join-Path $resultPath 'failed-evidence'
+    $temporary = Join-Path $resultPath `
+        ".failed-evidence-$([Guid]::NewGuid().ToString('N')).tmp"
+    if (Test-Path -LiteralPath $destination) {
+        throw "Refusing to reuse a failure-evidence directory: $destination"
+    }
+    New-Item -ItemType Directory -Path $temporary | Out-Null
+    $temporaryStatus = Join-Path $temporary 'final-status.json'
+    $temporaryArchive = Join-Path $temporary 'oac-vm-results.zip'
+    $temporaryHash = Join-Path $temporary 'oac-vm-results.sha256'
+    $published = $false
+    try {
+        [IO.File]::Copy($statusPath, $temporaryStatus, $false)
+        Clear-ReadOnlyFile $temporaryStatus
+        [IO.File]::Copy($archivePath, $temporaryArchive, $false)
+        Clear-ReadOnlyFile $temporaryArchive
+        if ((Get-Item -LiteralPath $temporaryStatus).Length -ne $statusItem.Length -or
+            (Get-FileHash -LiteralPath $temporaryStatus -Algorithm SHA256).Hash -cne
+                $statusHash -or
+            (Get-Item -LiteralPath $temporaryArchive).Length -ne $archiveItem.Length -or
+            (Get-FileHash -LiteralPath $temporaryArchive -Algorithm SHA256).Hash -cne
+                $archiveHash) {
+            throw 'Copied powered-off evidence does not match the guest artifacts.'
+        }
+        [IO.File]::WriteAllText(
+            $temporaryHash,
+            "$archiveHash  oac-vm-results.zip`r`n",
+            [Text.Encoding]::ASCII)
+        [IO.Directory]::Move($temporary, $destination)
+        $published = $true
+    } finally {
+        if (-not $published -and [IO.Directory]::Exists($temporary)) {
+            foreach ($path in @($temporaryStatus, $temporaryArchive, $temporaryHash)) {
+                try {
+                    if ([IO.File]::Exists($path)) {
+                        Clear-ReadOnlyFile $path
+                        [IO.File]::Delete($path)
+                    }
+                } catch {
+                    $cleanupMessage = Get-SafeFailureMessage $_.Exception.Message `
+                        'unknown cleanup error'
+                    Write-CleanupLog `
+                        "Could not remove temporary failure evidence: $cleanupMessage"
+                }
+            }
+            try {
+                if (@(Get-ChildItem -LiteralPath $temporary -Force).Count -eq 0) {
+                    [IO.Directory]::Delete($temporary)
+                }
+            } catch {
+                $cleanupMessage = Get-SafeFailureMessage $_.Exception.Message `
+                    'unknown cleanup error'
+                Write-CleanupLog `
+                    "Could not remove temporary evidence directory: $cleanupMessage"
+            }
+        }
+    }
+
+    $statusMessage = if ($status.PSObject.Properties.Name -ccontains 'fatal_message') {
+        [string]$status.fatal_message
+    } else {
+        $null
+    }
+    $rawMessage = if (-not [string]::IsNullOrWhiteSpace($statusMessage)) {
+        $statusMessage
+    } elseif (-not [string]::IsNullOrWhiteSpace($archivedFailureMessage)) {
+        $archivedFailureMessage
+    } else {
+        'baseline did not reach the safe snapshot boundary'
+    }
+    $message = Get-SafeFailureMessage $rawMessage `
+        'baseline did not reach the safe snapshot boundary'
+    return [pscustomobject]@{
+        ArchiveHash = $archiveHash
+        Destination = $destination
+        Message = $message
+    }
 }
 
 function Assert-FinalStatus([object]$Status) {
@@ -1201,22 +1586,7 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
         $archive.Dispose()
     }
 
-    $tarErrorPath = Join-Path $EvidenceDirectory `
-        ".zip-crc-$([Guid]::NewGuid().ToString('N')).txt"
-    try {
-        & tar.exe -xOf $archivePath 1>$null 2>$tarErrorPath
-        $tarExit = $LASTEXITCODE
-        if ($tarExit -ne 0) {
-            $detail = if (Test-Path -LiteralPath $tarErrorPath) {
-                ([IO.File]::ReadAllText($tarErrorPath)).Trim()
-            } else { 'no diagnostic output' }
-            throw "ZIP CRC validation failed with exit code ${tarExit}: $detail"
-        }
-    } finally {
-        if (Test-Path -LiteralPath $tarErrorPath) {
-            Remove-Item -LiteralPath $tarErrorPath -Force
-        }
-    }
+    Test-ZipCrc $archivePath 'ZIP'
 
     $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
     if ($archiveHash -cne [string]$StableProbe.archive_info.sha256) {
@@ -1527,24 +1897,24 @@ try {
     $validated.Status | ConvertTo-Json -Depth 8
 } catch {
     $failure = $_
-    Write-HostLog "Campaign failed: $($failure.Exception.Message)"
+    Write-CleanupLog "Campaign failed: $($failure.Exception.Message)"
     if ($script:VmCreated) {
         try { Stop-TestVM $true } catch {
-            Write-HostLog "Containment shutdown also failed: $($_.Exception.Message)"
+            Write-CleanupLog "Containment shutdown also failed: $($_.Exception.Message)"
         }
         try {
             Get-VMNetworkAdapter -VMName $VMName -ErrorAction Stop |
                 Remove-VMNetworkAdapter -Confirm:$false
         } catch {
-            Write-HostLog "Network-adapter removal also failed: $($_.Exception.Message)"
+            Write-CleanupLog "Network-adapter removal also failed: $($_.Exception.Message)"
         }
         try { Assert-ZeroNetworkAdapters } catch {
-            Write-HostLog "Final network containment failed: $($_.Exception.Message)"
+            Write-CleanupLog "Final network containment failed: $($_.Exception.Message)"
         }
     }
     $script:HostRecord['state'] = 'failed'
     $script:HostRecord['failed_utc'] = [DateTime]::UtcNow.ToString('o')
     $script:HostRecord['failure'] = $failure.Exception.Message
     try { Save-HostRecord } catch { }
-    throw $failure
+    throw
 }

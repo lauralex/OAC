@@ -238,8 +238,8 @@ The script creates a 30-day RSA-3072 certificate named `OAC LOCAL TEST ONLY - NO
 signs the driver package and user-mode binaries, verifies their signatures, hashes both protocol
 tests, writes a manifest, and removes the exact temporary certificate from the build machine's
 trust stores. Its default output is a timestamped directory under the system temporary directory,
-outside the source tree. Copy the printed result directory to a disposable VM and run an elevated
-terminal there:
+outside the source tree. Copy the printed result directory to a disposable VM and run a 64-bit
+elevated terminal there to enable test-signing mode:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
@@ -248,11 +248,13 @@ terminal there:
   -ConfirmDisposableVm
 ```
 
-Reboot when `bcdedit` requests it, then rerun without `-EnableTestSigning` to install/start the
-driver and optionally pass `-SmokeTestPid <pid>`. Windows normally requires Secure Boot to be
-disabled before test-signing mode can be enabled; the installer deliberately refuses to automate
-that firmware change. Never use this package on a production machine, export or distribute its
-private key, or ship a binary trusted only by this local certificate. See
+Reboot when `bcdedit` requests it. The actual install and removal paths require a LocalSystem
+PowerShell process inside the disposable VM; the automated harness supplies that boundary, while a
+manual lab must use its trusted provisioning mechanism. Rerun without `-EnableTestSigning` to
+install/start the driver and optionally pass `-SmokeTestPid <pid>`. Windows normally requires Secure
+Boot to be disabled before test-signing mode can be enabled; the installer deliberately refuses to
+automate that firmware change. Never use this package on a production machine, export or distribute
+its private key, or ship a binary trusted only by this local certificate. See
 [the test-signing guide](docs/test-signing.md) for the exact containment and cleanup procedure.
 
 ## IDALib profiles and kernel-load research

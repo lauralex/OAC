@@ -173,13 +173,18 @@ if ($ValidateOnly) {
 if (-not $ConfirmDisposableVm) {
     throw 'Refusing to continue. Pass -ConfirmDisposableVm on an isolated disposable Windows test VM.'
 }
-$principal = [Security.Principal.WindowsPrincipal]::new(
-    [Security.Principal.WindowsIdentity]::GetCurrent())
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Run this installer from an elevated PowerShell session inside the disposable VM.'
 }
 if (-not [Environment]::Is64BitProcess) {
     throw 'Run this installer from 64-bit PowerShell inside the disposable VM.'
+}
+if (-not $EnableTestSigning -and
+    -not $identity.User.IsWellKnown(
+        [Security.Principal.WellKnownSidType]::LocalSystemSid)) {
+    throw 'Driver installation and removal must run as LocalSystem in the disposable VM.'
 }
 
 function Add-TestCertificateToMachineStore([string]$StoreName) {
@@ -271,10 +276,13 @@ function Assert-ProtectedInstallAcl([string]$Path) {
         $true,
         $false,
         [Security.Principal.SecurityIdentifier]))
+    $readAndExecute = [int](
+        [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+        [Security.AccessControl.FileSystemRights]::Synchronize)
     $expectedRights = @{
         'S-1-5-18' = [int][Security.AccessControl.FileSystemRights]::FullControl
-        'S-1-5-32-544' = [int][Security.AccessControl.FileSystemRights]::ReadAndExecute
-        'S-1-5-32-545' = [int][Security.AccessControl.FileSystemRights]::ReadAndExecute
+        'S-1-5-32-544' = $readAndExecute
+        'S-1-5-32-545' = $readAndExecute
     }
     $expectedInheritance = [int](
         [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
@@ -325,10 +333,13 @@ function Assert-ProtectedFileAcl([string]$Path) {
         $true,
         $false,
         [Security.Principal.SecurityIdentifier]))
+    $readAndExecute = [int](
+        [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+        [Security.AccessControl.FileSystemRights]::Synchronize)
     $expectedRights = @{
         'S-1-5-18' = [int][Security.AccessControl.FileSystemRights]::FullControl
-        'S-1-5-32-544' = [int][Security.AccessControl.FileSystemRights]::ReadAndExecute
-        'S-1-5-32-545' = [int][Security.AccessControl.FileSystemRights]::ReadAndExecute
+        'S-1-5-32-544' = $readAndExecute
+        'S-1-5-32-545' = $readAndExecute
     }
     if (-not $acl.AreAccessRulesProtected -or $owner -ne 'S-1-5-18' -or
         $rules.Count -ne $expectedRights.Count) {
@@ -484,6 +495,18 @@ function Assert-SignedFileIdentity(
             [Management.Automation.SignatureStatus]::HashMismatch,
             [Management.Automation.SignatureStatus]::NotSigned)) {
         throw "An installed OAC file does not match the signed package: $InstalledPath"
+    }
+}
+
+function Clear-ReadOnlyFile([string]$Path) {
+    $attributes = [IO.File]::GetAttributes($Path)
+    if (($attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+        $attributes = $attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+        [IO.File]::SetAttributes($Path, $attributes)
+    }
+    if (([IO.File]::GetAttributes($Path) -band
+            [IO.FileAttributes]::ReadOnly) -ne 0) {
+        throw "Could not clear the read-only attribute: $Path"
     }
 }
 
@@ -728,11 +751,6 @@ if ($Remove -and (-not $serviceKeyExists -or -not $installDirectoryExists)) {
 $verifiedDriverPackage = Get-VerifiedDriverPackage -Required:$Remove
 
 if ($Remove) {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $identity.User.IsWellKnown(
-            [Security.Principal.WellKnownSidType]::LocalSystemSid)) {
-        throw '-Remove must run as LocalSystem in the disposable VM.'
-    }
     Assert-TestCertificateStores
 
     Stop-ServiceBounded 'OACService'
@@ -760,6 +778,7 @@ if ($Remove) {
 
     foreach ($installedName in $expectedInstalledFiles.Keys) {
         $installedPath = Join-Path $installDirectory $installedName
+        Clear-ReadOnlyFile $installedPath
         [IO.File]::Delete($installedPath)
     }
     if (@(Get-ChildItem -LiteralPath $installDirectory -Force).Count -ne 0) {
@@ -872,6 +891,7 @@ try {
             Copy-Item -LiteralPath $sourcePath -Destination $destinationPath
             $copiedFiles.Add($destinationPath)
         }
+        Clear-ReadOnlyFile $destinationPath
         $installedSignature = Get-AuthenticodeSignature -FilePath $destinationPath
         if ($installedSignature.Status -ne
                 [Management.Automation.SignatureStatus]::Valid -or
@@ -922,16 +942,41 @@ try {
     & sc.exe qsidtype OACService
     & sc.exe qprivs OACService
 } catch {
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
     if ($createdService) {
-        & sc.exe stop OACService 2>&1 | Out-Null
-        & sc.exe delete OACService 2>&1 | Out-Null
+        try {
+            & sc.exe stop OACService 2>&1 | Out-Null
+            & sc.exe delete OACService 2>&1 | Out-Null
+            Wait-ServiceRemoved 'OACService' $serviceKey
+        } catch {
+            $cleanupErrors.Add($_.Exception.Message)
+        }
     }
     foreach ($copiedFile in $copiedFiles) {
-        if ([IO.File]::Exists($copiedFile)) { [IO.File]::Delete($copiedFile) }
+        try {
+            if ([IO.File]::Exists($copiedFile)) {
+                Clear-ReadOnlyFile $copiedFile
+                [IO.File]::Delete($copiedFile)
+            }
+        } catch {
+            $cleanupErrors.Add($_.Exception.Message)
+        }
     }
-    if ($createdDirectory -and [IO.Directory]::Exists($installDirectory) -and
-        @(Get-ChildItem -LiteralPath $installDirectory -Force).Count -eq 0) {
-        [IO.Directory]::Delete($installDirectory)
+    try {
+        if ($createdDirectory -and [IO.Directory]::Exists($installDirectory) -and
+            @(Get-ChildItem -LiteralPath $installDirectory -Force).Count -eq 0) {
+            [IO.Directory]::Delete($installDirectory)
+        }
+    } catch {
+        $cleanupErrors.Add($_.Exception.Message)
+    }
+    foreach ($cleanupError in $cleanupErrors) {
+        $message = "Installation rollback also failed: $cleanupError"
+        try {
+            Write-Warning $message
+        } catch {
+            try { [Console]::Error.WriteLine($message) } catch { }
+        }
     }
     throw
 }

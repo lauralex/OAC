@@ -57,7 +57,11 @@ The package can be checked without changing trust stores, boot configuration, dr
   -ConfirmDisposableVm
 ```
 
-Reboot if requested. Then install and start the package:
+Reboot if requested. Installation and removal intentionally require a LocalSystem PowerShell
+process so the script can enforce the final SYSTEM-owned ACLs and still roll back an incomplete
+configuration. The automated VM harness supplies that boundary. For a manually provisioned
+disposable VM, enter a LocalSystem shell through the lab's trusted provisioning mechanism, then
+install and start the package:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
@@ -116,10 +120,10 @@ Keep a recovery snapshot and know how to disable Verifier from recovery before b
 
 After a campaign, use the installer's exact `-Remove` path to stop/delete `OACService`, remove its
 verified binaries, remove the staged driver package, and delete only the manifest certificate from
-LocalMachine `Root` and `TrustedPublisher`. Removal intentionally requires a LocalSystem PowerShell
-process inside the disposable VM; an ordinary elevated administrator is rejected before anything
-is changed. The automated VM harness supplies that boundary. For a manually provisioned disposable
-VM, enter a LocalSystem shell through the lab's trusted provisioning mechanism before running:
+LocalMachine `Root` and `TrustedPublisher`. Installation and removal both require a LocalSystem
+PowerShell process inside the disposable VM; an ordinary elevated administrator is rejected before
+any trust, driver, service, or file mutation. The automated VM harness supplies that boundary. From
+a manually provisioned LocalSystem shell, run:
 
 ```powershell
 .\Install-OACTestDriver.ps1 `
