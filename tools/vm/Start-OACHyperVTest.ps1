@@ -96,7 +96,8 @@ $auxiliaryExitValues = [ordered]@{
     'verifier-active-settings' = @(0, 2)
     'verifier-sc-start' = @(0, 1056)
     'verifier-sc-stop' = @(0, 1062)
-    'verifier-target-stop' = @(0)
+    'verifier-target-1-stop' = @(0)
+    'verifier-target-2-stop' = @(0)
     'verifier-query-after-stress' = @(0, 2)
     'verifier-reset' = @(0, 2)
     'final-bcd' = @(0)
@@ -132,7 +133,8 @@ $fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
     'verifier-active-settings',
     'verifier-sc-start',
     'verifier-sc-stop',
-    'verifier-target-stop',
+    'verifier-target-1-stop',
+    'verifier-target-2-stop',
     'verifier-query-after-stress',
     'verifier-reset',
     'final-bcd',

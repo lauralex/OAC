@@ -57,7 +57,8 @@ $auxiliaryExitValues = [ordered]@{
     'verifier-active-settings' = @(0, 2)
     'verifier-sc-start' = @(0, 1056)
     'verifier-sc-stop' = @(0, 1062)
-    'verifier-target-stop' = @(0)
+    'verifier-target-1-stop' = @(0)
+    'verifier-target-2-stop' = @(0)
     'verifier-query-after-stress' = @(0, 2)
     'verifier-reset' = @(0, 2)
     'final-bcd' = @(0)
@@ -93,7 +94,8 @@ $fullAuxiliaryRequired = @($baselineAuxiliaryRequired) + @(
     'verifier-active-settings',
     'verifier-sc-start',
     'verifier-sc-stop',
-    'verifier-target-stop',
+    'verifier-target-1-stop',
+    'verifier-target-2-stop',
     'verifier-query-after-stress',
     'verifier-reset',
     'final-bcd',
@@ -465,11 +467,13 @@ function Publish-FinalResult([object]$Status) {
 }
 
 function Start-ScanTarget {
-    $command = 'ping.exe -t 127.0.0.1 >nul'
-    $process = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
-        -ArgumentList @('/d', '/c', $command) -WindowStyle Hidden -PassThru
+    $process = Start-Process -FilePath "$env:SystemRoot\System32\ping.exe" `
+        -ArgumentList @('-t', '127.0.0.1') -WindowStyle Hidden -PassThru
     Start-Sleep -Seconds 2
-    if ($process.HasExited) { throw 'The disposable scan target exited prematurely.' }
+    if ($process.HasExited) {
+        $process.Dispose()
+        throw 'The disposable scan target exited prematurely.'
+    }
     Write-RunLog "Started scan target PID $($process.Id)"
     return $process
 }
@@ -478,12 +482,59 @@ function Stop-ScanTarget(
     [Diagnostics.Process]$Process,
     [string]$CaptureName) {
     if ($null -eq $Process) { throw 'The scan target handle is missing.' }
-    if ($Process.HasExited) { throw 'The disposable scan target exited before cleanup.' }
-    $exitCode = Invoke-ConsoleCapture $CaptureName `
-        'taskkill.exe' @('/PID', [string]$Process.Id, '/T', '/F') `
-        ([TimeSpan]::FromSeconds(30))
-    if ($exitCode -ne 0) {
-        throw "Could not stop scan target PID $($Process.Id); exit code $exitCode."
+    try {
+        if ($Process.HasExited) {
+            throw 'The disposable scan target exited before cleanup.'
+        }
+        $Process.Kill()
+        if (-not $Process.WaitForExit(10000)) {
+            throw "Scan target PID $($Process.Id) did not exit within the bounded wait."
+        }
+        $detail = "pid=$($Process.Id)`nprocess_exit_code=$($Process.ExitCode)`nreaped=true`n"
+        Write-DurableUtf8File (Join-Path $results "$CaptureName.txt") $detail
+        Write-DurableAsciiFile (Join-Path $results "$CaptureName.exitcode.txt") '0'
+        Write-RunLog "$CaptureName exited with 0"
+    } finally {
+        $Process.Dispose()
+    }
+}
+
+function Assert-ProtectedLaunchReport([string]$Directory, [string]$Context) {
+    $path = Join-Path $Directory 'oac-report.txt'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "$Context did not publish oac-report.txt."
+    }
+    $lines = @(Get-Content -LiteralPath $path)
+    $thresholdLines = @($lines | Where-Object {
+            $_ -clike 'failure_threshold=*'
+        })
+    if ($thresholdLines.Count -ne 1 -or
+        $thresholdLines[0] -cne 'failure_threshold=HIGH') {
+        throw "$Context has the wrong failure threshold."
+    }
+    $targetExitLines = @($lines | Where-Object {
+            $_ -match ' \[INFO\]\[monitor\] Protected target exited; exit-code='
+        })
+    if ($targetExitLines.Count -ne 1 -or
+        $targetExitLines[0] -notmatch (
+            '^seq=[1-9][0-9]* timestamp_100ns=[1-9][0-9]* ' +
+            'chain=[0-9A-F]{64} \[INFO\]\[monitor\] ' +
+            'Protected target exited; exit-code=0 pid=[1-9][0-9]*$')) {
+        throw "$Context did not record one successful protected-target exit."
+    }
+    $unexpected = @($lines | Where-Object {
+            $_ -match '^seq=[0-9]+ .+ \[(MEDIUM|HIGH|CRITICAL)\]\[' -and
+            $_ -notmatch ('^seq=[1-9][0-9]* timestamp_100ns=[1-9][0-9]* ' +
+                'chain=[0-9A-F]{64} \[MEDIUM\]\[kernel/handle\] ' +
+                'Stripped protected-object mutation access: ' +
+                'requested=0x[0-9A-F]{8} granted=0x[0-9A-F]{8} ' +
+                'origin_seq=[1-9][0-9]* ' +
+                'origin_timestamp_100ns=[1-9][0-9]* ' +
+                'pid=[1-9][0-9]* tid=[1-9][0-9]* ' +
+                'address=0x[0-9A-F]+$')
+        })
+    if ($unexpected.Count -ne 0) {
+        throw "$Context contains unexpected actionable findings: $($unexpected -join '; ')"
     }
 }
 
@@ -1293,20 +1344,27 @@ function Install-And-RunBaseline {
         (Join-Path $root 'package\OAC-Client.exe') @(
             '--launch', "$env:SystemRoot\System32\cmd.exe",
             '--launch-args', '"/d /c \"ping.exe -n 6 127.0.0.1 >nul\""',
-            '--mode', 'test', '--fail-on', 'medium', '--monitor-interval-ms', '500',
+            '--mode', 'test', '--fail-on', 'high', '--monitor-interval-ms', '500',
             '--output', (Join-Path $results 'baseline-launch-report'))
+    Assert-ProtectedLaunchReport (Join-Path $results 'baseline-launch-report') `
+        'Baseline protected launch report'
 
     $target = Start-ScanTarget
     $gateSummary = $null
     try {
-        $clientExit = Invoke-NativeCapture 'baseline-client' `
-            (Join-Path $root 'package\OAC-Client.exe') @(
-                '--pid', ([string]$target.Id), '--mode', 'test', '--fail-on', 'medium',
-                '--output', (Join-Path $results 'baseline-client-report'))
+        # Controller cleanup retains a live-target tombstone. Observe target
+        # exit before the gate probe opens a new controller session.
+        try {
+            $clientExit = Invoke-NativeCapture 'baseline-client' `
+                (Join-Path $root 'package\OAC-Client.exe') @(
+                    '--pid', ([string]$target.Id), '--mode', 'test', '--fail-on', 'medium',
+                    '--output', (Join-Path $results 'baseline-client-report'))
+        } finally {
+            Stop-ScanTarget $target 'baseline-target-stop'
+        }
         $gateSummary = Test-DriverGate
     } finally {
         Invoke-ConsoleCapture 'baseline-sc-stop' 'sc.exe' @('stop', 'OAC') | Out-Null
-        Stop-ScanTarget $target 'baseline-target-stop'
     }
 
     $baselineExitFailures = [Collections.Generic.List[string]]::new()
@@ -1467,21 +1525,29 @@ function Run-UnderDriverVerifier {
         (Join-Path $root 'package\OAC-Client.exe') @(
             '--launch', "$env:SystemRoot\System32\cmd.exe",
             '--launch-args', '"/d /c \"ping.exe -n 6 127.0.0.1 >nul\""',
-            '--mode', 'test', '--fail-on', 'medium', '--monitor-interval-ms', '500',
+            '--mode', 'test', '--fail-on', 'high', '--monitor-interval-ms', '500',
             '--output', (Join-Path $results 'verifier-launch-report')) | Out-Null
+    Assert-ProtectedLaunchReport (Join-Path $results 'verifier-launch-report') `
+        'Verifier protected launch report'
 
-    $target = Start-ScanTarget
     try {
+        # Each diagnostic controller needs a target whose prior tombstone has
+        # already retired, so use and reap one target per iteration.
         for ($iteration = 1; $iteration -le 2; ++$iteration) {
-            Invoke-NativeCapture "verifier-client-$iteration" `
-                (Join-Path $root 'package\OAC-Client.exe') @(
-                    '--pid', ([string]$target.Id), '--mode', 'test', '--fail-on', 'medium',
-                    '--output', (Join-Path $results "verifier-client-$iteration-report")) |
-                Out-Null
+            $target = Start-ScanTarget
+            try {
+                Invoke-NativeCapture "verifier-client-$iteration" `
+                    (Join-Path $root 'package\OAC-Client.exe') @(
+                        '--pid', ([string]$target.Id), '--mode', 'test',
+                        '--fail-on', 'medium',
+                        '--output', (Join-Path $results "verifier-client-$iteration-report")) |
+                    Out-Null
+            } finally {
+                Stop-ScanTarget $target "verifier-target-$iteration-stop"
+            }
         }
     } finally {
         Invoke-ConsoleCapture 'verifier-sc-stop' 'sc.exe' @('stop', 'OAC') | Out-Null
-        Stop-ScanTarget $target 'verifier-target-stop'
     }
 
     $queryExit = Invoke-ConsoleCapture 'verifier-query-after-stress' `
@@ -1802,6 +1868,8 @@ function Collect-FinalResults {
     $servicesContained = `
         ($containedServiceStates -ccontains $serviceStates.OACService) -and
         ($containedServiceStates -ccontains $serviceStates.OAC)
+    $servicesPresentAndStopped = $serviceStates.OACService -ceq 'Stopped' -and
+        $serviceStates.OAC -ceq 'Stopped'
 
     $gateService = Get-Service -Name 'OACGateProbe' -ErrorAction SilentlyContinue
     if ($null -ne $gateService) {
@@ -1903,7 +1971,8 @@ function Collect-FinalResults {
         -not $unexpectedRestart -and -not $baselineUnexpectedRestart -and `
         $fatalFiles.Count -eq 0 -and `
         @($summaryPass.Values | Where-Object { -not $_ }).Count -eq 0 -and `
-        $baselineIdentityPass -and $manifestCurrent -and $servicesContained -and `
+        $baselineIdentityPass -and $manifestCurrent -and `
+        $servicesPresentAndStopped -and `
         $gateContained -and $interactiveStagingRemoved -and $tasksContained -and `
         $containmentErrors.Count -eq 0
 
