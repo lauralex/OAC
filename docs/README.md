@@ -1,25 +1,31 @@
 # OAC documentation
 
-The root `README.md` and source describe the current implementation. Documents in this directory
-have an explicit role; a research note or plan is not runtime capability or test evidence.
+The root [README](../README.md) is the public project introduction. This directory separates
+technical references for users and evaluators from maintainer-facing engineering records.
 
-| Document | Status | Purpose |
-|---|---|---|
-| [`../README.md`](../README.md) | Current overview | Implemented capabilities, limitations, build/run instructions, and recorded validation |
-| [`BASELINE.md`](BASELINE.md) | Frozen snapshot | Starting revision, toolchain, build evidence, test boundary, and carried risks before v5 work |
-| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Current source and planned | Status-only service path, lab scanner, per-file lifetime, tombstone, and next architecture steps |
-| [`SECURITY_MODEL.md`](SECURITY_MODEL.md) | Current source and planned | Assets, current trust boundaries, evidence state, invariants, and unsupported guarantees |
-| [`PROTOCOL.md`](PROTOCOL.md) | v5 production control; v4 lab-only | Implemented messages, strict validation, session authority, event schema, and missing transports |
-| [`TEST_MATRIX.md`](TEST_MATRIX.md) | Evidence matrix | Host, protocol, service, VM, compatibility, and work-package acceptance coverage |
-| [`test-signing.md`](test-signing.md) | Current lab procedure | Create, validate, install, test, and remove a self-signed package in a disposable VM |
-| [`driver-load-review.md`](driver-load-review.md) | Exact-image research note | Safe-copy IDALib evidence about the normal Windows driver-load path and its design consequences |
-| [`hwid-review.md`](hwid-review.md) | Exact-image research note | Safe-copy driver research that informed supported, privacy-preserving identity collection |
-| [`hardening-plan.md`](hardening-plan.md) | Proposed plan | Complete target beyond the current partial foundation; a roadmap is not implementation evidence |
-| [`../PROGRESS.md`](../PROGRESS.md) | Active work record | Work-package status, exact evidence, and unresolved gates |
-| [`../DECISIONS.md`](../DECISIONS.md) | Decision log | Accepted architecture and validation decisions |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Contributor guide | Toolchain, validation expectations, and review workflow |
-| [`../SECURITY.md`](../SECURITY.md) | Security policy | Private reporting, sensitive-data handling, and scope boundaries |
+Source code and shared protocol headers remain authoritative for implemented behavior. Plans and
+research notes provide context, not proof that a capability is available or accepted.
 
-When a document and code disagree about current behavior, verify the code and shared protocol, then
-correct the documentation in the same change. Compatibility statements must identify the exact
-Windows build and security configuration that produced the evidence.
+## User and evaluator documentation
+
+| Document | Purpose |
+|---|---|
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | Component boundaries, production launch flow, session lifetime, and planned architecture |
+| [`SECURITY_MODEL.md`](SECURITY_MODEL.md) | Assets, adversaries, trust boundaries, failure behavior, and unsupported guarantees |
+| [`PROTOCOL.md`](PROTOCOL.md) | Production and diagnostic wire contracts, validation, authority, and state transitions |
+| [`CAPABILITIES.md`](CAPABILITIES.md) | Production-control scope, detailed lab scanner matrix, evidence semantics, and limitations |
+| [`driver-load-review.md`](driver-load-review.md) | Exact-image research into the normal Windows driver-load path and its design consequences |
+| [`hwid-review.md`](hwid-review.md) | Hardware-identity source review, privacy rules, and stability constraints |
+| [`../SECURITY.md`](../SECURITY.md) | Private vulnerability reporting and sensitive-data handling |
+
+## Contributor documentation
+
+| Document | Purpose |
+|---|---|
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Development environment, change-specific validation, and pull-request requirements |
+| [`test-signing.md`](test-signing.md) | Safe disposable-VM package, signing, installation, validation, and cleanup workflow |
+| [`development/README.md`](development/README.md) | Progress, test evidence, decisions, baseline, roadmap, and other maintainer records |
+
+When documentation and code disagree, verify the code and shared protocol first, then correct the
+documentation in the same change. Compatibility statements must identify the exact Windows build
+and security configuration that produced their evidence.
