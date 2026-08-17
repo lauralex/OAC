@@ -17,10 +17,10 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; hosted CI is a merge gate |
-| `Release|x64` solution build | Workflow matrix configured | Local passed with zero warnings/errors; hosted CI is a merge gate |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local Debug/Release passed `284/284`; hosted CI remains a merge gate |
-| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations; hosted CI is a merge gate |
+| `Debug|x64` solution build | Workflow matrix configured | Local and PR #8 hosted builds passed with zero warnings/errors |
+| `Release|x64` solution build | Workflow matrix configured | Local and PR #8 hosted builds passed with zero warnings/errors |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local and PR #8 hosted Debug/Release runs passed `284/284` |
+| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #8 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
 | Clang-Tidy | Required for scanner changes | Historical result only |
