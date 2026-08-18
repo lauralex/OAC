@@ -2190,7 +2190,7 @@ void RunV5CleanupRace(TestLog& log)
     CloseHandle(device);
 }
 
-void RunEvidenceTransportTests(
+ULONGLONG RunEvidenceTransportTests(
     HANDLE device,
     const OAC_V5_CLAIM_RESPONSE& claim,
     TestLog& log)
@@ -2928,6 +2928,7 @@ void RunEvidenceTransportTests(
             L"lab alert overflow preserves diagnostic authority",
             ErrorText(error));
     }
+    return alertAcknowledgedThrough;
 }
 
 void RunV5Tests(TestLog& log)
@@ -3417,7 +3418,8 @@ void RunV5Tests(TestLog& log)
 
     (VOID)RunV5HandleContenderProcess(device, claimResponse, log);
 
-    RunEvidenceTransportTests(device, claimResponse, log);
+    const ULONGLONG alertAcknowledgedThrough =
+        RunEvidenceTransportTests(device, claimResponse, log);
 
     auto revokeRequest = ValidRevokeSession(claimResponse);
     OAC_REVOKE_SESSION_RESPONSE revokeResponse{};
@@ -3499,17 +3501,22 @@ void RunV5Tests(TestLog& log)
 
     auto revokedEvidenceRequest = ValidEvidenceRead(
         claimResponse,
-        OAC_EVIDENCE_CHANNEL_ALERT);
+        OAC_EVIDENCE_CHANNEL_ALERT,
+        alertAcknowledgedThrough);
     std::vector<std::byte> revokedEvidence;
-    if (ReadEvidence(
-            device,
-            revokedEvidenceRequest,
-            revokedEvidence,
-            returned,
-            error) &&
-        (reinterpret_cast<const OAC_EVIDENCE_READ_RESPONSE*>(
-            revokedEvidence.data())->Header.Flags &
-            OAC_V5_RESPONSE_REVOKED) != 0)
+    const bool revokedRead = ReadEvidence(
+        device,
+        revokedEvidenceRequest,
+        revokedEvidence,
+        returned,
+        error);
+    const auto* revokedEvidenceResponse = revokedRead
+        ? reinterpret_cast<const OAC_EVIDENCE_READ_RESPONSE*>(
+            revokedEvidence.data())
+        : nullptr;
+    if (revokedEvidenceResponse != nullptr &&
+        (revokedEvidenceResponse->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0 &&
+        revokedEvidenceResponse->RecordCount != 0)
     {
         log.Pass(L"revoked session retains bounded evidence reads");
     }
