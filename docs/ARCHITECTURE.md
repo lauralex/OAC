@@ -1,7 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-05 accepted on the named Windows 11 build 26100 campaign; WP-06
-transport implemented in source with commit-bound VM acceptance pending
+**Status:** WP-01 through WP-06 accepted at commit
+`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -113,8 +113,8 @@ until the process-exit callback clears the target reference and retires that tom
 transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
-The service drives the serialized production transaction; implementation commit
-`a30ef78819b865786f6f4e104b7a54f48678da7f` passed the driver-backed target-live, cleanup,
+The service drives the serialized production transaction; acceptance commit
+`ae1102b35be6b09f4524cea820315530130a5e9d` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 
@@ -126,7 +126,9 @@ session-liveness, typed-evidence, and paged-snapshot support. The driver routes 
 records into a retained acknowledgement queue and lower-priority records into an independent
 overwrite queue with explicit gaps. One frozen, expiring kernel-module snapshot is read by stable
 identifier and cursor. Existing display-oriented findings continue through the separate diagnostic
-ring; production configuration and scan dispatch remain unavailable.
+ring; production configuration and scan dispatch remain unavailable. The retained-alert,
+event-gap, overflow, concurrent-publication, and snapshot-paging paths passed the named baseline and
+Driver Verifier campaign.
 
 ## Planned sequence
 

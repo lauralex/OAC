@@ -53,14 +53,16 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-006: Define provenance before adding production transport
 
-- **Status:** Accepted; schema and local transport implemented
+- **Status:** Accepted; schema and local transport VM tested
 - **Date:** 2026-08-16
 - **Decision:** The v5 event record uses stable rule/event IDs and preserves session, generation,
   kernel sequence/time, scan, occurrence, and optional service-ingestion provenance. Display text is
   optional payload and has no policy meaning.
 - **Consequence:** The transport preserves source identity instead of translating kernel findings
   into a weaker local record. Delivery does not itself establish policy enforcement or backend
-  authenticity.
+  authenticity. Its hostile input, concurrency, overflow, acknowledgement, and snapshot cases
+  passed at acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 build
+  26100 under standard Driver Verifier.
 
 ## ADR-007: Retain a live-target tombstone after cleanup
 
@@ -115,7 +117,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-011: Separate alerts, events, and snapshots by delivery semantics
 
-- **Status:** Accepted; source implemented, VM acceptance pending
+- **Status:** Accepted; source implemented and VM tested
 - **Date:** 2026-08-18
 - **Decision:** Retain high/critical records in a fixed acknowledgement queue, keep lower-priority
   operational events in an independent overwrite queue with explicit gaps, and move inventories to
@@ -126,4 +128,6 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** Inventory pressure cannot silently destroy queued alerts, readers can reconcile
   exact loss, and expensive snapshot capture remains outside callbacks. The service uses one small
   bounded alert poll/handoff path and fails closed on loss instead of introducing the later worker
-  scheduler or pretending that in-memory delivery is backend evidence.
+  scheduler or pretending that in-memory delivery is backend evidence. The complete local and
+  disposable-VM/Driver Verifier acceptance passed at commit
+  `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 build 26100.

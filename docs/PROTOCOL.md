@@ -3,8 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including the job/liveness revision.
+acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including job/liveness and typed
+evidence transport.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -213,9 +214,10 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The WP-01 through WP-05 suite passed at
-implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 Pro build
-26100. Commit-bound VM and Driver Verifier acceptance for the new transport cases is pending.
+sessions cannot invoke production launch operations. The complete WP-01 through WP-06 suite passed
+at acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 Pro build
+26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
+cases, under the baseline and standard Driver Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, and IPC validation.

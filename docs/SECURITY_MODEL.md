@@ -1,7 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-05 controls accepted on the named Windows 11 build 26100 campaign;
-WP-06 transport implemented in source with commit-bound VM acceptance pending
+**Status:** WP-01 through WP-06 controls accepted at commit
+`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -32,7 +32,7 @@ trust boundaries, adversaries, and failure behavior.
 | Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | The named campaign observed exact sequence `0,1,2` with `none`, `service exit`, then `requested shutdown` |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
-| Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Source and local hostile/concurrency tests pass; commit-bound VM and Driver Verifier acceptance pending |
+| Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Policy, manifest, backend | No production trust boundary exists | Planned |
 
@@ -123,12 +123,11 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   identity-bound, expiring, and unavailable for new work after revocation.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-05 statements combine source behavior with one exact platform acceptance run. The
-current driver-backed production, service installation, lifecycle, race, job/liveness, and standard
-Driver Verifier campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That
-result does not replace the broader supported-platform, effective-right, compatibility, or
-production-deployment matrix. WP-06 statements currently describe reviewed source and local tests;
-they do not claim a completed VM campaign yet.
+WP-01 through WP-06 statements combine source behavior with one exact platform acceptance run. The
+current driver-backed production, service installation, lifecycle, race, job/liveness, typed
+evidence, snapshot, and standard Driver Verifier campaign passed on Windows 11 build 26100 with zero
+crash events and minidumps. That result does not replace the broader supported-platform,
+effective-right, compatibility, or production-deployment matrix.
 
 ## Planned controls
 
