@@ -81,7 +81,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   kernel ticket, creates the process suspended, confirms the exact handle, and resumes it.
 - **Consequence:** The production surface has no diagnostic scans, arbitrary arguments, policy or
   manifest transfer, evidence upload, or backend protocol. One target is allowed per service session;
-  job ownership, liveness, and signed executable authorization remain separate work packages.
+  signed executable authorization remains a separate work package.
 
 ## ADR-009: Defer forced integrity on user-mode test binaries
 
@@ -94,3 +94,18 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** Local units and the isolated test package remain loadable. Production packaging
   must add and validate forced integrity together with authorized release signing; a test
   certificate is not treated as equivalent production trust.
+
+## ADR-010: Let the Windows job own target-tree lifetime
+
+- **Status:** Accepted; source implemented, VM acceptance pending
+- **Date:** 2026-08-18
+- **Decision:** Create one unnamed service-owned job with exactly
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, assign and verify the confirmed target while it is still
+  suspended, then resume it. Graceful stop explicitly revokes the driver session before closing the
+  job. Unexpected service exit relies on ordinary Windows handle teardown. Record the first driver
+  session-loss cause in a monotonic status latch. Do not add a completion port, watcher thread,
+  process registry, or polling-based lifetime authority for this milestone.
+- **Consequence:** The operating system terminates the target tree when the service loses ownership,
+  children inherit the same containment boundary, and a replacement service can observe prior
+  session loss. Completion notification, evidence transport, and authenticated backend leases remain
+  separate work packages.

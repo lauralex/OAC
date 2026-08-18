@@ -4,8 +4,10 @@
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\protocol\oac_v5.h"
 
 namespace
 {
@@ -226,6 +228,7 @@ const wchar_t* ServiceStageText(OAC_SERVICE_FAILURE_STAGE stage) noexcept
     case OAC_SERVICE_STAGE_PIPE_CREATE: return L"control-pipe creation";
     case OAC_SERVICE_STAGE_PIPE_THREAD: return L"control worker startup";
     case OAC_SERVICE_STAGE_RUNTIME: return L"control worker runtime";
+    case OAC_SERVICE_STAGE_TARGET_JOB: return L"target job initialization";
     default: return L"unknown stage";
     }
 }
@@ -248,6 +251,8 @@ const wchar_t* LaunchStageText(uint32_t stage) noexcept
         return L"target confirmation";
     case OAC_IPC_LAUNCH_STAGE_VALIDATE_STATUS:
         return L"driver status validation";
+    case OAC_IPC_LAUNCH_STAGE_ASSIGN_JOB:
+        return L"target job assignment";
     case OAC_IPC_LAUNCH_STAGE_RESUME_THREAD:
         return L"target resume";
     default:
@@ -463,7 +468,8 @@ int SendRequest(ULONG requestType)
         ? OAC_IPC_TYPE_HELLO_RESPONSE
         : OAC_IPC_TYPE_STATUS_RESPONSE;
     constexpr ULONG knownStatusFlags = OAC_IPC_STATUS_DRIVER_READY |
-        OAC_IPC_STATUS_SESSION_CLAIMED;
+        OAC_IPC_STATUS_SESSION_CLAIMED |
+        OAC_IPC_STATUS_PRIOR_SESSION_LOSS;
     if (!OacIpcHeaderMatches(
             &response.Header,
             returned,
@@ -481,7 +487,9 @@ int SendRequest(ULONG requestType)
         if (response.StatusFlags != 0 || response.ServiceProcessId != 0 ||
             response.ClientProcessId != 0 || response.ClientSessionId != 0 ||
             response.DriverProtocolVersion != 0 ||
-            response.DriverCapabilities != 0)
+            response.DriverCapabilities != 0 ||
+            response.SessionLossSequence != 0 ||
+            response.LastSessionLossReason != 0 || response.Reserved != 0)
         {
             std::wcerr << L"OACService returned an invalid rejection.\n";
             return 4;
@@ -496,7 +504,14 @@ int SendRequest(ULONG requestType)
         response.ClientProcessId != GetCurrentProcessId() ||
         response.ClientSessionId != ownSessionId ||
         response.ServiceProcessId != serverProcessId ||
-        (response.StatusFlags & OAC_IPC_STATUS_DRIVER_READY) == 0)
+        (response.StatusFlags & OAC_IPC_STATUS_DRIVER_READY) == 0 ||
+        response.Reserved != 0 ||
+        response.LastSessionLossReason >
+            OAC_REVOKE_TARGET_CONFIRMATION_FAILED ||
+        ((response.SessionLossSequence == 0) !=
+         (response.LastSessionLossReason == OAC_V5_REVOKE_NONE)) ||
+        ((response.SessionLossSequence != 0) !=
+         ((response.StatusFlags & OAC_IPC_STATUS_PRIOR_SESSION_LOSS) != 0)))
     {
         std::wcerr << L"OACService returned inconsistent client identity.\n";
         return 4;
@@ -508,7 +523,10 @@ int SendRequest(ULONG requestType)
                << L"; driver-protocol=0x" << std::hex
                << response.DriverProtocolVersion
                << L"; capabilities=0x" << response.DriverCapabilities
-               << L"; flags=0x" << response.StatusFlags << std::dec << L'\n';
+               << L"; flags=0x" << response.StatusFlags << std::dec
+               << L"; session-loss-sequence=" << response.SessionLossSequence
+               << L"; last-session-loss=" << response.LastSessionLossReason
+               << L'\n';
     return 0;
 }
 
@@ -601,13 +619,139 @@ int SendLaunchRequest(const std::wstring& executablePath)
 
     std::wcout << L"OACService launched target"
                << L"; target-pid=" << response.TargetProcessId
-               << L"; binding=confirmed; thread=resumed\n";
+               << L"; binding=confirmed; job=assigned; thread=resumed\n";
     return 0;
+}
+
+bool GetCurrentExecutablePath(std::wstring& path)
+{
+    path.assign(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(
+        nullptr,
+        path.data(),
+        static_cast<DWORD>(path.size()));
+    if (length == 0 || length >= path.size()) return false;
+    path.resize(length);
+    return true;
+}
+
+bool IsLivenessTargetExecutable()
+{
+    /* The disposable-VM harness reuses this signed, as-invoker binary under a
+     * dedicated role name so job inheritance can be tested without adding a
+     * second test executable to the package. The normal launcher name never
+     * enters this path. */
+    std::wstring path;
+    if (!GetCurrentExecutablePath(path)) return false;
+    const std::size_t separator = path.find_last_of(L"\\/");
+    const std::wstring name = separator == std::wstring::npos
+        ? path
+        : path.substr(separator + 1);
+    return _wcsicmp(name.c_str(), L"OAC-Liveness-Target.exe") == 0;
+}
+
+bool GetLivenessMarkerPath(std::wstring& path)
+{
+    const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+    if (required <= 1 || required > 32768) return false;
+    std::wstring localAppData(required, L'\0');
+    const DWORD written = GetEnvironmentVariableW(
+        L"LOCALAPPDATA",
+        localAppData.data(),
+        required);
+    if (written == 0 || written >= required) return false;
+    localAppData.resize(written);
+    path = localAppData + L"\\OAC-Liveness-Target.txt";
+    return true;
+}
+
+int RunLivenessTarget()
+{
+    std::wstring executable;
+    if (!GetCurrentExecutablePath(executable)) return 65;
+
+    std::wstring commandLine = L"\"" + executable +
+        L"\" --liveness-child";
+    std::vector<wchar_t> mutableCommandLine(
+        commandLine.begin(),
+        commandLine.end());
+    mutableCommandLine.push_back(L'\0');
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    if (!CreateProcessW(
+            executable.c_str(),
+            mutableCommandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &startup,
+            &child))
+    {
+        return 66;
+    }
+    UniqueHandle childProcess(child.hProcess);
+    UniqueHandle childThread(child.hThread);
+
+    std::wstring markerPath;
+    if (!GetLivenessMarkerPath(markerPath))
+    {
+        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
+        return 67;
+    }
+    UniqueHandle marker(CreateFileW(
+        markerPath.c_str(),
+        GENERIC_WRITE,
+        0,
+        nullptr,
+        CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr));
+    if (!marker)
+    {
+        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
+        return 68;
+    }
+
+    const std::string contents =
+        "parent_pid=" + std::to_string(GetCurrentProcessId()) + "\r\n" +
+        "child_pid=" + std::to_string(child.dwProcessId) + "\r\n";
+    DWORD written = 0;
+    const BOOL markerWritten = WriteFile(
+        marker.get(),
+        contents.data(),
+        static_cast<DWORD>(contents.size()),
+        &written,
+        nullptr);
+    marker.reset();
+    if (!markerWritten || written != static_cast<DWORD>(contents.size()))
+    {
+        (void)DeleteFileW(markerPath.c_str());
+        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
+        return 69;
+    }
+
+    return WaitForSingleObject(childProcess.get(), INFINITE) == WAIT_OBJECT_0
+        ? 0
+        : 70;
 }
 } // namespace
 
 int wmain(int argumentCount, wchar_t** arguments)
 {
+    const bool livenessTarget = IsLivenessTargetExecutable();
+    if (livenessTarget && argumentCount == 1) return RunLivenessTarget();
+    if (livenessTarget && argumentCount == 2 &&
+        std::wstring(arguments[1]) == L"--liveness-child")
+    {
+        Sleep(INFINITE);
+        return 0;
+    }
+
     ULONG type = OAC_IPC_TYPE_STATUS_REQUEST;
     if (argumentCount == 2 && std::wstring(arguments[1]) == L"--hello")
         type = OAC_IPC_TYPE_HELLO_REQUEST;

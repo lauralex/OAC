@@ -490,6 +490,20 @@ OAC_V5_STATUS_REQUEST ValidV5Status(const OAC_V5_CLAIM_RESPONSE& claim)
     return request;
 }
 
+OAC_REVOKE_SESSION_REQUEST ValidRevokeSession(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    OAC_REVOKE_SESSION_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_V5_MESSAGE_REVOKE_SESSION;
+    request.RevokeReason = OAC_V5_REVOKE_REQUESTED;
+    return request;
+}
+
 OAC_ARM_LAUNCH_REQUEST ValidArmLaunch(
     const OAC_V5_CLAIM_RESPONSE& claim)
 {
@@ -2148,8 +2162,10 @@ void RunV5Tests(TestLog& log)
     negotiateResponse = {};
     if (NegotiateV5(device, negotiateRequest, negotiateResponse, error) &&
         (negotiateResponse.Capabilities &
-            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET)) ==
-            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET) &&
+            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
+             OAC_V5_CAP_SESSION_LIVENESS)) ==
+            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
+             OAC_V5_CAP_SESSION_LIVENESS) &&
         (negotiateResponse.ProtocolFlags &
             (OAC_V5_PROTOCOL_STRICT_LENGTHS |
              OAC_V5_PROTOCOL_V4_DIAGNOSTIC)) ==
@@ -2500,6 +2516,115 @@ void RunV5Tests(TestLog& log)
     }
 
     (VOID)RunV5HandleContenderProcess(device, claimResponse, log);
+
+    auto revokeRequest = ValidRevokeSession(claimResponse);
+    OAC_REVOKE_SESSION_RESPONSE revokeResponse{};
+    auto badRevoke = revokeRequest;
+    badRevoke.RevokeReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"v5 revoke rejects caller-supplied provenance",
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &badRevoke,
+        sizeof(badRevoke),
+        &revokeResponse,
+        sizeof(revokeResponse),
+        {ERROR_INVALID_PARAMETER});
+    badRevoke = revokeRequest;
+    badRevoke.Reserved = 1;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"v5 revoke rejects reserved field",
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &badRevoke,
+        sizeof(badRevoke),
+        &revokeResponse,
+        sizeof(revokeResponse),
+        {ERROR_INVALID_PARAMETER});
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"v5 revoke rejects truncated request",
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &revokeRequest,
+        sizeof(revokeRequest) - 1,
+        &revokeResponse,
+        sizeof(revokeResponse),
+        {ERROR_INVALID_PARAMETER});
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"v5 revoke rejects short response buffer",
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &revokeRequest,
+        sizeof(revokeRequest),
+        &revokeResponse,
+        sizeof(revokeResponse) - 1,
+        {ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA});
+
+    const ULONGLONG previousLossSequence =
+        statusResponse.SessionLossSequence;
+    returned = 0;
+    error = ERROR_SUCCESS;
+    const BOOL revokeSucceeded = CallIoctl(
+        device,
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &revokeRequest,
+        sizeof(revokeRequest),
+        &revokeResponse,
+        sizeof(revokeResponse),
+        returned,
+        error);
+    if (revokeSucceeded && returned == sizeof(revokeResponse) &&
+        OacValidateRevokeSessionResponse(
+            &revokeResponse,
+            returned) == OAC_V5_VALID &&
+        OacV5ValidateCorrelation(
+            &revokeRequest.Header,
+            &revokeResponse.Header) == OAC_V5_VALID &&
+        revokeResponse.RevokeReason == OAC_V5_REVOKE_REQUESTED &&
+        revokeResponse.LastSessionLossReason == OAC_V5_REVOKE_REQUESTED &&
+        revokeResponse.SessionLossSequence == previousLossSequence + 1)
+    {
+        log.Pass(L"v5 explicit revoke records one session loss");
+    }
+    else
+    {
+        log.Fail(L"v5 explicit revoke records one session loss", ErrorText(error));
+    }
+
+    revokeRequest = ValidRevokeSession(claimResponse);
+    OAC_REVOKE_SESSION_RESPONSE repeatedRevoke{};
+    returned = 0;
+    error = ERROR_SUCCESS;
+    const BOOL repeatedSucceeded = CallIoctl(
+        device,
+        IOCTL_OAC_V5_REVOKE_SESSION,
+        &revokeRequest,
+        sizeof(revokeRequest),
+        &repeatedRevoke,
+        sizeof(repeatedRevoke),
+        returned,
+        error);
+    if (repeatedSucceeded && returned == sizeof(repeatedRevoke) &&
+        OacValidateRevokeSessionResponse(
+            &repeatedRevoke,
+            returned) == OAC_V5_VALID &&
+        repeatedRevoke.RevokeReason == revokeResponse.RevokeReason &&
+        repeatedRevoke.SessionLossSequence ==
+            revokeResponse.SessionLossSequence &&
+        repeatedRevoke.LastSessionLossReason ==
+            revokeResponse.LastSessionLossReason)
+    {
+        log.Pass(L"v5 explicit revoke is idempotent");
+    }
+    else
+    {
+        log.Fail(L"v5 explicit revoke is idempotent", ErrorText(error));
+    }
+
     const OAC_V5_CLAIM_RESPONSE oldClaim = claimResponse;
     CloseHandle(device);
 
@@ -2899,6 +3024,7 @@ int RunTests()
     RunV5Tests(log);
     return log.ExitCode();
 }
+
 } // namespace
 
 int wmain(int argc, wchar_t** argv)

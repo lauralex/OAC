@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OAC_IPC_PROTOCOL_REVISION 0x00010002u
+#define OAC_IPC_PROTOCOL_REVISION 0x00010003u
 #define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
 #define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
@@ -32,9 +32,11 @@
 
 #define OAC_IPC_STATUS_DRIVER_READY 0x00000001u
 #define OAC_IPC_STATUS_SESSION_CLAIMED 0x00000002u
+#define OAC_IPC_STATUS_PRIOR_SESSION_LOSS 0x00000004u
 
 #define OAC_IPC_LAUNCH_CONFIRMED 0x00000001u
-#define OAC_IPC_LAUNCH_RESUMED   0x00000002u
+#define OAC_IPC_LAUNCH_JOB_ASSIGNED 0x00000002u
+#define OAC_IPC_LAUNCH_RESUMED   0x00000004u
 
 typedef enum OAC_IPC_LAUNCH_STAGE_TAG
 {
@@ -46,7 +48,8 @@ typedef enum OAC_IPC_LAUNCH_STAGE_TAG
     OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS = 5,
     OAC_IPC_LAUNCH_STAGE_CONFIRM_TARGET = 6,
     OAC_IPC_LAUNCH_STAGE_VALIDATE_STATUS = 7,
-    OAC_IPC_LAUNCH_STAGE_RESUME_THREAD = 8
+    OAC_IPC_LAUNCH_STAGE_ASSIGN_JOB = 8,
+    OAC_IPC_LAUNCH_STAGE_RESUME_THREAD = 9
 } OAC_IPC_LAUNCH_STAGE;
 
 typedef enum OAC_IPC_LAUNCH_DETAIL_TAG
@@ -90,7 +93,8 @@ typedef enum OAC_SERVICE_FAILURE_STAGE_TAG
     OAC_SERVICE_STAGE_DRIVER_STATUS = 6,
     OAC_SERVICE_STAGE_PIPE_CREATE = 7,
     OAC_SERVICE_STAGE_PIPE_THREAD = 8,
-    OAC_SERVICE_STAGE_RUNTIME = 9
+    OAC_SERVICE_STAGE_RUNTIME = 9,
+    OAC_SERVICE_STAGE_TARGET_JOB = 10
 } OAC_SERVICE_FAILURE_STAGE;
 
 static inline uint32_t OacEncodeServiceFailure(
@@ -98,7 +102,7 @@ static inline uint32_t OacEncodeServiceFailure(
     uint32_t win32Error)
 {
     if (stage == OAC_SERVICE_STAGE_NONE ||
-        stage > OAC_SERVICE_STAGE_RUNTIME ||
+        stage > OAC_SERVICE_STAGE_TARGET_JOB ||
         win32Error == 0 || win32Error > OAC_SERVICE_FAILURE_ERROR_MASK)
     {
         return 0;
@@ -121,7 +125,7 @@ static inline int OacDecodeServiceFailure(
     if (stage == 0 || win32Error == 0 || stage == win32Error ||
         (value & OAC_SERVICE_FAILURE_MAGIC_MASK) != OAC_SERVICE_FAILURE_MAGIC ||
         decodedStage == OAC_SERVICE_STAGE_NONE ||
-        decodedStage > OAC_SERVICE_STAGE_RUNTIME || decodedError == 0)
+        decodedStage > OAC_SERVICE_STAGE_TARGET_JOB || decodedError == 0)
     {
         return 0;
     }
@@ -155,6 +159,9 @@ typedef struct OAC_IPC_RESPONSE_TAG
     uint32_t ClientSessionId;
     uint32_t DriverProtocolVersion;
     uint64_t DriverCapabilities;
+    uint64_t SessionLossSequence;
+    uint32_t LastSessionLossReason;
+    uint32_t Reserved;
 } OAC_IPC_RESPONSE;
 
 typedef struct OAC_IPC_LAUNCH_REQUEST_TAG
@@ -283,7 +290,8 @@ static inline int OacIpcValidateLaunchResponse(
     uint64_t requestId)
 {
     const uint32_t successFlags =
-        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_RESUMED;
+        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_JOB_ASSIGNED |
+        OAC_IPC_LAUNCH_RESUMED;
 
     if (response == 0 || !OacIpcHeaderMatches(
             &response->Header,
@@ -326,8 +334,17 @@ OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_HEADER) == 24,
     "OAC_IPC_HEADER layout changed");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_REQUEST) == 32,
     "OAC_IPC_REQUEST layout changed");
-OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 56,
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 72,
     "OAC_IPC_RESPONSE layout changed");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_RESPONSE, SessionLossSequence) == 56,
+    "OAC_IPC_RESPONSE liveness sequence moved");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_RESPONSE, LastSessionLossReason) == 64,
+    "OAC_IPC_RESPONSE liveness reason moved");
+OAC_IPC_STATIC_ASSERT(
+    offsetof(OAC_IPC_RESPONSE, Reserved) == 68,
+    "OAC_IPC_RESPONSE reserved field moved");
 OAC_IPC_STATIC_ASSERT(sizeof(uint16_t) == 2,
     "OAC IPC paths require 16-bit code units");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,
@@ -354,7 +371,7 @@ OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0 &&
     (OAC_SERVICE_FAILURE_STAGE_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0,
     "service failure fields overlap");
-OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_RUNTIME <= 0xFu,
+OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_TARGET_JOB <= 0xFu,
     "service failure stage exceeds its field");
 
 #undef OAC_IPC_STATIC_ASSERT

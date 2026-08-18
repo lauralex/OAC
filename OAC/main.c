@@ -112,7 +112,8 @@ NTSTATUS OacClose(
 
 static ULONG OacV5Capabilities(VOID)
 {
-    return OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET;
+    return OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
+        OAC_V5_CAP_SESSION_LIVENESS;
 }
 
 static VOID OacInitializeV5Response(
@@ -577,6 +578,64 @@ NTSTATUS OacDeviceControl(
         }
         break;
 
+    case IOCTL_OAC_V5_REVOKE_SESSION:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateRevokeSessionRequest(
+                (const OAC_REVOKE_SESSION_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_REVOKE_SESSION_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            const OAC_REVOKE_SESSION_REQUEST request =
+                *(const OAC_REVOKE_SESSION_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_REVOKE_SESSION_RESPONSE response;
+            PEPROCESS revokedOwner = NULL;
+
+            status = OacSessionAcquireV5Status(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionRevoke(
+                &lease,
+                request.RevokeReason,
+                &snapshot,
+                &revokedOwner);
+            if (!NT_SUCCESS(status)) break;
+            if (revokedOwner != NULL)
+            {
+                OacProtectionRevokeController(revokedOwner);
+                ObDereferenceObject(revokedOwner);
+            }
+
+            response = (POAC_REVOKE_SESSION_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_V5_MESSAGE_REVOKE_SESSION,
+                &snapshot);
+            response->Header.Flags = OAC_V5_RESPONSE_REVOKED;
+            response->State = snapshot.State;
+            response->RevokeReason = snapshot.RevokeReason;
+            response->SessionLossSequence = snapshot.SessionLossSequence;
+            response->LastSessionLossReason =
+                snapshot.LastSessionLossReason;
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
     case IOCTL_OAC_V5_GET_STATUS:
         if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
             OacV5ValidateStatusRequest(
@@ -636,6 +695,9 @@ NTSTATUS OacDeviceControl(
             response->EventsDropped = OacTelemetryDropped();
             response->PostStartLoads = OacPostStartLoads();
             response->DriverGateTrips = OacDriverGateTrips();
+            response->SessionLossSequence = snapshot.SessionLossSequence;
+            response->LastSessionLossReason =
+                snapshot.LastSessionLossReason;
             bytesWritten = sizeof(*response);
             status = STATUS_SUCCESS;
         }

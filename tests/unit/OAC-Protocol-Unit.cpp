@@ -13,6 +13,7 @@
 
 #include "../../shared/oac_protocol.h"
 #include "../../shared/oac_ipc.h"
+#include "../../shared/oac_lease.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 
@@ -36,7 +37,10 @@ static_assert(sizeof(OAC_CANCEL_LAUNCH_REQUEST) == 64);
 static_assert(sizeof(OAC_CANCEL_LAUNCH_RESPONSE) == 64);
 static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72);
 static_assert(sizeof(OAC_CONFIRM_TARGET_RESPONSE) == 72);
+static_assert(sizeof(OAC_REVOKE_SESSION_REQUEST) == 56);
+static_assert(sizeof(OAC_REVOKE_SESSION_RESPONSE) == 80);
 static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
+static_assert(sizeof(OAC_IPC_RESPONSE) == 72);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
 static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
@@ -154,6 +158,17 @@ OAC_V5_STATUS_REQUEST ValidStatusRequest()
     return request;
 }
 
+OAC_REVOKE_SESSION_REQUEST ValidRevokeRequest()
+{
+    OAC_REVOKE_SESSION_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_REVOKE_SESSION);
+    request.RevokeReason = OAC_V5_REVOKE_REQUESTED;
+    return request;
+}
+
 OAC_V5_NEGOTIATE_RESPONSE ValidNegotiateResponse()
 {
     OAC_V5_NEGOTIATE_RESPONSE response{};
@@ -199,6 +214,21 @@ OAC_V5_STATUS_RESPONSE ValidStatusResponse()
     response.ConfigurationFlags = OAC_V5_CONFIG_DRIVER_GATE;
     response.RevokeReason = OAC_V5_REVOKE_NONE;
     response.ServiceProcessId = 100;
+    return response;
+}
+
+OAC_REVOKE_SESSION_RESPONSE ValidRevokeResponse()
+{
+    OAC_REVOKE_SESSION_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_REVOKE_SESSION);
+    response.Header.Flags = OAC_V5_RESPONSE_REVOKED;
+    response.State = OAC_V5_SESSION_REVOKED;
+    response.RevokeReason = OAC_V5_REVOKE_REQUESTED;
+    response.SessionLossSequence = 1;
+    response.LastSessionLossReason = OAC_V5_REVOKE_REQUESTED;
     return response;
 }
 
@@ -414,7 +444,7 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050002UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050003UL);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -463,7 +493,7 @@ void TestServiceFailures(TestLog& log)
     log.Expect("service failure zero stage", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_NONE, ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure unknown stage", OacEncodeServiceFailure(
-        OAC_SERVICE_STAGE_RUNTIME + 1, ERROR_ACCESS_DENIED) == 0);
+        OAC_SERVICE_STAGE_TARGET_JOB + 1, ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure zero error", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_IDENTITY, ERROR_SUCCESS) == 0);
     log.Expect("service failure oversized error", OacEncodeServiceFailure(
@@ -482,7 +512,7 @@ void TestServiceFailures(TestLog& log)
         OAC_SERVICE_FAILURE_ERROR_MASK
     };
     for (uint32_t expectedStage = OAC_SERVICE_STAGE_BOOTSTRAP;
-         expectedStage <= OAC_SERVICE_STAGE_RUNTIME;
+         expectedStage <= OAC_SERVICE_STAGE_TARGET_JOB;
          ++expectedStage)
     {
         for (const uint32_t expectedError : errors)
@@ -507,7 +537,7 @@ void TestServiceFailures(TestLog& log)
             (OAC_SERVICE_STAGE_DRIVER_OPEN <<
                 OAC_SERVICE_FAILURE_STAGE_SHIFT),
         OAC_SERVICE_FAILURE_MAGIC |
-            (10u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
+            (11u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
             ERROR_ACCESS_DENIED,
         OAC_SERVICE_FAILURE_MAGIC |
             (15u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
@@ -635,7 +665,8 @@ void TestServiceLaunchMessages(TestLog& log)
     response.Header.Type = OAC_IPC_TYPE_LAUNCH_RESPONSE;
     response.Header.RequestId = request.Header.RequestId;
     response.LaunchFlags =
-        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_RESUMED;
+        OAC_IPC_LAUNCH_CONFIRMED | OAC_IPC_LAUNCH_JOB_ASSIGNED |
+        OAC_IPC_LAUNCH_RESUMED;
     response.ServiceProcessId = 10;
     response.ClientProcessId = 11;
     response.ClientSessionId = 1;
@@ -644,7 +675,8 @@ void TestServiceLaunchMessages(TestLog& log)
         &response, sizeof(response), request.Header.RequestId) != 0);
 
     auto badResponse = response;
-    badResponse.LaunchFlags = OAC_IPC_LAUNCH_CONFIRMED;
+    badResponse.LaunchFlags = OAC_IPC_LAUNCH_CONFIRMED |
+        OAC_IPC_LAUNCH_RESUMED;
     log.Expect("service launch incomplete response", OacIpcValidateLaunchResponse(
         &badResponse, sizeof(badResponse), request.Header.RequestId) == 0);
     badResponse = response;
@@ -807,6 +839,57 @@ void TestClaimAndStatusRequests(TestLog& log)
         &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
     log.Expect("status oversized", OacV5ValidateStatusRequest(
         &status, sizeof(status) + 8) == OAC_V5_INVALID_LENGTH);
+}
+
+void TestRevokeMessages(TestLog& log)
+{
+    auto request = ValidRevokeRequest();
+    log.Expect("valid explicit revoke request", OacValidateRevokeSessionRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    log.Expect("revoke request exact size", OacValidateRevokeSessionRequest(
+        &request, sizeof(request) - 1) == OAC_V5_INVALID_LENGTH);
+    request.Header.MessageType = OAC_V5_MESSAGE_GET_STATUS;
+    log.Expect("revoke request message type", OacValidateRevokeSessionRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    request = ValidRevokeRequest();
+    request.RevokeReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    log.Expect("revoke request only accepts caller revocation",
+        OacValidateRevokeSessionRequest(
+            &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidRevokeRequest();
+    request.Reserved = 1;
+    log.Expect("revoke request reserved field", OacValidateRevokeSessionRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_RESERVED);
+
+    auto response = ValidRevokeResponse();
+    log.Expect("valid explicit revoke response", OacValidateRevokeSessionResponse(
+        &response, sizeof(response)) == OAC_V5_VALID);
+    log.Expect("revoke response exact size", OacValidateRevokeSessionResponse(
+        &response, sizeof(response) + 1) == OAC_V5_INVALID_LENGTH);
+    response.Header.Flags = 0;
+    log.Expect("revoke response requires terminal flag",
+        OacValidateRevokeSessionResponse(
+            &response, sizeof(response)) == OAC_V5_INVALID_VALUE);
+    response = ValidRevokeResponse();
+    response.State = OAC_V5_SESSION_MONITORING;
+    log.Expect("revoke response requires terminal state",
+        OacValidateRevokeSessionResponse(
+            &response, sizeof(response)) == OAC_V5_INVALID_VALUE);
+    response = ValidRevokeResponse();
+    response.RevokeReason = OAC_V5_REVOKE_NONE;
+    log.Expect("revoke response requires provenance",
+        OacValidateRevokeSessionResponse(
+            &response, sizeof(response)) == OAC_V5_INVALID_VALUE);
+    response = ValidRevokeResponse();
+    response.SessionLossSequence = 0;
+    log.Expect("revoke response liveness pair",
+        OacValidateRevokeSessionResponse(
+            &response, sizeof(response)) == OAC_V5_INVALID_VALUE);
+    response = ValidRevokeResponse();
+    response.Reserved = 1;
+    log.Expect("revoke response reserved field",
+        OacValidateRevokeSessionResponse(
+            &response, sizeof(response)) == OAC_V5_INVALID_RESERVED);
 }
 
 void TestLaunchRequests(TestLog& log)
@@ -1219,6 +1302,26 @@ void TestResponses(TestLog& log)
     log.Expect("terminal tombstone may retain target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_VALID);
+    status = ValidStatusResponse();
+    status.SessionLossSequence = 1;
+    status.LastSessionLossReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    log.Expect("status accepts prior session loss",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
+    status.LastSessionLossReason = OAC_V5_REVOKE_NONE;
+    log.Expect("status rejects sequence without loss reason",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.LastSessionLossReason = OAC_V5_REVOKE_SERVICE_EXIT;
+    log.Expect("status rejects loss reason without sequence",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.Reserved = 1;
+    log.Expect("status rejects reserved liveness field",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_RESERVED);
 }
 
 void TestCorrelationAndIds(TestLog& log)
@@ -1446,6 +1549,41 @@ void TestLaunchDecision(TestLog& log)
             OAC_REVOKE_TARGET_CONFIRMATION_FAILED + 1) == FALSE);
 }
 
+void TestLeasePolicy(TestLog& log)
+{
+    constexpr uint64_t validUntil = 100;
+    constexpr uint64_t graceUntil = 120;
+
+    log.Expect("lease rejects missing deadline",
+        OacEvaluateLease(0, 0, 0, 0) == OAC_LEASE_INVALID);
+    log.Expect("lease rejects reversed grace period",
+        OacEvaluateLease(0, graceUntil, validUntil, 0) == OAC_LEASE_INVALID);
+    log.Expect("lease is healthy before its deadline",
+        OacEvaluateLease(99, validUntil, graceUntil, 0) == OAC_LEASE_HEALTHY);
+    log.Expect("lease enters grace at its deadline",
+        OacEvaluateLease(100, validUntil, graceUntil, 0) == OAC_LEASE_DEGRADED);
+    log.Expect("lease remains degraded inside grace",
+        OacEvaluateLease(119, validUntil, graceUntil, 0) == OAC_LEASE_DEGRADED);
+    log.Expect("lease expires at the grace boundary",
+        OacEvaluateLease(120, validUntil, graceUntil, 0) == OAC_LEASE_EXPIRED);
+    log.Expect("explicit lease revocation wins",
+        OacEvaluateLease(1, validUntil, graceUntil, 1) == OAC_LEASE_REVOKED);
+    log.Expect("revocation does not depend on a deadline",
+        OacEvaluateLease(1, 0, 0, 1) == OAC_LEASE_REVOKED);
+    log.Expect("healthy lease keeps the target",
+        OacLeaseRequiresTermination(OAC_LEASE_HEALTHY) == 0);
+    log.Expect("grace-period lease keeps the target",
+        OacLeaseRequiresTermination(OAC_LEASE_DEGRADED) == 0);
+    log.Expect("expired lease terminates the target",
+        OacLeaseRequiresTermination(OAC_LEASE_EXPIRED) != 0);
+    log.Expect("revoked lease terminates the target",
+        OacLeaseRequiresTermination(OAC_LEASE_REVOKED) != 0);
+    log.Expect("invalid lease terminates the target",
+        OacLeaseRequiresTermination(OAC_LEASE_INVALID) != 0);
+    log.Expect("unknown lease state terminates the target",
+        OacLeaseRequiresTermination(99) != 0);
+}
+
 void TestEventRecords(TestLog& log)
 {
     auto record = ValidEventRecord();
@@ -1665,12 +1803,14 @@ int main()
     TestRanges(log);
     TestNegotiateRequest(log);
     TestClaimAndStatusRequests(log);
+    TestRevokeMessages(log);
     TestLaunchRequests(log);
     TestLaunchResponses(log);
     TestResponses(log);
     TestCorrelationAndIds(log);
     TestSessionTransitions(log);
     TestLaunchDecision(log);
+    TestLeasePolicy(log);
     TestEventRecords(log);
     return log.ExitCode();
 }

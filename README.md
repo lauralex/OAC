@@ -10,12 +10,13 @@ control service, and reproducible disposable-VM validation.**
 OAC explores how to build a small, explicit trust boundary between a standard-user launcher, a
 privileged Windows service, and a kernel driver. The current production-control MVP can authenticate
 a local launcher request, create one executable under the caller's token, bind that process during
-creation, confirm the exact process handle, and only then resume its first thread.
+creation, confirm the exact process handle, assign its process tree to a service-owned job, and only
+then resume its first thread.
 
 > [!IMPORTANT]
 > OAC is an engineering reference, not a production-ready anti-cheat release. It does not yet include
-> target-tree job containment, production telemetry delivery, signed game manifests or policy,
-> backend leases, a supported compatibility matrix, or production driver signing. Never install the
+> production telemetry delivery, signed game manifests or policy, authenticated backend leases, a
+> supported compatibility matrix, or production driver signing. Never install the
 > disposable test package on a workstation or production system.
 
 ## Why this project exists
@@ -40,16 +41,18 @@ flowchart LR
     User["Standard-user application"] --> Launcher["OAC Launcher"]
     Launcher -->|"authenticated local IPC"| Service["Restricted OAC service"]
     Service -->|"production session + launch ticket"| Driver["Demand-start OAC driver"]
-    Service -->|"create suspended"| Target["Protected target"]
+    Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
+    Job --> Target["Protected target tree"]
     Driver -->|"creation-time bind"| Target
     Driver -->|"status and bounded protection"| Service
 ```
 
 The launcher exposes status and one serialized executable-launch request. The service authenticates
 the local client, resolves and keeps the executable open under that identity, arms the driver,
-creates the process suspended with the caller's primary token, confirms the exact process, and
-resumes it. The driver enforces the session and target identity and filters selected dangerous
-user-mode process and thread handles.
+creates the process suspended with the caller's primary token, confirms the exact process, assigns
+it to a kill-on-close job, and resumes it. The driver enforces the session and target identity,
+filters selected dangerous user-mode process and thread handles, and reports prior session loss to
+the next restricted service instance.
 
 The separate `OAC-Client` scanner is a **lab-only diagnostic tool**. It is unavailable unless an
 explicit `LabMode=1` test configuration is present, and it cannot become the production controller.
@@ -63,7 +66,10 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
   random session identifier, and monotonic generation.
 - Standard-user status and one-executable launch through identity-checked local IPC.
 - Suspended caller-token process creation with canonical-path matching and one-use ticket expiry.
-- Creation-time kernel binding, exact-handle confirmation, and first-thread resume.
+- Creation-time kernel binding, exact-handle confirmation, job assignment, and first-thread resume.
+- Service-owned target-tree lifetime with kill-on-close containment on graceful stop or service
+  failure, plus explicit idempotent driver-session revocation.
+- A monotonic session-loss status latch for service recovery diagnostics.
 - Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
 - Demand-start driver and service installation with strict package, service-policy, and cleanup
   verification in the disposable test workflow.
@@ -79,7 +85,6 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Service-owned kill-on-close job and target-tree liveness.
 - Production alert, event, and snapshot transport.
 - Bounded service scheduling and centralized typed policy.
 - Stable executable identity plus signed manifests and policy.
@@ -141,7 +146,7 @@ OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
 ```
 
 This interface demonstrates the current MVP boundary. It is not a general-purpose launcher and
-does not yet provide signed authorization, child-process containment, or backend admission.
+does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 

@@ -1076,19 +1076,116 @@ void TerminateSuspendedProcess(HANDLE process) noexcept
     (void)WaitForSingleObject(process, 5000);
 }
 
+DWORD CreateTargetJob(HANDLE& job)
+{
+    job = nullptr;
+    UniqueHandle candidate(CreateJobObjectW(nullptr, nullptr));
+    if (!candidate) return GetLastError();
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(
+            candidate.get(),
+            JobObjectExtendedLimitInformation,
+            &limits,
+            static_cast<DWORD>(sizeof(limits))))
+    {
+        return GetLastError();
+    }
+
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION observed{};
+    if (!QueryInformationJobObject(
+            candidate.get(),
+            JobObjectExtendedLimitInformation,
+            &observed,
+            static_cast<DWORD>(sizeof(observed)),
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (observed.BasicLimitInformation.LimitFlags !=
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+    {
+        return ERROR_INVALID_STATE;
+    }
+
+    job = candidate.release();
+    return ERROR_SUCCESS;
+}
+
+DWORD AssignTargetJob(HANDLE job, HANDLE process)
+{
+    if (job == nullptr || process == nullptr ||
+        job == INVALID_HANDLE_VALUE || process == INVALID_HANDLE_VALUE)
+    {
+        return ERROR_INVALID_HANDLE;
+    }
+    if (!AssignProcessToJobObject(job, process)) return GetLastError();
+
+    BOOL assigned = FALSE;
+    if (!IsProcessInJob(process, job, &assigned)) return GetLastError();
+    return assigned ? ERROR_SUCCESS : ERROR_INVALID_STATE;
+}
+
+DWORD RevokeDriverSession(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation)
+{
+    OAC_REVOKE_SESSION_REQUEST request{};
+    OAC_REVOKE_SESSION_RESPONSE response{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_V5_MESSAGE_REVOKE_SESSION,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    request.RevokeReason = OAC_V5_REVOKE_REQUESTED;
+
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_V5_REVOKE_SESSION,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            &response,
+            static_cast<DWORD>(sizeof(response)),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacValidateRevokeSessionResponse(&response, returned) != OAC_V5_VALID ||
+        OacV5ValidateCorrelation(
+            &request.Header,
+            &response.Header) != OAC_V5_VALID ||
+        response.Header.Status != 0 ||
+        response.Header.Reason != OAC_V5_REASON_NONE)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
 DWORD LaunchTarget(
     HANDLE pipe,
     HANDLE stopEvent,
     HANDLE driver,
+    HANDLE targetJob,
     const OAC_V5_SESSION_ID& sessionId,
     ULONGLONG generation,
     const OAC_IPC_LAUNCH_REQUEST& request,
     ClientIdentity& client,
+    HANDLE& targetProcess,
     DWORD& targetProcessId,
     bool& driverSessionChanged,
     uint32_t& failureStage,
     uint32_t& failureDetail)
 {
+    targetProcess = nullptr;
     targetProcessId = 0;
     driverSessionChanged = false;
     failureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
@@ -1217,6 +1314,15 @@ DWORD LaunchTarget(
         TerminateSuspendedProcess(process.get());
         return error == ERROR_SUCCESS ? ERROR_INVALID_STATE : error;
     }
+
+    failureStage = OAC_IPC_LAUNCH_STAGE_ASSIGN_JOB;
+    error = AssignTargetJob(targetJob, process.get());
+    if (error != ERROR_SUCCESS)
+    {
+        TerminateSuspendedProcess(process.get());
+        return error;
+    }
+
     failureStage = OAC_IPC_LAUNCH_STAGE_RESUME_THREAD;
     if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
     {
@@ -1237,6 +1343,7 @@ DWORD LaunchTarget(
     }
 
     targetProcessId = processInformation.dwProcessId;
+    targetProcess = process.release();
     failureStage = OAC_IPC_LAUNCH_STAGE_NONE;
     failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
     return ERROR_SUCCESS;
@@ -1287,7 +1394,8 @@ DWORD OpenAndClaimDriver(
 
     constexpr ULONG requiredProtocol = OAC_V5_PROTOCOL_STRICT_LENGTHS;
     constexpr ULONG requiredCapabilities =
-        OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET;
+        OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
+        OAC_V5_CAP_SESSION_LIVENESS;
     if (OacV5ValidateNegotiateResponse(&negotiated, returned) != OAC_V5_VALID ||
         OacV5ValidateCorrelation(
             &negotiate.Header, &negotiated.Header) != OAC_V5_VALID ||
@@ -1378,13 +1486,16 @@ DWORD OpenAndClaimDriver(
 } // namespace
 
 ServiceHost::ServiceHost(HANDLE stopEvent) noexcept
-    : stopEvent_(stopEvent), fatalEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr))
+    : stopEvent_(stopEvent),
+      fatalEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+      targetReadyEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr))
 {
 }
 
 ServiceHost::~ServiceHost()
 {
     Stop();
+    if (targetReadyEvent_ != nullptr) CloseHandle(targetReadyEvent_);
     if (fatalEvent_ != nullptr) CloseHandle(fatalEvent_);
 }
 
@@ -1393,7 +1504,8 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
     failureStage = OAC_SERVICE_STAGE_BOOTSTRAP;
     try
     {
-        if (stopEvent_ == nullptr || fatalEvent_ == nullptr)
+        if (stopEvent_ == nullptr || fatalEvent_ == nullptr ||
+            targetReadyEvent_ == nullptr)
             return ERROR_NOT_ENOUGH_MEMORY;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
@@ -1403,6 +1515,10 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
         if (error != ERROR_SUCCESS) return error;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
+
+        failureStage = OAC_SERVICE_STAGE_TARGET_JOB;
+        error = CreateTargetJob(targetJob_);
+        if (error != ERROR_SUCCESS) return error;
 
         error = OpenAndClaimDriver(
             driver_,
@@ -1437,14 +1553,33 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
 
 DWORD ServiceHost::Wait() const noexcept
 {
-    HANDLE waits[] = {stopEvent_, fatalEvent_};
-    const DWORD wait = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+    HANDLE waits[] = {stopEvent_, fatalEvent_, targetReadyEvent_};
+    DWORD wait = WaitForMultipleObjects(3, waits, FALSE, INFINITE);
     if (wait == WAIT_OBJECT_0) return ERROR_SUCCESS;
     if (wait == WAIT_OBJECT_0 + 1)
         return static_cast<DWORD>(InterlockedCompareExchange(
             const_cast<volatile LONG*>(&fatalError_),
             ERROR_SUCCESS,
             ERROR_SUCCESS));
+    if (wait != WAIT_OBJECT_0 + 2)
+    {
+        const DWORD error = GetLastError();
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
+    }
+    if (targetProcess_ == nullptr || targetProcess_ == INVALID_HANDLE_VALUE)
+        return ERROR_INVALID_HANDLE;
+
+    HANDLE targetWaits[] = {stopEvent_, fatalEvent_, targetProcess_};
+    wait = WaitForMultipleObjects(3, targetWaits, FALSE, INFINITE);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
+        return ERROR_SUCCESS;
+    if (wait == WAIT_OBJECT_0 + 1)
+    {
+        return static_cast<DWORD>(InterlockedCompareExchange(
+            const_cast<volatile LONG*>(&fatalError_),
+            ERROR_SUCCESS,
+            ERROR_SUCCESS));
+    }
     const DWORD error = GetLastError();
     return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
 }
@@ -1464,6 +1599,25 @@ void ServiceHost::Stop() noexcept
     {
         CloseHandle(firstPipe_);
         firstPipe_ = INVALID_HANDLE_VALUE;
+    }
+    if (driver_ != INVALID_HANDLE_VALUE)
+    {
+        (void)RevokeDriverSession(
+            driver_,
+            driverSessionId_,
+            driverSessionGeneration_);
+    }
+    if (targetJob_ != nullptr)
+    {
+        CloseHandle(targetJob_);
+        targetJob_ = nullptr;
+    }
+    if (targetProcess_ != nullptr)
+    {
+        if (WaitForSingleObject(targetProcess_, 5000) != WAIT_OBJECT_0)
+            (void)TerminateProcess(targetProcess_, ERROR_PROCESS_ABORTED);
+        CloseHandle(targetProcess_);
+        targetProcess_ = nullptr;
     }
     if (driver_ != INVALID_HANDLE_VALUE)
     {
@@ -1551,6 +1705,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                 response.Header.RequestId = request.Header.RequestId;
                 response.Win32Error = authorization;
                 response.FailureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
+                HANDLE launchedProcess = nullptr;
                 if (authorization == ERROR_SUCCESS)
                 {
                     bool driverSessionChanged = false;
@@ -1561,10 +1716,12 @@ DWORD ServiceHost::PipeLoop() noexcept
                             pipe,
                             stopEvent_,
                             driver_,
+                            targetJob_,
                             driverSessionId_,
                             driverSessionGeneration_,
                             request,
                             client,
+                            launchedProcess,
                             targetProcessId,
                             driverSessionChanged,
                             response.FailureStage,
@@ -1586,6 +1743,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                     if (response.Win32Error == ERROR_SUCCESS)
                     {
                         response.LaunchFlags = OAC_IPC_LAUNCH_CONFIRMED |
+                            OAC_IPC_LAUNCH_JOB_ASSIGNED |
                             OAC_IPC_LAUNCH_RESUMED;
                         response.ServiceProcessId = GetCurrentProcessId();
                         response.ClientProcessId = client.processId;
@@ -1602,6 +1760,22 @@ DWORD ServiceHost::PipeLoop() noexcept
                     stopEvent_,
                     &response,
                     static_cast<DWORD>(sizeof(response)));
+                if (error == ERROR_SUCCESS &&
+                    response.Win32Error == ERROR_SUCCESS)
+                {
+                    if (targetProcess_ != nullptr || launchedProcess == nullptr)
+                    {
+                        error = ERROR_INVALID_STATE;
+                    }
+                    else
+                    {
+                        targetProcess_ = launchedProcess;
+                        launchedProcess = nullptr;
+                        if (!SetEvent(targetReadyEvent_))
+                            error = GetLastError();
+                    }
+                }
+                if (launchedProcess != nullptr) CloseHandle(launchedProcess);
             }
             else if (bytesRead == sizeof(OAC_IPC_REQUEST))
             {
@@ -1648,6 +1822,15 @@ DWORD ServiceHost::PipeLoop() noexcept
                             response.ClientSessionId = client.sessionId;
                             response.DriverProtocolVersion = driverVersion_;
                             response.DriverCapabilities = driverCapabilities_;
+                            response.SessionLossSequence =
+                                driverStatus.SessionLossSequence;
+                            response.LastSessionLossReason =
+                                driverStatus.LastSessionLossReason;
+                            if (driverStatus.SessionLossSequence != 0)
+                            {
+                                response.StatusFlags |=
+                                    OAC_IPC_STATUS_PRIOR_SESSION_LOSS;
+                            }
                         }
                         else
                         {
@@ -1675,6 +1858,12 @@ CompleteConnection:
             (void)DisconnectNamedPipe(pipe);
             CloseHandle(pipe);
             return fatalAfterResponse;
+        }
+        if (error != ERROR_SUCCESS)
+        {
+            (void)DisconnectNamedPipe(pipe);
+            CloseHandle(pipe);
+            return error;
         }
 
         HANDLE nextPipe = CreateControlPipe(false, error);

@@ -23,6 +23,8 @@ typedef struct OAC_SESSION_SNAPSHOT_TAG
     ULONG RevokeReason;
     ULONGLONG ServiceProcessId;
     ULONGLONG TargetProcessId;
+    ULONGLONG SessionLossSequence;
+    ULONG LastSessionLossReason;
 } OAC_SESSION_SNAPSHOT, *POAC_SESSION_SNAPSHOT;
 
 typedef struct OAC_DEVICE_EXTENSION_TAG
@@ -30,6 +32,8 @@ typedef struct OAC_DEVICE_EXTENSION_TAG
     EX_PUSH_LOCK SessionLock;
     PVOID ActiveSession;
     volatile LONG64 NextGeneration;
+    ULONGLONG SessionLossSequence;
+    ULONG LastSessionLossReason;
     BOOLEAN LabMode;
     BOOLEAN Stopping;
 } OAC_DEVICE_EXTENSION, *POAC_DEVICE_EXTENSION;
@@ -92,6 +96,12 @@ VOID OacSessionRelease(_Inout_ POAC_SESSION_LEASE Lease);
 NTSTATUS OacSessionSnapshot(
     _In_ const OAC_SESSION_LEASE* Lease,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
+NTSTATUS OacSessionRevoke(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ OAC_V5_REVOKE_REASON RevokeReason,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot,
+    _Outptr_result_maybenull_ PEPROCESS* RevokedOwner);
 
 NTSTATUS OacSessionBindTarget(
     _In_ const OAC_SESSION_LEASE* Lease,

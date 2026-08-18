@@ -1,7 +1,8 @@
 # OAC test matrix
 
 **Status:** WP-01 through WP-04 tested at implementation commit
-`bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100
+`bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100; WP-05 source and tests are
+present, with fresh VM acceptance pending
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,7 +20,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #8 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #8 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local and PR #8 hosted Debug/Release runs passed `284/284` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `314/314`; hosted runs pending |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #8 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -45,7 +46,9 @@ The pure C/C++ unit source covers:
 - event provenance rules and hostile none, binary, and UTF-16 payload cases, including dirty tails,
   embedded nulls, and invalid surrogate pairs;
 - launch-ticket layouts, strict canonical NT paths, expiry/cancel/replay decisions, exact process
-  handles, response correlation, and terminal state invariants; and
+  handles, response correlation, and terminal state invariants;
+- explicit session-revoke layouts, status-latch consistency, idempotent transition expectations,
+  and healthy/degraded/expired/revoked lease-state decisions; and
 - launcher/service launch IPC layouts, hostile DOS paths, reserved fields, dirty tails, and success
   or rejection identity invariants.
 
@@ -69,11 +72,13 @@ driver-gate coverage plus these production cases:
   request with handle cleanup; completions must be valid or fail with a bounded close result;
 - a replacement claim after the race advances generation;
 - closing the controller with a live diagnostic target leaves a tombstone, rejects a replacement claim
-  with `ERROR_BUSY`, and permits reclaim only after the target exits; and
+  with `ERROR_BUSY`, and permits reclaim only after the target exits;
 - after a production-session owner exits, a wrong-process holder of the exact old file object remains denied while
-  a different file immediately claims a distinct, higher-generation session; and
+  a different file immediately claims a distinct, higher-generation session;
 - malformed launch requests are rejected while diagnostic sessions receive `ERROR_NOT_SUPPORTED`
-  for production arm, cancel, and confirm operations.
+  for production arm, cancel, and confirm operations; and
+- explicit revoke rejects malformed provenance/reserved/size fields, increments the session-loss
+  sequence once, and returns the same terminal result on repetition.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
 standard Driver Verifier run passed on implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c`.
@@ -87,11 +92,16 @@ service-owned launch; alert acknowledgement and snapshot paging remain later wor
 The VM harness source now contains a bounded `LabMode=0` production-boundary phase that:
 
 - starts the restricted `OACService` and requires its production claim;
-- runs standard-user launcher status twice;
+- runs standard-user launcher status before failure, after service recovery, and after graceful
+  restart;
 - attempts direct driver opens as LocalSystem, a limited user, and an administrator and requires all
   three to fail;
-- launches `whoami.exe` as the standard user, requires exact creation-time binding and process-handle
-  confirmation, and accepts success only after the initial thread is resumed;
+- launches a signed target twice as the standard user, requires exact creation-time binding,
+  process-handle confirmation, verified job assignment, and initial-thread resume;
+- proves service-process failure terminates the job-owned parent and child, then observes SCM
+  recovery and exactly one file-cleanup or service-exit loss;
+- proves graceful service stop explicitly revokes the session, terminates the second parent and
+  child, and advances the loss sequence exactly once;
 - stops the service and restores explicit lab mode before diagnostic tests;
 - records cleanup separately so a failed boundary test cannot silently leave the wrong mode active.
 
@@ -114,6 +124,7 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Production per-file cleanup/close and concurrent status teardown | Tested at `bbf8f06` in baseline and Verifier protocol executions |
 | Live-target tombstone and later retirement | Tested at `bbf8f06` in the driver-backed lifecycle suite |
 | Standard-user service launch, creation-time binding, confirmation, and resume | Tested at `bbf8f06`; target PID 6588 was bound, confirmed, and resumed |
+| Service-owned job, parent/child termination, crash recovery, graceful revoke | Source and exact harness contract present; fresh VM/Verifier execution pending |
 | Renamed, signed normal post-start driver image | Tested at `bbf8f06`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
@@ -135,7 +146,7 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `bbf8f06`; broader negative matrix remains |
 | WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `bbf8f06`; literal numeric PID reuse remains unforced |
 | WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `bbf8f06` |
-| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Planned |
+| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Source and bounded tests present; current Debug/Release units pass, VM/Verifier acceptance pending |
 | WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Planned |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Planned |
 | WP-08 policy | Stable rule decisions, corroboration, display-text independence | Planned |
@@ -143,7 +154,8 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
 WP-02 through WP-04 acceptance is recorded only for the exact commit and environment above. WP-05
-and later work packages remain planned.
+is implemented but remains unaccepted until its named VM campaign passes; later work packages remain
+planned.
 
 ## Exact host commands
 

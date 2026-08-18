@@ -1,7 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-04 controls implemented and accepted on the named Windows 11 build
-26100 disposable-VM campaign
+**Status:** WP-01 through WP-04 controls accepted on the named Windows 11 build 26100 campaign;
+WP-05 job and liveness controls are implemented in source and awaiting fresh VM acceptance
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -28,6 +28,8 @@ trust boundaries, adversaries, and failure behavior.
 | Driver controller | One production session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Driver-backed lifecycle, wrong-process, cleanup, and race cases passed on the named campaign |
 | Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Two standard-user status calls and one launch passed; dedicated AppContainer, remote, and impersonation-negative cases remain pending |
 | Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Creation-time binding, exact-handle confirmation, and resume passed on the named campaign |
+| Target-tree lifetime | The service assigns the suspended target to an unnamed kill-on-close job before resume; graceful stop explicitly revokes the driver session and service failure closes both authority handles | Source and bounded crash/stop acceptance tests are present; fresh VM execution pending |
+| Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | Strict unit and driver-backed tests are present; service recovery path awaits the fresh VM run |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Stable production IDs and a provenance-preserving record schema are defined with pure validation tests | Test source present; production transport planned |
@@ -108,19 +110,22 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   and deletion through process creation.
 - The production controller may create exactly one child process per session; additional children
   from that service process are denied after target binding.
+- The service owns one unnamed job with exactly `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, verifies target
+  membership while the process is suspended, and closes the job on every stop path.
+- Graceful stop requests an idempotent driver-session revoke. Cleanup and service-exit races record
+  only the first loss cause, and a monotonic latch makes prior loss visible to a replacement service.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-These statements describe source behavior plus one exact platform acceptance run. The current
-driver-backed production, service installation, lifecycle, race, and standard Driver Verifier
-campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That result does not
-replace the broader supported-platform, effective-right, compatibility, or production-deployment
-matrix.
+WP-01 through WP-04 statements combine source behavior with one exact platform acceptance run. The
+current driver-backed production, service installation, lifecycle, race, and standard Driver
+Verifier campaign passed on Windows 11 build 26100 with zero crash events and minidumps. The new
+WP-05 job and liveness statements are source claims until the pending campaign passes. Neither
+result replaces the broader supported-platform, effective-right, compatibility, or
+production-deployment matrix.
 
 ## Planned controls
 
 - Signed-manifest and stable executable-identity verification before a launch ticket is armed.
-- Kill-on-close job ownership and deterministic target termination after service/session/backend
-  loss.
 - Separate critical alert, operational event, and paged snapshot transports.
 - Independent health and bounded scan workers.
 - Central typed policy, signed game manifests, signed remote policy, and authenticated backend

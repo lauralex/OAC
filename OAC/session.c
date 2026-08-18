@@ -52,6 +52,7 @@ struct OAC_SESSION_TAG
     OAC_LAUNCH_ID BoundLaunchId;
     BOOLEAN Cleaned;
     BOOLEAN ServiceExited;
+    BOOLEAN SessionLossRecorded;
 };
 
 static PDEVICE_OBJECT g_SessionDevice;
@@ -262,6 +263,24 @@ static VOID OacFillSnapshotLocked(
     Snapshot->RevokeReason = Session->RevokeReason;
     Snapshot->ServiceProcessId = HandleToULong(Session->ServiceProcessId);
     Snapshot->TargetProcessId = HandleToULong(Session->TargetProcessId);
+    Snapshot->SessionLossSequence =
+        OacExtension(Session->DeviceObject)->SessionLossSequence;
+    Snapshot->LastSessionLossReason =
+        OacExtension(Session->DeviceObject)->LastSessionLossReason;
+}
+
+static VOID OacRecordSessionLossLocked(
+    _Inout_ POAC_DEVICE_EXTENSION Extension,
+    _Inout_ POAC_SESSION Session,
+    _In_ OAC_V5_REVOKE_REASON RevokeReason)
+{
+    if (Session->SessionLossRecorded) return;
+    if (Extension->SessionLossSequence != ~0ULL)
+    {
+        ++Extension->SessionLossSequence;
+    }
+    Extension->LastSessionLossReason = RevokeReason;
+    Session->SessionLossRecorded = TRUE;
 }
 
 static VOID OacRevokeLaunchLocked(
@@ -374,6 +393,10 @@ VOID OacSessionShutdown(_In_ PDEVICE_OBJECT DeviceObject)
     extension->ActiveSession = NULL;
     if (session != NULL)
     {
+        OacRecordSessionLossLocked(
+            extension,
+            session,
+            OAC_V5_REVOKE_DRIVER_STOP);
         session->State = OAC_V5_SESSION_CLOSING;
         if (session->RevokeReason == OAC_V5_REVOKE_NONE)
         {
@@ -461,6 +484,10 @@ NTSTATUS OacSessionCleanup(
         *RevokedOwner = session->ServiceProcess;
     }
     session->Cleaned = TRUE;
+    OacRecordSessionLossLocked(
+        extension,
+        session,
+        OAC_V5_REVOKE_FILE_CLEANUP);
     session->State = OAC_V5_SESSION_CLOSING;
     if (session->RevokeReason == OAC_V5_REVOKE_NONE)
     {
@@ -789,6 +816,59 @@ NTSTATUS OacSessionSnapshot(
     OacFillSnapshotLocked(session, Snapshot);
     OacUnlockExclusive(&extension->SessionLock);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS OacSessionRevoke(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ OAC_V5_REVOKE_REASON RevokeReason,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot,
+    _Outptr_result_maybenull_ PEPROCESS* RevokedOwner)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    NTSTATUS status;
+
+    if (Lease == NULL || Snapshot == NULL || RevokedOwner == NULL ||
+        RevokeReason != OAC_V5_REVOKE_REQUESTED)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+    *RevokedOwner = NULL;
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->State == OAC_V5_SESSION_REVOKED)
+    {
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    else if (!OacSessionAcceptsControl(session->State))
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        if (session->ServiceProcess != NULL)
+        {
+            ObReferenceObject(session->ServiceProcess);
+            *RevokedOwner = session->ServiceProcess;
+        }
+        OacClearLaunchState(session);
+        session->State = OAC_V5_SESSION_REVOKED;
+        session->RevokeReason = RevokeReason;
+        OacRecordSessionLossLocked(extension, session, RevokeReason);
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return status;
 }
 
 NTSTATUS OacSessionBindTarget(
@@ -1321,6 +1401,10 @@ VOID OacSessionNotifyProcessExit(
         {
             session->ServiceExited = TRUE;
             releaseControlObjects = TRUE;
+            OacRecordSessionLossLocked(
+                extension,
+                session,
+                OAC_V5_REVOKE_SERVICE_EXIT);
             OacClearLaunchState(session);
             if (session->State < OAC_V5_SESSION_REVOKED)
             {

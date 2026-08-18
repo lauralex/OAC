@@ -13,12 +13,14 @@
   one referenced service process. `shared/oac_protocol.h` is the diagnostic compatibility ABI.
 - The restricted service owns one serialized launch transaction: authenticate a local interactive
   client, resolve and lock one executable, arm a bounded driver ticket, create the process suspended
-  under the client token, confirm the exact process handle, and resume it. The per-file session,
-  cleanup/close rundown, creation-time binding, and live-target tombstone are implemented in source.
+  under the client token, confirm the exact process handle, assign it to the service-owned
+  kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
+  binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
   Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the complete
-  networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign. Job
-  ownership and liveness, signed manifests or policy, backend leases, and split
-  alert/event/snapshot transports are not implemented.
+  networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
+  WP-01 through WP-04. The WP-05 job/liveness implementation still requires its fresh commit-bound
+  campaign. Signed manifests or policy, authenticated backend leases, and split alert/event/snapshot
+  transports are not implemented.
 
 ## Repository map
 
@@ -26,7 +28,7 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, bounded scans, CPU snapshots, compatibility, and telemetry |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session and one serialized suspended-launch transaction |
+| `OAC-Service/` | Restricted production controller; owns the driver session, target job, and one serialized suspended-launch transaction |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
@@ -91,6 +93,10 @@
   object, random session ID, and monotonic generation. Cleanup must complete rundown before releasing
   controller objects. If a cleaned session still references a live target, retain it as a tombstone
   until target exit so a new controller cannot reclaim authority over stale protection state.
+- Assign a confirmed production target to the service-owned kill-on-close job before its first
+  thread resumes. Keep the job unnamed and its handle non-inheritable. Graceful stop
+  must explicitly revoke the driver session before closing the job; service failure must not leave
+  the target or descendants running.
 - Keep diagnostic and production protocol authority mutually exclusive on each file. Negotiation and claim must remain serialized; a
   handle must never switch protocol authority after either path establishes state.
 - Preserve HWID privacy: do not write raw serials to reports, promote removable peripherals to core

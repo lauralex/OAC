@@ -4,7 +4,8 @@
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
 implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign
+26100 disposable-VM and standard Driver Verifier campaign. The current job/liveness revision is
+implemented in source and awaiting its fresh commit-bound campaign.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -12,27 +13,28 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050002`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050003`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
 function number and is validated even when every other field is well formed.
 
-The current driver advertises `OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET`. Negotiate,
-claim, status, arm, cancel, and confirm are available:
+The current driver advertises session control, launch-ticket, and session-liveness capabilities.
+Negotiate, claim, status, explicit revoke, arm, cancel, and confirm are available:
 
 | Function | IOCTL | Input | Output | Current behavior |
 |---:|---|---|---|---|
 | `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
-| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 120-byte status response | Returns correlated session state, identity, capability, and counter data |
+| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 136-byte status response | Returns correlated session state, identity, capability, counters, and the monotonic session-loss latch |
+| `0x817` | `IOCTL_OAC_V5_REVOKE_SESSION` | 56-byte revoke request | 80-byte revoke response | Idempotently revokes the caller's exact session and records requested-shutdown provenance |
 | `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2112-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
 | `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
-The shared header reserves config, scan, event-read, CPU-snapshot, and revoke IOCTL/message IDs for
-later work. They are not dispatched by the production path and their capabilities are not
-advertised. `OAC_V5_CAP_TYPED_EVENTS` therefore remains clear.
+The shared header reserves config, scan, event-read, and CPU-snapshot IOCTL/message IDs for later
+work. They are not dispatched by the production path and their capabilities are not advertised.
+`OAC_V5_CAP_TYPED_EVENTS` therefore remains clear.
 
 ### Launch transaction
 
@@ -66,11 +68,11 @@ process-exit notification retires the tombstone.
 The service performs one serialized transaction: it authenticates the local launcher, resolves and
 keeps one executable open under that caller identity, arms the ticket, creates the process suspended
 with the caller's primary token, confirms the exact process handle, validates the monitoring state,
-and resumes the initial thread. Cancellation is issued only after a failed synchronous create or a
-pre-create stop decision; later failures terminate the suspended target and stop the service. The
-kernel callback deliberately performs no hashing, signature verification, filesystem I/O, or
-registry access. Signed-manifest identity and kill-on-close job ownership remain separate work
-packages.
+assigns the process to its kill-on-close job, and resumes the initial thread. Cancellation is issued
+only after a failed synchronous create or a pre-create stop decision; later failures terminate the
+suspended target and stop the service. The kernel callback deliberately performs no hashing,
+signature verification, filesystem I/O, or registry access. Signed-manifest identity remains a
+separate work package.
 
 ### Strict validation and correlation
 
@@ -115,6 +117,13 @@ session closing, records file-cleanup revocation when no earlier reason exists, 
 acquisitions, waits for outstanding requests, and then releases the controller file and process
 references. Close releases the remaining file-context reference.
 
+The service issues an explicit, correlated revoke before closing a healthy controller handle.
+Explicit revoke is idempotent. The driver records the first cleanup or service-exit cause if
+explicit revoke did not win the race; driver shutdown also closes the active session before device
+teardown. A device-lifetime sequence and last-cause pair are returned by status, so a replacement
+restricted service can distinguish a fresh driver lifetime from a prior controller loss. This latch
+is not the planned production alert transport.
+
 If cleanup occurs while a referenced target is still live, the cleaned session remains as an
 unusable tombstone. It blocks a replacement claim until the target exit callback releases the
 target and retires the session. This prevents a new controller from inheriting authority while
@@ -136,10 +145,11 @@ acknowledgement, cursors, and paging remain WP-06 work.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010002`. Hello and status retain fixed 32-byte
-requests and 56-byte responses. A launch request is a fixed 1056-byte message containing one counted
-absolute drive path with no arguments; its 56-byte response correlates the request, service, client,
-session, target PID, confirmed binding, and resumed-thread result. A rejection also carries an exact
+The local launcher/service wire revision is `0x00010003`. Hello and status retain fixed 32-byte
+requests; status responses are 72 bytes and include the session-loss sequence and cause. A launch
+request is a fixed 1056-byte message containing one counted absolute drive path with no arguments;
+its 56-byte response correlates the request, service, client, session, target PID, confirmed binding,
+verified job assignment, and resumed-thread result. A rejection also carries an exact
 launch stage and a bounded driver-revocation detail so failures remain attributable without enabling
 filesystem logging in the restricted service. Both endpoints reject unknown
 types or flags, wrong sizes or revisions, zero request IDs, nonzero reserved data, malformed UTF-16,
@@ -161,18 +171,19 @@ The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact mes
 request/response validation, correlation, the session transition matrix, and hostile binary and
 UTF-16 event payloads.
 
-The driver-backed suite now contains production negotiation/claim/status malformed-input checks,
+The driver-backed suite now contains production negotiation/claim/status/revoke malformed-input checks,
 bidirectional diagnostic/production per-file exclusion, same-file and wrong-file authorization, a
 duplicated-handle wrong-process check, cleanup authority loss, fresh session ID/generation checks,
 and a bounded four-thread status/close race after 32 successful status calls per thread. It also
-verifies that malformed launch messages are rejected and that diagnostic sessions cannot invoke
-production launch operations. The current disposable-VM execution passed at implementation commit
+verifies explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
+sessions cannot invoke production launch operations. The prior disposable-VM execution passed at implementation commit
 `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11
 Pro build 26100. The campaign accepted all five protocol executions under the baseline and standard
 Driver Verifier phases, with zero crash events or minidumps and Verifier inactive at completion.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
-response correlation, and IPC validation. The VM production boundary supplies the successful
-standard-user service transaction: creation-time binding, exact process-handle confirmation, and
-initial-thread resume all passed. Service-owned job/liveness, event transport, signed manifests and
-policy, and authenticated backend sessions remain separate work packages.
+response correlation, explicit revoke/liveness layouts, lease-state decisions, and IPC validation.
+The current source also contains a production-boundary test for job ownership, service-crash and
+graceful-stop target-tree termination, recovery, and monotonic session-loss reporting. Its fresh
+disposable-VM acceptance is pending. Event transport, signed manifests and policy, and authenticated
+backend sessions remain separate work packages.
