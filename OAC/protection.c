@@ -164,7 +164,6 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
     ACCESS_MASK removed;
     BOOLEAN processOperation;
     BOOLEAN mutationAttempt;
-    BOOLEAN protectedWindowsRequestor;
 
     UNREFERENCED_PARAMETER(RegistrationContext);
 
@@ -196,16 +195,11 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
     }
 
     sourcePid = PsGetCurrentProcessId();
-    if (OacIsTrustedRequestor())
-    {
-        return OB_PREOP_SUCCESS;
-    }
-    /* Windows must finish creating the service-bound suspended process before
-     * the service can confirm its handle. Keep protection active against
-     * ordinary callers, but allow protected OS bootstrap processes during
-     * this one bounded state. Full filtering applies before thread resume. */
-    if (OacSessionTargetAwaitingConfirmation(targetProcess) &&
-        OacIsProtectedWindowsRequestor())
+    /* System and protected Windows processes perform required process and
+     * thread initialization after a suspended target is resumed. Treat them
+     * as trusted operating-system requestors instead of coupling bootstrap
+     * correctness to a transient launch state. */
+    if (OacIsTrustedRequestor() || OacIsProtectedWindowsRequestor())
     {
         return OB_PREOP_SUCCESS;
     }
@@ -227,21 +221,16 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
         mutationAttempt = processOperation
             ? (removed & ~PROCESS_VM_READ) != 0
             : TRUE;
-        protectedWindowsRequestor = OacIsProtectedWindowsRequestor();
         OacReportFinding(
-            protectedWindowsRequestor
-                ? OacSeverityLow
-                : (mutationAttempt ? OacSeverityMedium : OacSeverityLow),
+            mutationAttempt ? OacSeverityMedium : OacSeverityLow,
             OacCategoryHandle,
             sourcePid,
             PsGetCurrentThreadId(),
             Information->Object,
             (ULONGLONG)before,
-            protectedWindowsRequestor
-                ? L"Stripped protected-object access from a protected Windows requestor: requested=0x%08X granted=0x%08X"
-                : (mutationAttempt
-                    ? L"Stripped protected-object mutation access: requested=0x%08X granted=0x%08X"
-                    : L"Stripped protected-object read access: requested=0x%08X granted=0x%08X"),
+            mutationAttempt
+                ? L"Stripped protected-object mutation access: requested=0x%08X granted=0x%08X"
+                : L"Stripped protected-object read access: requested=0x%08X granted=0x%08X",
             before,
             *desiredAccess);
     }

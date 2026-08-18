@@ -1339,27 +1339,6 @@ BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process)
     return matches;
 }
 
-BOOLEAN OacSessionTargetAwaitingConfirmation(_In_ PEPROCESS Process)
-{
-    PDEVICE_OBJECT deviceObject = g_SessionDevice;
-    POAC_DEVICE_EXTENSION extension;
-    POAC_SESSION session;
-    BOOLEAN matches = FALSE;
-
-    if (deviceObject == NULL || Process == NULL) return FALSE;
-    extension = OacExtension(deviceObject);
-    OacLockShared(&extension->SessionLock);
-    session = (POAC_SESSION)extension->ActiveSession;
-    if (session != NULL &&
-        session->State == OAC_V5_SESSION_TARGET_BOUND &&
-        session->TargetProcess == Process)
-    {
-        matches = TRUE;
-    }
-    OacUnlockShared(&extension->SessionLock);
-    return matches;
-}
-
 HANDLE OacSessionTargetProcessId(VOID)
 {
     PDEVICE_OBJECT deviceObject = g_SessionDevice;
