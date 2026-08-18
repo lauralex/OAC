@@ -654,6 +654,17 @@ int RunLivenessTarget()
 {
     std::wstring executable;
     if (!GetCurrentExecutablePath(executable)) return 65;
+    if (executable.rfind(L"\\\\?\\", 0) == 0)
+    {
+        if (executable.size() < 7 ||
+            !((executable[4] >= L'A' && executable[4] <= L'Z') ||
+              (executable[4] >= L'a' && executable[4] <= L'z')) ||
+            executable[5] != L':' || executable[6] != L'\\')
+        {
+            return 65;
+        }
+        executable.erase(0, 4);
+    }
 
     std::wstring commandLine = L"\"" + executable +
         L"\" --liveness-child";
