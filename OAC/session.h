@@ -93,6 +93,9 @@ NTSTATUS OacSessionAcquireDiagnostic(
 
 VOID OacSessionRelease(_Inout_ POAC_SESSION_LEASE Lease);
 
+BOOLEAN OacSessionLeaseIsDiagnostic(
+    _In_ const OAC_SESSION_LEASE* Lease);
+
 NTSTATUS OacSessionSnapshot(
     _In_ const OAC_SESSION_LEASE* Lease,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot);
@@ -142,6 +145,16 @@ OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(
 BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process);
 
 BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process);
+
+BOOLEAN OacSessionCaptureEvidenceIdentity(
+    _Out_ POAC_V5_SESSION_ID SessionId,
+    _Out_ PULONGLONG Generation);
+
+BOOLEAN OacSessionCaptureTargetEvidenceIdentity(
+    _In_opt_ PEPROCESS Process,
+    _In_opt_ HANDLE ProcessId,
+    _Out_ POAC_V5_SESSION_ID SessionId,
+    _Out_ PULONGLONG Generation);
 
 HANDLE OacSessionTargetProcessId(VOID);
 

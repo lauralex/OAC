@@ -1,4 +1,5 @@
 #include "protection.h"
+#include "evidence.h"
 #include "session.h"
 #include "telemetry.h"
 #include "..\shared\oac_driver_policy.h"
@@ -164,6 +165,8 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
     ACCESS_MASK removed;
     BOOLEAN processOperation;
     BOOLEAN mutationAttempt;
+    OAC_V5_SESSION_ID evidenceSessionId = { 0 };
+    ULONGLONG evidenceGeneration = 0;
 
     UNREFERENCED_PARAMETER(RegistrationContext);
 
@@ -189,7 +192,11 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
         return OB_PREOP_SUCCESS;
     }
 
-    if (!OacIsProtectedProcessObject(targetProcess))
+    if (!OacSessionCaptureTargetEvidenceIdentity(
+            targetProcess,
+            NULL,
+            &evidenceSessionId,
+            &evidenceGeneration))
     {
         return OB_PREOP_SUCCESS;
     }
@@ -233,6 +240,23 @@ static OB_PREOP_CALLBACK_STATUS OacPreOperation(
                 : L"Stripped protected-object read access: requested=0x%08X granted=0x%08X",
             before,
             *desiredAccess);
+        OacEvidencePublish(
+            &evidenceSessionId,
+            evidenceGeneration,
+            OAC_V5_RULE_HANDLE_RIGHTS_STRIPPED,
+            OAC_V5_EVENT_OBSERVATION,
+            mutationAttempt
+                ? OAC_V5_OBSERVATION_MEDIUM
+                : OAC_V5_OBSERVATION_LOW,
+            OAC_V5_POLICY_NOT_EVALUATED,
+            OAC_V5_CONFIDENCE_HIGH,
+            OAC_V5_CATEGORY_HANDLE,
+            sourcePid,
+            PsGetCurrentThreadId(),
+            Information->Object,
+            ((ULONGLONG)before << 32) | *desiredAccess,
+            OAC_V5_EVIDENCE_KERNEL_SOURCE |
+                OAC_V5_EVIDENCE_CALLBACK_SOURCE);
     }
 
     return OB_PREOP_SUCCESS;
@@ -246,6 +270,9 @@ static VOID OacProcessNotify(
     PEPROCESS releasedProtected = NULL;
     PEPROCESS releasedClient = NULL;
     OAC_SESSION_PROCESS_CREATE_RESULT createResult;
+    BOOLEAN sessionTarget;
+    OAC_V5_SESSION_ID evidenceSessionId = { 0 };
+    ULONGLONG evidenceGeneration = 0;
 
     if (CreateInfo != NULL)
     {
@@ -264,6 +291,11 @@ static VOID OacProcessNotify(
         return;
     }
 
+    sessionTarget = OacSessionCaptureTargetEvidenceIdentity(
+        Process,
+        ProcessId,
+        &evidenceSessionId,
+        &evidenceGeneration);
     KeEnterCriticalRegion();
     ExAcquirePushLockExclusive(&g_IdentityLock);
     if (Process == OacReadProcessIdentity(&g_ProtectedProcess))
@@ -293,6 +325,25 @@ static VOID OacProcessNotify(
     }
     ExReleasePushLockExclusive(&g_IdentityLock);
     KeLeaveCriticalRegion();
+
+    if (sessionTarget)
+    {
+        OacEvidencePublish(
+            &evidenceSessionId,
+            evidenceGeneration,
+            OAC_V5_RULE_TARGET_EXITED,
+            OAC_V5_EVENT_SESSION_STATE_CHANGED,
+            OAC_V5_OBSERVATION_INFO,
+            OAC_V5_POLICY_NOT_EVALUATED,
+            OAC_V5_CONFIDENCE_HIGH,
+            OAC_V5_CATEGORY_PROCESS,
+            ProcessId,
+            NULL,
+            Process,
+            0,
+            OAC_V5_EVIDENCE_KERNEL_SOURCE |
+                OAC_V5_EVIDENCE_CALLBACK_SOURCE);
+    }
 
     OacSessionNotifyProcessExit(Process, ProcessId);
 
@@ -424,6 +475,10 @@ static VOID OacImageNotify(
     ULONG configurationFlags;
     BOOLEAN deniedDriver = FALSE;
     BOOLEAN gateArmed = FALSE;
+    BOOLEAN targetImage = FALSE;
+    BOOLEAN evidenceIdentityCaptured = FALSE;
+    OAC_V5_SESSION_ID evidenceSessionId = { 0 };
+    ULONGLONG evidenceGeneration = 0;
 
     if (FullImageName == NULL || FullImageName->Buffer == NULL)
     {
@@ -438,6 +493,21 @@ static VOID OacImageNotify(
         name[characters] = L'\0';
     }
 
+    if (ProcessId != NULL)
+    {
+        targetImage = OacSessionCaptureTargetEvidenceIdentity(
+            NULL,
+            ProcessId,
+            &evidenceSessionId,
+            &evidenceGeneration);
+        evidenceIdentityCaptured = targetImage;
+    }
+    else
+    {
+        evidenceIdentityCaptured = OacSessionCaptureEvidenceIdentity(
+            &evidenceSessionId,
+            &evidenceGeneration);
+    }
     configurationFlags = OacConfigurationFlags();
     severity = OacSeverityInfo;
     if (ProcessId == NULL)
@@ -461,11 +531,17 @@ static VOID OacImageNotify(
         OacSuspiciousUserImageName(FullImageName))
     {
         severity = OacSeverityHigh;
+        if (!evidenceIdentityCaptured)
+        {
+            evidenceIdentityCaptured = OacSessionCaptureEvidenceIdentity(
+                &evidenceSessionId,
+                &evidenceGeneration);
+        }
     }
 
     if (ProcessId == NULL || severity >= OacSeverityHigh ||
         (((configurationFlags & OAC_CONFIG_ENABLE_IMAGE_LOG) != 0) &&
-         ProcessId == OacProtectedProcessId()))
+         targetImage))
     {
         OacReportFinding(
             severity,
@@ -482,6 +558,38 @@ static VOID OacImageNotify(
                         : L"Kernel driver image loaded after OAC started and before session configuration: %ls")
                     : L"Image loaded: %ls"),
             name);
+        if (evidenceIdentityCaptured)
+        {
+            OacEvidencePublish(
+                &evidenceSessionId,
+                evidenceGeneration,
+                ProcessId == NULL
+                    ? (gateArmed
+                        ? OAC_V5_RULE_DRIVER_GATE_TRIP
+                        : (deniedDriver
+                            ? OAC_V5_RULE_DRIVER_DENY_MATCH
+                            : OAC_V5_RULE_KERNEL_IMAGE_LOADED))
+                    : OAC_V5_RULE_PROCESS_IMAGE_LOADED,
+                (gateArmed || deniedDriver)
+                    ? OAC_V5_EVENT_POLICY_VIOLATION
+                    : OAC_V5_EVENT_OBSERVATION,
+                (OAC_V5_OBSERVATION_SEVERITY)severity,
+                (gateArmed || deniedDriver)
+                    ? OAC_V5_POLICY_CRITICAL
+                    : OAC_V5_POLICY_NOT_EVALUATED,
+                (gateArmed || deniedDriver)
+                    ? OAC_V5_CONFIDENCE_HIGH
+                    : OAC_V5_CONFIDENCE_MEDIUM,
+                ProcessId == NULL
+                    ? OAC_V5_CATEGORY_DRIVER
+                    : OAC_V5_CATEGORY_MODULE,
+                ProcessId,
+                NULL,
+                ImageInfo != NULL ? ImageInfo->ImageBase : NULL,
+                ImageInfo != NULL ? ImageInfo->ImageSize : 0,
+                OAC_V5_EVIDENCE_KERNEL_SOURCE |
+                    OAC_V5_EVIDENCE_CALLBACK_SOURCE);
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 #include "session.h"
 #include "compat.h"
+#include "evidence.h"
 #include "..\shared\protocol\oac_validate.h"
 
 #include <bcrypt.h>
@@ -261,26 +262,77 @@ static VOID OacFillSnapshotLocked(
     Snapshot->Generation = Session->Generation;
     Snapshot->State = Session->State;
     Snapshot->RevokeReason = Session->RevokeReason;
-    Snapshot->ServiceProcessId = HandleToULong(Session->ServiceProcessId);
-    Snapshot->TargetProcessId = HandleToULong(Session->TargetProcessId);
+    Snapshot->ServiceProcessId =
+        (ULONGLONG)(ULONG_PTR)Session->ServiceProcessId;
+    Snapshot->TargetProcessId =
+        (ULONGLONG)(ULONG_PTR)Session->TargetProcessId;
     Snapshot->SessionLossSequence =
         OacExtension(Session->DeviceObject)->SessionLossSequence;
     Snapshot->LastSessionLossReason =
         OacExtension(Session->DeviceObject)->LastSessionLossReason;
 }
 
-static VOID OacRecordSessionLossLocked(
+static BOOLEAN OacRecordSessionLossLocked(
     _Inout_ POAC_DEVICE_EXTENSION Extension,
     _Inout_ POAC_SESSION Session,
     _In_ OAC_V5_REVOKE_REASON RevokeReason)
 {
-    if (Session->SessionLossRecorded) return;
+    if (Session->SessionLossRecorded) return FALSE;
     if (Extension->SessionLossSequence != ~0ULL)
     {
         ++Extension->SessionLossSequence;
     }
     Extension->LastSessionLossReason = RevokeReason;
     Session->SessionLossRecorded = TRUE;
+    return TRUE;
+}
+
+static VOID OacPublishSessionLoss(
+    _In_ const OAC_V5_SESSION_ID* SessionId,
+    _In_ ULONGLONG Generation,
+    _In_ OAC_V5_REVOKE_REASON RevokeReason,
+    _In_opt_ HANDLE ServiceProcessId)
+{
+    OacEvidencePublish(
+        SessionId,
+        Generation,
+        OAC_V5_RULE_SESSION_LOST,
+        OAC_V5_EVENT_REVOCATION,
+        OAC_V5_OBSERVATION_CRITICAL,
+        OAC_V5_POLICY_CRITICAL,
+        OAC_V5_CONFIDENCE_HIGH,
+        OAC_V5_CATEGORY_SERVICE,
+        ServiceProcessId,
+        NULL,
+        NULL,
+        RevokeReason,
+        OAC_V5_EVIDENCE_KERNEL_SOURCE);
+}
+
+static VOID OacApplyEvidenceLossLocked(
+    _Inout_ POAC_DEVICE_EXTENSION Extension,
+    _Inout_ POAC_SESSION Session)
+{
+    /* Callback publishers only latch queue loss under the evidence spin lock.
+     * Session operations apply the production revocation here, under the
+     * existing session lock, so callbacks never wait on a push lock. */
+    if (!OacEvidenceHasAlertLoss(
+            &Session->SessionId,
+            Session->Generation))
+    {
+        return;
+    }
+    if (Session->Mode == OAC_V5_SESSION_PRODUCTION &&
+        Session->State < OAC_V5_SESSION_REVOKED)
+    {
+        OacClearLaunchState(Session);
+        Session->State = OAC_V5_SESSION_REVOKED;
+        Session->RevokeReason = OAC_V5_REVOKE_EVIDENCE_LOSS;
+        OacRecordSessionLossLocked(
+            Extension,
+            Session,
+            OAC_V5_REVOKE_EVIDENCE_LOSS);
+    }
 }
 
 static VOID OacRevokeLaunchLocked(
@@ -463,6 +515,10 @@ NTSTATUS OacSessionCleanup(
     POAC_FILE_CONTEXT context = OacGetFileContext(FileObject);
     POAC_SESSION session;
     BOOLEAN releaseDeviceReference = FALSE;
+    BOOLEAN publishSessionLoss = FALSE;
+    OAC_V5_SESSION_ID evidenceSessionId = { 0 };
+    ULONGLONG evidenceGeneration = 0;
+    HANDLE serviceProcessId = NULL;
 
     *RevokedOwner = NULL;
     if (context == NULL) return STATUS_SUCCESS;
@@ -484,10 +540,16 @@ NTSTATUS OacSessionCleanup(
         *RevokedOwner = session->ServiceProcess;
     }
     session->Cleaned = TRUE;
-    OacRecordSessionLossLocked(
+    publishSessionLoss = OacRecordSessionLossLocked(
         extension,
         session,
         OAC_V5_REVOKE_FILE_CLEANUP);
+    if (publishSessionLoss)
+    {
+        evidenceSessionId = session->SessionId;
+        evidenceGeneration = session->Generation;
+        serviceProcessId = session->ServiceProcessId;
+    }
     session->State = OAC_V5_SESSION_CLOSING;
     if (session->RevokeReason == OAC_V5_REVOKE_NONE)
     {
@@ -499,6 +561,15 @@ NTSTATUS OacSessionCleanup(
         session,
         &releaseDeviceReference);
     OacUnlockExclusive(&extension->SessionLock);
+
+    if (publishSessionLoss)
+    {
+        OacPublishSessionLoss(
+            &evidenceSessionId,
+            evidenceGeneration,
+            OAC_V5_REVOKE_FILE_CLEANUP,
+            serviceProcessId);
+    }
 
     ExRundownCompleted(&session->IoRundown);
     ExWaitForRundownProtectionRelease(&session->IoRundown);
@@ -672,11 +743,15 @@ NTSTATUS OacSessionClaim(
     {
         context->Session = session;
         extension->ActiveSession = session;
+        OacEvidenceBeginSession(
+            &session->SessionId,
+            session->Generation,
+            session->Mode);
         Snapshot->SessionId = session->SessionId;
         Snapshot->Generation = session->Generation;
         Snapshot->State = session->State;
         Snapshot->ServiceProcessId =
-            HandleToULong(session->ServiceProcessId);
+            (ULONGLONG)(ULONG_PTR)session->ServiceProcessId;
         status = STATUS_SUCCESS;
     }
     OacUnlockExclusive(&extension->SessionLock);
@@ -711,8 +786,12 @@ static NTSTATUS OacSessionAcquireCore(
         return STATUS_FILE_CLOSED;
     }
 
-    OacLockShared(&extension->SessionLock);
+    OacLockExclusive(&extension->SessionLock);
     session = context->Session;
+    if (session != NULL && extension->ActiveSession == session)
+    {
+        OacApplyEvidenceLossLocked(extension, session);
+    }
     if (session == NULL || extension->ActiveSession != session ||
         session->ControlFile != FileObject ||
         session->ServiceProcess != PsGetCurrentProcess() ||
@@ -746,7 +825,7 @@ static NTSTATUS OacSessionAcquireCore(
         Lease->Session = session;
         status = STATUS_SUCCESS;
     }
-    OacUnlockShared(&extension->SessionLock);
+    OacUnlockExclusive(&extension->SessionLock);
     return status;
 }
 
@@ -802,6 +881,16 @@ VOID OacSessionRelease(_Inout_ POAC_SESSION_LEASE Lease)
     if (session != NULL) ExReleaseRundownProtection(&session->IoRundown);
 }
 
+BOOLEAN OacSessionLeaseIsDiagnostic(
+    _In_ const OAC_SESSION_LEASE* Lease)
+{
+    const POAC_SESSION session = Lease != NULL
+        ? (POAC_SESSION)Lease->Session
+        : NULL;
+    return session != NULL &&
+        session->Mode == OAC_V5_SESSION_DIAGNOSTIC;
+}
+
 NTSTATUS OacSessionSnapshot(
     _In_ const OAC_SESSION_LEASE* Lease,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot)
@@ -812,6 +901,7 @@ NTSTATUS OacSessionSnapshot(
     if (session == NULL) return STATUS_INVALID_PARAMETER;
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     (VOID)OacExpirePendingLaunchLocked(session, KeQueryInterruptTime());
     OacFillSnapshotLocked(session, Snapshot);
     OacUnlockExclusive(&extension->SessionLock);
@@ -840,6 +930,7 @@ NTSTATUS OacSessionRevoke(
 
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     if (session->Cleaned || extension->ActiveSession != session)
     {
         status = STATUS_FILE_CLOSED;
@@ -887,6 +978,7 @@ NTSTATUS OacSessionBindTarget(
     }
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     if (session->Cleaned || extension->ActiveSession != session)
     {
         status = STATUS_FILE_CLOSED;
@@ -967,6 +1059,7 @@ NTSTATUS OacSessionArmLaunch(
 
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     if (session->Cleaned || extension->ActiveSession != session)
     {
         status = STATUS_FILE_CLOSED;
@@ -1027,6 +1120,7 @@ NTSTATUS OacSessionCancelLaunch(
 
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     if (session->Cleaned || extension->ActiveSession != session)
     {
         status = STATUS_FILE_CLOSED;
@@ -1094,6 +1188,7 @@ NTSTATUS OacSessionConfirmTarget(
 
     extension = OacExtension(session->DeviceObject);
     OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
     if (session->Cleaned || extension->ActiveSession != session)
     {
         status = STATUS_FILE_CLOSED;
@@ -1244,6 +1339,7 @@ OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(
         OacUnlockExclusive(&extension->SessionLock);
         return OacSessionProcessCreateIgnored;
     }
+    OacApplyEvidenceLossLocked(extension, session);
 
     creatorMatches = !session->Cleaned && !session->ServiceExited &&
         session->ServiceProcess == CreatorProcess &&
@@ -1311,6 +1407,10 @@ BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process)
     OacLockShared(&extension->SessionLock);
     session = (POAC_SESSION)extension->ActiveSession;
     if (session != NULL && !session->Cleaned &&
+        (session->Mode != OAC_V5_SESSION_PRODUCTION ||
+         !OacEvidenceHasAlertLoss(
+             &session->SessionId,
+             session->Generation)) &&
         OacSessionAcceptsControl(session->State) &&
         session->ServiceProcess == Process)
     {
@@ -1322,17 +1422,71 @@ BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process)
 
 BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process)
 {
+    OAC_V5_SESSION_ID sessionId;
+    ULONGLONG generation;
+
+    return OacSessionCaptureTargetEvidenceIdentity(
+        Process,
+        NULL,
+        &sessionId,
+        &generation);
+}
+
+BOOLEAN OacSessionCaptureEvidenceIdentity(
+    _Out_ POAC_V5_SESSION_ID SessionId,
+    _Out_ PULONGLONG Generation)
+{
+    PDEVICE_OBJECT deviceObject = g_SessionDevice;
+    POAC_DEVICE_EXTENSION extension;
+    POAC_SESSION session;
+    BOOLEAN captured = FALSE;
+
+    if (SessionId == NULL || Generation == NULL)
+        return FALSE;
+    RtlZeroMemory(SessionId, sizeof(*SessionId));
+    *Generation = 0;
+    if (deviceObject == NULL) return FALSE;
+
+    extension = OacExtension(deviceObject);
+    OacLockShared(&extension->SessionLock);
+    session = (POAC_SESSION)extension->ActiveSession;
+    if (session != NULL && !session->Cleaned)
+    {
+        *SessionId = session->SessionId;
+        *Generation = session->Generation;
+        captured = TRUE;
+    }
+    OacUnlockShared(&extension->SessionLock);
+    return captured;
+}
+
+BOOLEAN OacSessionCaptureTargetEvidenceIdentity(
+    _In_opt_ PEPROCESS Process,
+    _In_opt_ HANDLE ProcessId,
+    _Out_ POAC_V5_SESSION_ID SessionId,
+    _Out_ PULONGLONG Generation)
+{
     PDEVICE_OBJECT deviceObject = g_SessionDevice;
     POAC_DEVICE_EXTENSION extension;
     POAC_SESSION session;
     BOOLEAN matches = FALSE;
 
-    if (deviceObject == NULL || Process == NULL) return FALSE;
+    if (SessionId == NULL || Generation == NULL)
+        return FALSE;
+    RtlZeroMemory(SessionId, sizeof(*SessionId));
+    *Generation = 0;
+    if (deviceObject == NULL || (Process == NULL && ProcessId == NULL))
+        return FALSE;
+
     extension = OacExtension(deviceObject);
     OacLockShared(&extension->SessionLock);
     session = (POAC_SESSION)extension->ActiveSession;
-    if (session != NULL && session->TargetProcess == Process)
+    if (session != NULL && session->TargetProcess != NULL &&
+        (Process == NULL || session->TargetProcess == Process) &&
+        (ProcessId == NULL || session->TargetProcessId == ProcessId))
     {
+        *SessionId = session->SessionId;
+        *Generation = session->Generation;
         matches = TRUE;
     }
     OacUnlockShared(&extension->SessionLock);
@@ -1368,6 +1522,9 @@ VOID OacSessionNotifyProcessExit(
     PEPROCESS targetProcess = NULL;
     BOOLEAN releaseDeviceReference = FALSE;
     BOOLEAN releaseControlObjects = FALSE;
+    BOOLEAN publishSessionLoss = FALSE;
+    OAC_V5_SESSION_ID evidenceSessionId = { 0 };
+    ULONGLONG evidenceGeneration = 0;
 
     if (deviceObject == NULL) return;
     extension = OacExtension(deviceObject);
@@ -1380,10 +1537,15 @@ VOID OacSessionNotifyProcessExit(
         {
             session->ServiceExited = TRUE;
             releaseControlObjects = TRUE;
-            OacRecordSessionLossLocked(
+            publishSessionLoss = OacRecordSessionLossLocked(
                 extension,
                 session,
                 OAC_V5_REVOKE_SERVICE_EXIT);
+            if (publishSessionLoss)
+            {
+                evidenceSessionId = session->SessionId;
+                evidenceGeneration = session->Generation;
+            }
             OacClearLaunchState(session);
             if (session->State < OAC_V5_SESSION_REVOKED)
             {
@@ -1410,7 +1572,15 @@ VOID OacSessionNotifyProcessExit(
     }
     OacUnlockExclusive(&extension->SessionLock);
 
-    UNREFERENCED_PARAMETER(ProcessId);
+    if (publishSessionLoss)
+    {
+        OacPublishSessionLoss(
+            &evidenceSessionId,
+            evidenceGeneration,
+            OAC_V5_REVOKE_SERVICE_EXIT,
+            ProcessId);
+    }
+
     if (targetProcess != NULL) ObDereferenceObject(targetProcess);
     if (releaseControlObjects) OacReleaseControlObjects(session);
     if (releaseDeviceReference) OacSessionReleaseReference(session);

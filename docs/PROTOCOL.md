@@ -3,8 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including the job/liveness revision.
+acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including job/liveness and typed
+evidence transport.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -12,28 +13,30 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050003`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050004`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
 function number and is validated even when every other field is well formed.
 
-The current driver advertises session control, launch-ticket, and session-liveness capabilities.
-Negotiate, claim, status, explicit revoke, arm, cancel, and confirm are available:
+The current driver advertises session control, launch-ticket, session-liveness, typed-evidence, and
+paged-snapshot capabilities. Negotiate, claim, status, explicit revoke, launch control, evidence
+read, and snapshot management are available:
 
 | Function | IOCTL | Input | Output | Current behavior |
 |---:|---|---|---|---|
 | `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
+| `0x814` | `IOCTL_OAC_READ_EVIDENCE` | 80-byte evidence request | 136-byte prefix plus up to 16 fixed records | Reads the retained alert or overwrite-event channel; alert reads acknowledge only previously delivered records |
+| `0x815` | `IOCTL_OAC_MANAGE_SNAPSHOT` | 96-byte snapshot request | 152-byte prefix plus up to 16 fixed records | Opens, reads, or closes one frozen, expiring kernel-module snapshot |
 | `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 136-byte status response | Returns correlated session state, identity, capability, counters, and the monotonic session-loss latch |
 | `0x817` | `IOCTL_OAC_V5_REVOKE_SESSION` | 56-byte revoke request | 80-byte revoke response | Idempotently revokes the caller's exact session and records requested-shutdown provenance |
 | `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2112-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
 | `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
-The shared header reserves config, scan, event-read, and CPU-snapshot IOCTL/message IDs for later
-work. They are not dispatched by the production path and their capabilities are not advertised.
-`OAC_V5_CAP_TYPED_EVENTS` therefore remains clear.
+The shared header still reserves production configuration and scan IOCTL/message IDs for later
+work. The separate diagnostic compatibility ABI retains its existing scan and CPU-snapshot paths.
 
 ### Launch transaction
 
@@ -86,8 +89,9 @@ Shared validators reject:
 - response/request mismatches in message type, request ID, session ID, or generation;
 - overflow, misalignment, out-of-range payloads, hidden bytes after a payload, and malformed UTF-16.
 
-Negotiation currently returns strict-length support. It reports diagnostic compatibility only
-when `LabMode=1` was read at driver start.
+Negotiation returns strict-length and typed-event support, the exact evidence page bound, and the
+maximum buffered output size. It reports diagnostic compatibility only when `LabMode=1` was read
+at driver start.
 
 Protocol families are mutually exclusive per file. Negotiation is serialized with claim under the
 session lock. Once a file negotiates production authority, privileged diagnostic calls cannot create
@@ -120,8 +124,9 @@ The service issues an explicit, correlated revoke before closing a healthy contr
 Explicit revoke is idempotent. The driver records the first cleanup or service-exit cause if
 explicit revoke did not win the race; driver shutdown also closes the active session before device
 teardown. A device-lifetime sequence and last-cause pair are returned by status, so a replacement
-restricted service can distinguish a fresh driver lifetime from a prior controller loss. This latch
-is not the planned production alert transport.
+restricted service can distinguish a fresh driver lifetime from a prior controller loss. This
+latch is independent of the retained production alert channel and remains useful when the
+controlling service is no longer available to read that channel.
 
 If cleanup occurs while a referenced target is still live, the cleaned session remains as an
 unusable tombstone. It blocks a replacement claim until the target exit callback releases the
@@ -129,7 +134,7 @@ target and retires the session. This prevents a new controller from inheriting a
 stale protection state still exists. The kernel invariant is implemented in source; its target-live
 service-transaction path passed the named VM campaign.
 
-### Typed event schema
+### Typed evidence transport
 
 `OAC_V5_EVENT_RECORD` is a defined and strictly validated 560-byte schema. It separates stable rule
 and event IDs, observation severity, policy severity, confidence, category, payload type, and
@@ -139,8 +144,35 @@ Optional service provenance uses an ingestion timestamp and service sequence tha
 together, and ingestion cannot predate the source timestamp. Display text is optional payload and
 has no policy meaning.
 
-The driver does not yet publish production event records. Separate alert, event, and snapshot transports,
-acknowledgement, cursors, and paging remain WP-06 work.
+High and critical records enter a 32-record retained alert queue. Reading does not remove them;
+the controller may acknowledge only a monotonically increasing sequence that the same session has
+already received. Alert reads reject cursors older than the acknowledged sequence or newer than the
+highest sequence previously delivered to that controller. If the queue is full, existing alerts
+remain intact, the rejected record receives the next publication sequence, and the driver
+permanently records the first lost sequence plus high/critical loss counts. A production session
+applies that latch as an evidence-loss revocation on its next authenticated operation. The queue
+publisher only fills one fixed record and copies it under a spin lock; it does not allocate, acquire
+a push lock, or perform user-mode work.
+Target-derived callbacks capture the exact session ID/generation under the existing session
+synchronization before publication, and the queue rejects the record if that identity changed.
+
+Info, low, and medium records use an independent 256-record overwrite queue. Its cursor is
+non-destructive, and overwrite advances the first available sequence while recording an exact
+drop count and first gap. Inventory pressure therefore cannot overwrite a retained alert.
+
+One session may also own one frozen kernel-module snapshot. `OPEN` captures a bounded AuxKlib
+module inventory, assigns random snapshot identity plus scan and cursor generations, and sets a
+30-second boot-relative expiration. `READ` returns immutable pages by cursor; `CLOSE` retires the
+snapshot. Collection failure is returned as a validated `FAILED` snapshot state with an exact NT
+status rather than an ambiguous transport failure. A revoked session may finish reading existing
+evidence but cannot start new snapshot work.
+
+The restricted service polls alerts every 250 ms while waiting for stop, failure, or target exit.
+It validates every response and correlation tuple, stamps each local copy with an ingestion time and
+monotonic service sequence, performs a final bounded drain on orderly stop or target transition, and
+acknowledges records on the following poll. Alert loss, a revoked response, or exhausted handoff
+capacity is a fail-closed service error. Authenticated upload and server acknowledgement remain
+WP-11 rather than being simulated locally.
 
 ### Launcher/service IPC
 
@@ -164,25 +196,32 @@ The diagnostic finding ring and report path retain their known limitations: one 
 destructive batch reads without acknowledgement, and display-oriented user-mode re-sequencing. It is not a
 fallback production authority and must remain unavailable when lab mode is off.
 
+`shared/protocol/oac_test.h` defines one separately versioned injection request used only to stress
+the transport in the disposable VM. The driver accepts it only with `LabMode=1` from the owner of an
+authenticated diagnostic session; it is not advertised as a production capability.
+
 ## Test coverage and acceptance
 
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
-request/response validation, correlation, the session transition matrix, and hostile binary and
-UTF-16 event payloads.
+request/response validation, evidence and snapshot correlation, the session transition matrix, and
+hostile binary and UTF-16 event payloads.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,
 bidirectional diagnostic/production per-file exclusion, same-file and wrong-file authorization, a
 duplicated-handle wrong-process check, cleanup authority loss, fresh session ID/generation checks,
-and a bounded four-thread status/close race after 32 successful status calls per thread. It also
-verifies explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The disposable-VM execution passed at
-implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 Pro build
-26100. The campaign accepted all five protocol executions under the baseline and standard Driver
-Verifier phases, with zero crash events or minidumps and Verifier inactive at completion.
+and a bounded four-thread status/close race after 32 successful status calls per thread. The current
+source additionally exercises retained alerts, monotonic acknowledgement, explicit event gaps,
+10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
+alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
+explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
+sessions cannot invoke production launch operations. The complete WP-01 through WP-06 suite passed
+at acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 Pro build
+26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
+cases, under the baseline and standard Driver Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, and IPC validation.
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
-termination, recovery, and monotonic session-loss reporting in the same named campaign. Event
-transport, signed manifests and policy, and authenticated backend sessions remain separate work
+termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
+manifests and policy, bounded scheduling, and authenticated backend sessions remain separate work
 packages.

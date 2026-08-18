@@ -20,6 +20,7 @@ namespace
 {
 constexpr wchar_t kDevicePath[] = L"\\\\.\\OAC";
 constexpr DWORD kPipeIoTimeoutMs = 5000;
+constexpr DWORD kAlertPollIntervalMs = 250;
 constexpr ULONG kLaunchTimeToLiveMs = 10000;
 constexpr wchar_t kPipeSddl[] =
     L"O:SYG:SYD:P"
@@ -27,6 +28,10 @@ constexpr wchar_t kPipeSddl[] =
     L"(A;;GA;;;SY)"
     L"(A;;GA;;;" OAC_SERVICE_SID L")"
     L"(A;;0x0012019B;;;IU)";
+
+using AlertReadStorage = std::array<std::byte,
+    FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE, Records) +
+    OAC_EVIDENCE_MAX_RECORDS_PER_PAGE * sizeof(OAC_V5_EVENT_RECORD)>;
 
 class UniqueHandle
 {
@@ -1012,6 +1017,65 @@ DWORD ReadDriverStatus(
     return ERROR_SUCCESS;
 }
 
+DWORD ReadAlertBatch(
+    HANDLE driver,
+    const OAC_V5_SESSION_ID& sessionId,
+    ULONGLONG generation,
+    ULONGLONG afterSequence,
+    ULONGLONG acknowledgeThrough,
+    OAC_EVIDENCE_READ_RESPONSE*& response,
+    AlertReadStorage& storage)
+{
+    OAC_EVIDENCE_READ_REQUEST request{};
+    if (!InitializeDriverRequest(
+            request.Header,
+            static_cast<ULONG>(sizeof(request)),
+            OAC_MESSAGE_READ_EVIDENCE,
+            sessionId,
+            generation))
+    {
+        return ERROR_GEN_FAILURE;
+    }
+    request.Channel = OAC_EVIDENCE_CHANNEL_ALERT;
+    request.MaximumRecords = OAC_EVIDENCE_MAX_RECORDS_PER_PAGE;
+    request.AfterSequence = afterSequence;
+    request.AcknowledgeThrough = acknowledgeThrough;
+
+    response = reinterpret_cast<OAC_EVIDENCE_READ_RESPONSE*>(storage.data());
+    DWORD returned = 0;
+    if (!DeviceIoControl(
+            driver,
+            IOCTL_OAC_READ_EVIDENCE,
+            &request,
+            static_cast<DWORD>(sizeof(request)),
+            response,
+            static_cast<DWORD>(storage.size()),
+            &returned,
+            nullptr))
+    {
+        return GetLastError();
+    }
+    if (OacValidateEvidenceReadResponse(response, returned) != OAC_V5_VALID ||
+        OacValidateEvidenceReadCorrelation(
+            &request,
+            response) != OAC_V5_VALID ||
+        response->Header.Status != 0 ||
+        response->Header.Reason != OAC_V5_REASON_NONE ||
+        response->Channel != OAC_EVIDENCE_CHANNEL_ALERT)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+ULONGLONG CurrentSystemTime100ns() noexcept
+{
+    FILETIME time{};
+    GetSystemTimePreciseAsFileTime(&time);
+    return (static_cast<ULONGLONG>(time.dwHighDateTime) << 32) |
+        time.dwLowDateTime;
+}
+
 uint32_t LaunchFailureDetailFromStatus(
     OAC_V5_REVOKE_REASON revokeReason) noexcept
 {
@@ -1392,16 +1456,22 @@ DWORD OpenAndClaimDriver(
             nullptr))
         return GetLastError();
 
-    constexpr ULONG requiredProtocol = OAC_V5_PROTOCOL_STRICT_LENGTHS;
+    constexpr ULONG requiredProtocol = OAC_V5_PROTOCOL_STRICT_LENGTHS |
+        OAC_V5_PROTOCOL_TYPED_EVENTS;
     constexpr ULONG requiredCapabilities =
         OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-        OAC_V5_CAP_SESSION_LIVENESS;
+        OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
+        OAC_V5_CAP_PAGED_SNAPSHOTS;
     if (OacV5ValidateNegotiateResponse(&negotiated, returned) != OAC_V5_VALID ||
         OacV5ValidateCorrelation(
             &negotiate.Header, &negotiated.Header) != OAC_V5_VALID ||
         negotiated.Header.Status != 0 ||
         negotiated.Header.Reason != OAC_V5_REASON_NONE ||
         negotiated.Header.Flags != 0 ||
+        negotiated.MaximumEventCount !=
+            OAC_EVIDENCE_MAX_RECORDS_PER_PAGE ||
+        negotiated.MaximumOutputSize <
+            static_cast<ULONG>(sizeof(AlertReadStorage)) ||
         (negotiated.Capabilities & requiredCapabilities) !=
             requiredCapabilities ||
         (negotiated.ProtocolFlags & requiredProtocol) != requiredProtocol)
@@ -1551,16 +1621,69 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
     }
 }
 
-DWORD ServiceHost::Wait() const noexcept
+DWORD ServiceHost::PollAlerts() noexcept
+{
+    alignas(OAC_EVIDENCE_READ_RESPONSE) AlertReadStorage storage{};
+    OAC_EVIDENCE_READ_RESPONSE* response = nullptr;
+    const DWORD error = ReadAlertBatch(
+        driver_,
+        driverSessionId_,
+        driverSessionGeneration_,
+        alertCursor_,
+        alertAcknowledgement_,
+        response,
+        storage);
+    if (error != ERROR_SUCCESS) return error;
+    if (response->LossLatched != 0 ||
+        (response->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0)
+    {
+        return ERROR_INVALID_DATA;
+    }
+    if (response->RecordCount > alerts_.size() - alertCount_)
+        return ERROR_BUFFER_OVERFLOW;
+    const ULONGLONG ingestionTime = CurrentSystemTime100ns();
+    for (ULONG index = 0; index < response->RecordCount; ++index)
+    {
+        if (serviceEvidenceSequence_ == ~0ULL)
+            return ERROR_ARITHMETIC_OVERFLOW;
+        OAC_V5_EVENT_RECORD record = response->Records[index];
+        record.IngestionTimestamp100ns = ingestionTime >= record.Timestamp100ns
+            ? ingestionTime
+            : record.Timestamp100ns;
+        record.ServiceSequence = ++serviceEvidenceSequence_;
+        if (OacV5ValidateEventRecord(&record, sizeof(record)) != OAC_V5_VALID)
+            return ERROR_INVALID_DATA;
+        alerts_[alertCount_++] = record;
+        alertCursor_ = response->Records[index].Sequence;
+    }
+    if (response->RecordCount != 0)
+        alertAcknowledgement_ = alertCursor_;
+    return ERROR_SUCCESS;
+}
+
+DWORD ServiceHost::Wait() noexcept
 {
     HANDLE waits[] = {stopEvent_, fatalEvent_, targetReadyEvent_};
-    DWORD wait = WaitForMultipleObjects(3, waits, FALSE, INFINITE);
-    if (wait == WAIT_OBJECT_0) return ERROR_SUCCESS;
+    DWORD wait;
+    for (;;)
+    {
+        wait = WaitForMultipleObjects(
+            3, waits, FALSE, kAlertPollIntervalMs);
+        if (wait != WAIT_TIMEOUT) break;
+        const DWORD error = PollAlerts();
+        if (error != ERROR_SUCCESS) return error;
+    }
     if (wait == WAIT_OBJECT_0 + 1)
         return static_cast<DWORD>(InterlockedCompareExchange(
             const_cast<volatile LONG*>(&fatalError_),
             ERROR_SUCCESS,
             ERROR_SUCCESS));
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
+    {
+        const DWORD error = PollAlerts();
+        if (error != ERROR_SUCCESS) return error;
+    }
+    if (wait == WAIT_OBJECT_0) return ERROR_SUCCESS;
     if (wait != WAIT_OBJECT_0 + 2)
     {
         const DWORD error = GetLastError();
@@ -1570,15 +1693,25 @@ DWORD ServiceHost::Wait() const noexcept
         return ERROR_INVALID_HANDLE;
 
     HANDLE targetWaits[] = {stopEvent_, fatalEvent_, targetProcess_};
-    wait = WaitForMultipleObjects(3, targetWaits, FALSE, INFINITE);
-    if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
-        return ERROR_SUCCESS;
+    for (;;)
+    {
+        wait = WaitForMultipleObjects(
+            3, targetWaits, FALSE, kAlertPollIntervalMs);
+        if (wait != WAIT_TIMEOUT) break;
+        const DWORD error = PollAlerts();
+        if (error != ERROR_SUCCESS) return error;
+    }
     if (wait == WAIT_OBJECT_0 + 1)
     {
         return static_cast<DWORD>(InterlockedCompareExchange(
             const_cast<volatile LONG*>(&fatalError_),
             ERROR_SUCCESS,
             ERROR_SUCCESS));
+    }
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
+    {
+        const DWORD error = PollAlerts();
+        return error == ERROR_SUCCESS ? ERROR_SUCCESS : error;
     }
     const DWORD error = GetLastError();
     return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;

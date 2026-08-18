@@ -1,6 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-05 controls accepted on the named Windows 11 build 26100 campaign
+**Status:** WP-01 through WP-06 controls accepted at commit
+`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -31,7 +32,7 @@ trust boundaries, adversaries, and failure behavior.
 | Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | The named campaign observed exact sequence `0,1,2` with `none`, `service exit`, then `requested shutdown` |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
-| Typed evidence | Stable production IDs and a provenance-preserving record schema are defined with pure validation tests | Test source present; production transport planned |
+| Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Policy, manifest, backend | No production trust boundary exists | Planned |
 
@@ -114,18 +115,23 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   membership while the process is suspended, and closes the job on every stop path.
 - Graceful stop requests an idempotent driver-session revoke. Cleanup and service-exit races record
   only the first loss cause, and a monotonic latch makes prior loss visible to a replacement service.
+- High/critical records are retained until acknowledged. Alert overflow preserves queued records,
+  records exact lost-severity provenance, and revokes production authority on the next authenticated
+  session operation; callback publication remains fixed-size and nonblocking. The service preserves
+  kernel provenance, adds local ingestion ordering, and drains once more before orderly shutdown.
+- Lower-priority event overwrite cannot consume alert capacity, and frozen snapshot work is paged,
+  identity-bound, expiring, and unavailable for new work after revocation.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-05 statements combine source behavior with one exact platform acceptance run. The
-current driver-backed production, service installation, lifecycle, race, job/liveness, and standard
-Driver Verifier campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That
-result does not replace the broader supported-platform, effective-right, compatibility, or
-production-deployment matrix.
+WP-01 through WP-06 statements combine source behavior with one exact platform acceptance run. The
+current driver-backed production, service installation, lifecycle, race, job/liveness, typed
+evidence, snapshot, and standard Driver Verifier campaign passed on Windows 11 build 26100 with zero
+crash events and minidumps. That result does not replace the broader supported-platform,
+effective-right, compatibility, or production-deployment matrix.
 
 ## Planned controls
 
 - Signed-manifest and stable executable-identity verification before a launch ticket is armed.
-- Separate critical alert, operational event, and paged snapshot transports.
 - Independent health and bounded scan workers.
 - Central typed policy, signed game manifests, signed remote policy, and authenticated backend
   lease/upload.
@@ -141,7 +147,7 @@ text has no policy meaning in the production schema.
 Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
 path can fail its gate after detecting the latch; the production launch transaction closes the
 creation-time target-binding gap but does not replace Windows Code Integrity or the later signed
-manifest, policy, and evidence-transport controls.
+manifest, policy, and authenticated backend controls.
 
 ## Unsupported guarantees
 

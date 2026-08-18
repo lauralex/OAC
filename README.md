@@ -15,7 +15,7 @@ then resume its first thread.
 
 > [!IMPORTANT]
 > OAC is an engineering reference, not a production-ready anti-cheat release. It does not yet include
-> production telemetry delivery, signed game manifests or policy, authenticated backend leases, a
+> authenticated backend evidence delivery, signed game manifests or policy, backend leases, a
 > supported compatibility matrix, or production driver signing. Never install the
 > disposable test package on a workstation or production system.
 
@@ -31,6 +31,8 @@ OAC focuses on security properties that are easy to lose in a Windows anti-cheat
   remain in user mode; callbacks and processor sampling stay IRQL-appropriate.
 - **Lifetime rules are explicit.** Sessions are bound to exact process and file objects, use rundown,
   and retain a live-target tombstone when cleanup cannot safely retire immediately.
+- **Evidence loss is explicit.** Important alerts remain until acknowledged, lower-priority event
+  gaps are counted, and large inventories use immutable bounded snapshots.
 - **Claims are evidence-bound.** Driver-backed behavior is exercised in a networkless disposable VM
   under standard Driver Verifier, while broader compatibility remains explicitly unclaimed.
 
@@ -44,7 +46,7 @@ flowchart LR
     Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
     Job --> Target["Protected target tree"]
     Driver -->|"creation-time bind"| Target
-    Driver -->|"status and bounded protection"| Service
+    Driver -->|"status and typed alerts"| Service
 ```
 
 The launcher exposes status and one serialized executable-launch request. The service authenticates
@@ -70,6 +72,11 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
 - Service-owned target-tree lifetime with kill-on-close containment on graceful stop or service
   failure, plus explicit idempotent driver-session revocation.
 - A monotonic session-loss status latch for service recovery diagnostics.
+- Separate bounded channels for retained high/critical alerts and lower-priority operational
+  events, with explicit sequence, acknowledgement, and loss metadata.
+- Frozen, expiring kernel-module snapshots with stable identifiers and cursor-based paging.
+- A bounded service alert poll path that fails closed on alert loss, session revocation, or local
+  handoff exhaustion.
 - Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
 - Demand-start driver and service installation with strict package, service-policy, and cleanup
   verification in the disposable test workflow.
@@ -85,7 +92,6 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Production alert, event, and snapshot transport.
 - Bounded service scheduling and centralized typed policy.
 - Stable executable identity plus signed manifests and policy.
 - Authenticated backend sessions, leases, and evidence acknowledgement.
@@ -150,15 +156,15 @@ does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 
-Implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed:
+Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `314/314` driver-free protocol tests in both configurations;
+- `406/406` driver-free protocol tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
 - a networkless Windows 11 build 26100 campaign with 29 exact results, standard Driver Verifier,
-  verified job ownership, service-crash and graceful-stop process-tree containment, and zero crashes
-  or minidumps.
+  verified job ownership, service-crash and graceful-stop process-tree containment, bounded typed
+  evidence transport and snapshots, and zero crashes or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

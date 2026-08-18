@@ -16,6 +16,7 @@
 #include "../../shared/oac_lease.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
+#include "../../shared/protocol/oac_test.h"
 
 extern "C" int OacV5CProbe(void);
 
@@ -39,6 +40,11 @@ static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72);
 static_assert(sizeof(OAC_CONFIRM_TARGET_RESPONSE) == 72);
 static_assert(sizeof(OAC_REVOKE_SESSION_REQUEST) == 56);
 static_assert(sizeof(OAC_REVOKE_SESSION_RESPONSE) == 80);
+static_assert(sizeof(OAC_EVIDENCE_READ_REQUEST) == 80);
+static_assert(offsetof(OAC_EVIDENCE_READ_RESPONSE, Records) == 136);
+static_assert(sizeof(OAC_SNAPSHOT_RECORD) == 560);
+static_assert(sizeof(OAC_SNAPSHOT_REQUEST) == 96);
+static_assert(offsetof(OAC_SNAPSHOT_RESPONSE, Records) == 152);
 static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
 static_assert(sizeof(OAC_IPC_RESPONSE) == 72);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
@@ -183,7 +189,7 @@ OAC_V5_NEGOTIATE_RESPONSE ValidNegotiateResponse()
         OAC_V5_CAP_TYPED_EVENTS;
     response.MaximumInputSize = OAC_V5_MAX_INPUT_SIZE;
     response.MaximumOutputSize = OAC_V5_MAX_OUTPUT_SIZE;
-    response.MaximumEventCount = OAC_V5_MAX_EVENT_COUNT;
+    response.MaximumEventCount = OAC_EVIDENCE_MAX_RECORDS_PER_PAGE;
     response.ProtocolFlags = OAC_V5_PROTOCOL_STRICT_LENGTHS |
         OAC_V5_PROTOCOL_TYPED_EVENTS;
     return response;
@@ -363,9 +369,129 @@ OAC_V5_EVENT_RECORD ValidEventRecord()
     return record;
 }
 
+OAC_EVIDENCE_READ_REQUEST ValidEvidenceRequest(ULONG channel)
+{
+    OAC_EVIDENCE_READ_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_MESSAGE_READ_EVIDENCE);
+    request.Channel = channel;
+    request.MaximumRecords = 2;
+    return request;
+}
+
+OAC_SNAPSHOT_ID ValidSnapshotId()
+{
+    return {0x1111222233334444ULL, 0xaaaabbbbccccddddULL};
+}
+
+OAC_SNAPSHOT_RECORD ValidSnapshotRecord(ULONGLONG index)
+{
+    OAC_SNAPSHOT_RECORD record{};
+    constexpr WCHAR name[] = L"\\SystemRoot\\System32\\ntoskrnl.exe";
+    record.Version = OAC_V5_VERSION;
+    record.Size = sizeof(record);
+    record.RecordType = OAC_SNAPSHOT_RECORD_KERNEL_MODULE;
+    record.Index = index;
+    record.Address = 0xfffff80000000000ULL + index * 0x100000ULL;
+    record.Length = 0x100000;
+    record.NameLength = static_cast<ULONG>(std::size(name) - 1);
+    std::memcpy(record.Name, name, sizeof(name));
+    return record;
+}
+
+OAC_SNAPSHOT_REQUEST ValidSnapshotRequest(ULONG operation)
+{
+    OAC_SNAPSHOT_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_MESSAGE_MANAGE_SNAPSHOT);
+    request.Operation = operation;
+    request.SnapshotType = OAC_SNAPSHOT_TYPE_KERNEL_MODULES;
+    if (operation == OAC_SNAPSHOT_OPERATION_OPEN)
+    {
+        request.MaximumRecords = 2;
+    }
+    else
+    {
+        request.SnapshotId = ValidSnapshotId();
+        request.CursorGeneration = 9;
+        if (operation == OAC_SNAPSHOT_OPERATION_READ)
+            request.MaximumRecords = 2;
+    }
+    return request;
+}
+
+constexpr std::size_t kEvidenceResponseSize =
+    offsetof(OAC_EVIDENCE_READ_RESPONSE, Records) +
+    2 * sizeof(OAC_V5_EVENT_RECORD);
+using EvidenceResponseStorage = std::array<std::byte, kEvidenceResponseSize>;
+
+OAC_EVIDENCE_READ_RESPONSE* ValidEvidenceResponse(
+    EvidenceResponseStorage& storage,
+    ULONG channel)
+{
+    storage.fill(std::byte{});
+    auto* response = reinterpret_cast<OAC_EVIDENCE_READ_RESPONSE*>(
+        storage.data());
+    FillSessionHeader(
+        response->Header,
+        static_cast<ULONG>(storage.size()),
+        OAC_MESSAGE_READ_EVIDENCE);
+    response->Channel = channel;
+    response->RecordCount = 2;
+    response->PublishedSequence = 12;
+    response->FirstAvailableSequence = 11;
+    response->LastAvailableSequence = 12;
+    response->Records[0] = ValidEventRecord();
+    response->Records[1] = ValidEventRecord();
+    response->Records[1].Sequence = 12;
+    if (channel == OAC_EVIDENCE_CHANNEL_ALERT)
+    {
+        response->Records[0].ObservationSeverity =
+            OAC_V5_OBSERVATION_HIGH;
+        response->Records[1].ObservationSeverity =
+            OAC_V5_OBSERVATION_HIGH;
+    }
+    return response;
+}
+
+constexpr std::size_t kSnapshotResponseSize =
+    offsetof(OAC_SNAPSHOT_RESPONSE, Records) +
+    2 * sizeof(OAC_SNAPSHOT_RECORD);
+using SnapshotResponseStorage = std::array<std::byte, kSnapshotResponseSize>;
+
+OAC_SNAPSHOT_RESPONSE* ValidSnapshotResponse(
+    SnapshotResponseStorage& storage)
+{
+    storage.fill(std::byte{});
+    auto* response = reinterpret_cast<OAC_SNAPSHOT_RESPONSE*>(
+        storage.data());
+    FillSessionHeader(
+        response->Header,
+        static_cast<ULONG>(storage.size()),
+        OAC_MESSAGE_MANAGE_SNAPSHOT);
+    response->SnapshotId = ValidSnapshotId();
+    response->ScanId = 5;
+    response->CreatedTimestamp100ns = 100;
+    response->ExpirationInterruptTime100ns = 200;
+    response->CursorGeneration = 9;
+    response->NextCursor = 2;
+    response->SnapshotType = OAC_SNAPSHOT_TYPE_KERNEL_MODULES;
+    response->State = OAC_SNAPSHOT_STATE_READY;
+    response->TotalItems = 2;
+    response->AvailableItems = 2;
+    response->RecordCount = 2;
+    response->Records[0] = ValidSnapshotRecord(0);
+    response->Records[1] = ValidSnapshotRecord(1);
+    return response;
+}
+
 void TestCodes(TestLog& log)
 {
-    const std::array<DWORD, 17> codes =
+    const std::array<DWORD, 18> codes =
     {
         IOCTL_OAC_PING,
         IOCTL_OAC_CONFIGURE,
@@ -377,13 +503,14 @@ void TestCodes(TestLog& log)
         IOCTL_OAC_V5_CLAIM_SESSION,
         IOCTL_OAC_V5_SET_CONFIG,
         IOCTL_OAC_V5_RUN_SCAN,
-        IOCTL_OAC_V5_READ_EVENTS,
-        IOCTL_OAC_V5_CPU_SNAPSHOT,
+        IOCTL_OAC_READ_EVIDENCE,
+        IOCTL_OAC_MANAGE_SNAPSHOT,
         IOCTL_OAC_V5_GET_STATUS,
         IOCTL_OAC_V5_REVOKE_SESSION,
         IOCTL_OAC_ARM_LAUNCH,
         IOCTL_OAC_CANCEL_LAUNCH,
-        IOCTL_OAC_CONFIRM_TARGET
+        IOCTL_OAC_CONFIRM_TARGET,
+        IOCTL_OAC_TEST_INJECT_EVIDENCE
     };
     const std::set<DWORD> unique(codes.begin(), codes.end());
     const std::array<OAC_V5_MESSAGE_TYPE, 11> messages =
@@ -392,8 +519,8 @@ void TestCodes(TestLog& log)
         OAC_V5_MESSAGE_CLAIM_SESSION,
         OAC_V5_MESSAGE_SET_CONFIG,
         OAC_V5_MESSAGE_RUN_SCAN,
-        OAC_V5_MESSAGE_READ_EVENTS,
-        OAC_V5_MESSAGE_CPU_SNAPSHOT,
+        OAC_MESSAGE_READ_EVIDENCE,
+        OAC_MESSAGE_MANAGE_SNAPSHOT,
         OAC_V5_MESSAGE_GET_STATUS,
         OAC_V5_MESSAGE_REVOKE_SESSION,
         OAC_MESSAGE_ARM_LAUNCH,
@@ -403,7 +530,9 @@ void TestCodes(TestLog& log)
     bool buffered = true;
     bool restricted = true;
     bool messageMatch = true;
-    for (std::size_t index = 6; index < codes.size(); ++index)
+    for (std::size_t index = 6;
+         index < 6 + messages.size();
+         ++index)
     {
         buffered = buffered && METHOD_FROM_CTL_CODE(codes[index]) == METHOD_BUFFERED;
         restricted = restricted &&
@@ -411,10 +540,17 @@ void TestCodes(TestLog& log)
         messageMatch = messageMatch &&
             ((codes[index] >> 2) & 0xFFFUL) == messages[index - 6];
     }
-    log.Expect("v4 and v5 IOCTLs are distinct", unique.size() == codes.size());
-    log.Expect("v5 IOCTLs use buffered I/O", buffered);
-    log.Expect("v5 IOCTLs require read and write access", restricted);
-    log.Expect("v5 message IDs match IOCTL functions", messageMatch);
+    buffered = buffered &&
+        METHOD_FROM_CTL_CODE(IOCTL_OAC_TEST_INJECT_EVIDENCE) == METHOD_BUFFERED;
+    restricted = restricted &&
+        ((IOCTL_OAC_TEST_INJECT_EVIDENCE >> 14) & 3UL) ==
+            OAC_V5_IOCTL_ACCESS;
+    log.Expect("diagnostic and production IOCTLs are distinct",
+        unique.size() == codes.size());
+    log.Expect("production and test IOCTLs use buffered I/O", buffered);
+    log.Expect("production and test IOCTLs require read and write access",
+        restricted);
+    log.Expect("production message IDs match IOCTL functions", messageMatch);
     log.Expect("first v5 message type is valid", OacV5MessageTypeValid(
         OAC_V5_MESSAGE_NEGOTIATE) != FALSE);
     log.Expect("last v5 message type is valid", OacV5MessageTypeValid(
@@ -444,7 +580,7 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050003UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050004UL);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -461,6 +597,28 @@ void TestBasicHelpers(TestLog& log)
         &launch) == OAC_V5_VALID);
     log.Expect("zero launch ID is invalid", OacValidateLaunchId(
         &zeroLaunch) == OAC_V5_INVALID_VALUE);
+    const OAC_SNAPSHOT_ID zeroSnapshot{};
+    const OAC_SNAPSHOT_ID snapshot{5, 6};
+    const OAC_SNAPSHOT_ID sameSnapshot{5, 6};
+    const OAC_SNAPSHOT_ID otherSnapshot{5, 7};
+    log.Expect("zero snapshot ID", OacSnapshotIdIsZero(
+        &zeroSnapshot) != FALSE);
+    log.Expect("nonzero snapshot ID", OacSnapshotIdIsZero(
+        &snapshot) == FALSE);
+    log.Expect("equal snapshot IDs", OacSnapshotIdEqual(
+        &snapshot, &sameSnapshot) != FALSE);
+    log.Expect("different snapshot IDs", OacSnapshotIdEqual(
+        &snapshot, &otherSnapshot) == FALSE);
+    log.Expect("null snapshot ID is not zero", OacSnapshotIdIsZero(
+        nullptr) == FALSE);
+    log.Expect("alert evidence channel", OacEvidenceChannelValid(
+        OAC_EVIDENCE_CHANNEL_ALERT) != FALSE);
+    log.Expect("event evidence channel", OacEvidenceChannelValid(
+        OAC_EVIDENCE_CHANNEL_EVENT) != FALSE);
+    log.Expect("unknown evidence channel", OacEvidenceChannelValid(0) == FALSE);
+    log.Expect("snapshot open operation", OacSnapshotOperationValid(
+        OAC_SNAPSHOT_OPERATION_OPEN) != FALSE);
+    log.Expect("unknown snapshot operation", OacSnapshotOperationValid(0) == FALSE);
     log.Expect("valid exact size", OacV5ValidateSize(64, 64, 32, 64) == OAC_V5_VALID);
     log.Expect("stated size mismatch", OacV5ValidateSize(64, 63, 32, 64) == OAC_V5_INVALID_LENGTH);
     log.Expect("invalid size bounds", OacV5ValidateSize(64, 64, 65, 64) == OAC_V5_INVALID_LENGTH);
@@ -1258,11 +1416,16 @@ void TestResponses(TestLog& log)
     log.Expect("status unknown config flag", OacV5ValidateStatusResponse(
         &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status = ValidStatusResponse();
+    status.EventsDropped = status.EventsWritten + 1;
+    log.Expect("status drop count cannot exceed published events",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
     status.Header.Flags = OAC_V5_RESPONSE_PARTIAL;
     log.Expect("status disallowed response flag", OacV5ValidateStatusResponse(
         &status, sizeof(status)) == OAC_V5_INVALID_FLAGS);
     status = ValidStatusResponse();
-    status.Header.MessageType = OAC_V5_MESSAGE_READ_EVENTS;
+    status.Header.MessageType = OAC_MESSAGE_READ_EVIDENCE;
     log.Expect("status response wrong message type", OacV5ValidateStatusResponse(
         &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
     status = ValidStatusResponse();
@@ -1357,6 +1520,10 @@ void TestCorrelationAndIds(TestLog& log)
         OAC_V5_RULE_SESSION_LOST) != FALSE);
     log.Expect("stable driver rule ID", OacV5RuleIdValid(
         OAC_V5_RULE_DRIVER_GATE_TRIP) != FALSE);
+    log.Expect("process-image rule uses the process namespace",
+        OAC_V5_RULE_PROCESS_IMAGE_LOADED == 0x00020002UL &&
+        (OAC_V5_RULE_PROCESS_IMAGE_LOADED & OAC_V5_RULE_GROUP_MASK) ==
+            OAC_V5_RULE_PROCESS_BASE);
     log.Expect("CPU rule uses integrity namespace",
         (OAC_V5_RULE_CPU_STATE & OAC_V5_RULE_GROUP_MASK) ==
             OAC_V5_RULE_INTEGRITY_BASE);
@@ -1582,6 +1749,391 @@ void TestLeasePolicy(TestLog& log)
         OacLeaseRequiresTermination(OAC_LEASE_INVALID) != 0);
     log.Expect("unknown lease state terminates the target",
         OacLeaseRequiresTermination(99) != 0);
+}
+
+void TestEvidenceTransport(TestLog& log)
+{
+    auto request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_ALERT);
+    log.Expect("valid alert read request", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_EVENT);
+    log.Expect("valid event read request", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    log.Expect("null evidence read request", OacValidateEvidenceReadRequest(
+        nullptr, sizeof(request)) == OAC_V5_INVALID_POINTER);
+    log.Expect("truncated evidence read request", OacValidateEvidenceReadRequest(
+        &request, sizeof(request) - 1) == OAC_V5_INVALID_LENGTH);
+    log.Expect("oversized evidence read request", OacValidateEvidenceReadRequest(
+        &request, sizeof(request) + 1) == OAC_V5_INVALID_LENGTH);
+
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_EVENT);
+    request.Header.MessageType = OAC_MESSAGE_MANAGE_SNAPSHOT;
+    log.Expect("evidence read message identity", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_MESSAGE_TYPE);
+    request = ValidEvidenceRequest(0);
+    log.Expect("evidence read channel", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_EVENT);
+    request.MaximumRecords = 0;
+    log.Expect("evidence read requires a page", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request.MaximumRecords = OAC_EVIDENCE_MAX_RECORDS_PER_PAGE + 1;
+    log.Expect("evidence read page is bounded", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_EVENT);
+    request.AcknowledgeThrough = 1;
+    log.Expect("event reads cannot acknowledge", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_ALERT);
+    request.AfterSequence = 11;
+    request.AcknowledgeThrough = 11;
+    log.Expect("alert reads carry acknowledgement", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request.AcknowledgeThrough = 12;
+    log.Expect("alert acknowledgement follows the read cursor",
+        OacValidateEvidenceReadRequest(
+            &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request.AcknowledgeThrough = 11;
+    request.Reserved = 1;
+    log.Expect("evidence request reserved field", OacValidateEvidenceReadRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_RESERVED);
+
+    alignas(OAC_EVIDENCE_READ_RESPONSE) EvidenceResponseStorage storage{};
+    auto* response = ValidEvidenceResponse(
+        storage,
+        OAC_EVIDENCE_CHANNEL_EVENT);
+    log.Expect("valid event read response", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) == OAC_V5_VALID);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_ALERT);
+    log.Expect("valid alert read response", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) == OAC_V5_VALID);
+    log.Expect("null evidence response", OacValidateEvidenceReadResponse(
+        nullptr, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_POINTER);
+    log.Expect("truncated evidence response", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size() - 1)) ==
+            OAC_V5_INVALID_LENGTH);
+    response->Header.Size--;
+    log.Expect("evidence response stated size", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_LENGTH);
+
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    response->Records[1].Sequence = response->Records[0].Sequence;
+    log.Expect("evidence records are strictly ordered",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    ++response->Records[0].Generation;
+    log.Expect("evidence records retain session identity",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    response->Records[0].ObservationSeverity = OAC_V5_OBSERVATION_HIGH;
+    log.Expect("event channel rejects alert records",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_ALERT);
+    response->Records[0].ObservationSeverity = OAC_V5_OBSERVATION_MEDIUM;
+    log.Expect("alert channel rejects event records",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    response->Header.Flags = OAC_V5_RESPONSE_MORE_DATA;
+    log.Expect("evidence more-data flag reflects the page",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response->RecordCount = 1;
+    response->Header.Size = static_cast<ULONG>(
+        offsetof(OAC_EVIDENCE_READ_RESPONSE, Records) +
+        sizeof(OAC_V5_EVENT_RECORD));
+    log.Expect("valid partial evidence page", OacValidateEvidenceReadResponse(
+        response, response->Header.Size) == OAC_V5_VALID);
+
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_ALERT);
+    response->LossLatched = 1;
+    response->DroppedCount = 3;
+    response->FirstLostSequence = 12;
+    response->LostHighCount = 2;
+    response->LostCriticalCount = 1;
+    log.Expect("valid alert-loss provenance", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) == OAC_V5_VALID);
+    response->DroppedCount = 2;
+    log.Expect("alert-loss counters reconcile", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_VALUE);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_ALERT);
+    response->LossLatched = 1;
+    response->DroppedCount = 1;
+    response->FirstLostSequence = 13;
+    response->LostHighCount = 1;
+    log.Expect("lost sequence cannot exceed published sequence",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    response->DroppedCount = 1;
+    log.Expect("event loss requires a latch", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_VALUE);
+    response->LossLatched = 1;
+    response->FirstLostSequence = 11;
+    log.Expect("valid event-loss provenance", OacValidateEvidenceReadResponse(
+        response, static_cast<ULONG>(storage.size())) == OAC_V5_VALID);
+    response->LostHighCount = 1;
+    log.Expect("event channel has no alert-loss counters",
+        OacValidateEvidenceReadResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_EVENT);
+    request.AfterSequence = 10;
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    log.Expect("valid evidence read correlation",
+        OacValidateEvidenceReadCorrelation(
+            &request, response) == OAC_V5_VALID);
+    log.Expect("null evidence read correlation",
+        OacValidateEvidenceReadCorrelation(
+            nullptr, response) == OAC_V5_INVALID_POINTER);
+    response->Channel = OAC_EVIDENCE_CHANNEL_ALERT;
+    log.Expect("evidence correlation binds the channel",
+        OacValidateEvidenceReadCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    response->Records[0].Sequence = request.AfterSequence;
+    log.Expect("evidence correlation rejects replayed records",
+        OacValidateEvidenceReadCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+    request = ValidEvidenceRequest(OAC_EVIDENCE_CHANNEL_ALERT);
+    request.AfterSequence = 10;
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_ALERT);
+    response->AcknowledgedSequence = 11;
+    log.Expect("evidence correlation rejects a stale alert cursor",
+        OacValidateEvidenceReadCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+    response = ValidEvidenceResponse(storage, OAC_EVIDENCE_CHANNEL_EVENT);
+    request.AfterSequence = 0;
+    log.Expect("evidence correlation requires explicit gaps",
+        OacValidateEvidenceReadCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+}
+
+void TestSnapshotTransport(TestLog& log)
+{
+    auto request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_OPEN);
+    log.Expect("valid snapshot open request", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_READ);
+    request.Cursor = 1;
+    log.Expect("valid snapshot read request", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_CLOSE);
+    log.Expect("valid snapshot close request", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    log.Expect("null snapshot request", OacValidateSnapshotRequest(
+        nullptr, sizeof(request)) == OAC_V5_INVALID_POINTER);
+    log.Expect("truncated snapshot request", OacValidateSnapshotRequest(
+        &request, sizeof(request) - 1) == OAC_V5_INVALID_LENGTH);
+    log.Expect("oversized snapshot request", OacValidateSnapshotRequest(
+        &request, sizeof(request) + 1) == OAC_V5_INVALID_LENGTH);
+
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_OPEN);
+    request.SnapshotId = ValidSnapshotId();
+    log.Expect("snapshot open requires a zero ID", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_READ);
+    request.SnapshotId = {};
+    log.Expect("snapshot read requires an ID", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_READ);
+    request.MaximumRecords = OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE + 1;
+    log.Expect("snapshot page is bounded", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_CLOSE);
+    request.Cursor = 1;
+    log.Expect("snapshot close has no cursor", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_OPEN);
+    request.SnapshotType = 0;
+    log.Expect("snapshot type is explicit", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_OPEN);
+    request.Reserved = 1;
+    log.Expect("snapshot request reserved field", OacValidateSnapshotRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_RESERVED);
+
+    auto record = ValidSnapshotRecord(0);
+    log.Expect("valid snapshot record", OacValidateSnapshotRecord(
+        &record, sizeof(record)) == OAC_V5_VALID);
+    log.Expect("null snapshot record", OacValidateSnapshotRecord(
+        nullptr, sizeof(record)) == OAC_V5_INVALID_POINTER);
+    record = ValidSnapshotRecord(0);
+    record.Address = 0;
+    log.Expect("snapshot record requires an address", OacValidateSnapshotRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+    record = ValidSnapshotRecord(0);
+    record.Name[record.NameLength + 1] = L'X';
+    log.Expect("snapshot record rejects a dirty name tail",
+        OacValidateSnapshotRecord(
+            &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
+    record = ValidSnapshotRecord(0);
+    record.RecordType = 0;
+    log.Expect("snapshot record type is explicit", OacValidateSnapshotRecord(
+        &record, sizeof(record)) == OAC_V5_INVALID_VALUE);
+
+    alignas(OAC_SNAPSHOT_RESPONSE) SnapshotResponseStorage storage{};
+    auto* response = ValidSnapshotResponse(storage);
+    log.Expect("valid ready snapshot response", OacValidateSnapshotResponse(
+        response, static_cast<ULONG>(storage.size())) == OAC_V5_VALID);
+    log.Expect("null snapshot response", OacValidateSnapshotResponse(
+        nullptr, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_POINTER);
+    log.Expect("truncated snapshot response", OacValidateSnapshotResponse(
+        response, static_cast<ULONG>(storage.size() - 1)) ==
+            OAC_V5_INVALID_LENGTH);
+    response = ValidSnapshotResponse(storage);
+    response->Records[1].Index = 2;
+    log.Expect("snapshot records follow the cursor", OacValidateSnapshotResponse(
+        response, static_cast<ULONG>(storage.size())) ==
+            OAC_V5_INVALID_VALUE);
+    response = ValidSnapshotResponse(storage);
+    response->RecordCount = 1;
+    response->NextCursor = 1;
+    response->Header.Size = static_cast<ULONG>(
+        offsetof(OAC_SNAPSHOT_RESPONSE, Records) +
+        sizeof(OAC_SNAPSHOT_RECORD));
+    response->Header.Flags = OAC_V5_RESPONSE_MORE_DATA;
+    log.Expect("valid snapshot page with more data", OacValidateSnapshotResponse(
+        response, response->Header.Size) == OAC_V5_VALID);
+    response->Header.Flags = 0;
+    log.Expect("snapshot more-data flag is mandatory",
+        OacValidateSnapshotResponse(
+            response, response->Header.Size) == OAC_V5_INVALID_VALUE);
+    response = ValidSnapshotResponse(storage);
+    response->NextCursor = 1;
+    log.Expect("snapshot cursor advance matches record count",
+        OacValidateSnapshotResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+    response = ValidSnapshotResponse(storage);
+    response->Truncated = 1;
+    log.Expect("snapshot truncation matches available count",
+        OacValidateSnapshotResponse(
+            response, static_cast<ULONG>(storage.size())) ==
+                OAC_V5_INVALID_VALUE);
+
+    response = ValidSnapshotResponse(storage);
+    response->Header.Size = static_cast<ULONG>(
+        offsetof(OAC_SNAPSHOT_RESPONSE, Records));
+    response->State = OAC_SNAPSHOT_STATE_FAILED;
+    response->TotalItems = 0;
+    response->AvailableItems = 0;
+    response->RecordCount = 0;
+    response->NextCursor = 0;
+    response->FailureStatus = static_cast<LONG>(0xc0000001UL);
+    log.Expect("valid failed snapshot response", OacValidateSnapshotResponse(
+        response, response->Header.Size) == OAC_V5_VALID);
+    response->FailureStatus = 0;
+    log.Expect("failed snapshot carries a status", OacValidateSnapshotResponse(
+        response, response->Header.Size) == OAC_V5_INVALID_VALUE);
+
+    response = ValidSnapshotResponse(storage);
+    response->Header.Size = static_cast<ULONG>(
+        offsetof(OAC_SNAPSHOT_RESPONSE, Records));
+    response->State = OAC_SNAPSHOT_STATE_CLOSED;
+    response->RecordCount = 0;
+    response->NextCursor = 0;
+    log.Expect("valid closed snapshot response", OacValidateSnapshotResponse(
+        response, response->Header.Size) == OAC_V5_VALID);
+    response->FailureStatus = static_cast<LONG>(0xc0000001UL);
+    log.Expect("closed snapshot clears failure state",
+        OacValidateSnapshotResponse(
+            response, response->Header.Size) == OAC_V5_INVALID_VALUE);
+
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_OPEN);
+    response = ValidSnapshotResponse(storage);
+    log.Expect("valid snapshot open correlation",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_VALID);
+    log.Expect("null snapshot correlation",
+        OacValidateSnapshotCorrelation(
+            nullptr, response) == OAC_V5_INVALID_POINTER);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_READ);
+    log.Expect("valid snapshot read correlation",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_VALID);
+    ++response->CursorGeneration;
+    log.Expect("snapshot correlation binds cursor generation",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+    response = ValidSnapshotResponse(storage);
+    response->Cursor = 1;
+    log.Expect("snapshot correlation binds the requested cursor",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+    request = ValidSnapshotRequest(OAC_SNAPSHOT_OPERATION_CLOSE);
+    response = ValidSnapshotResponse(storage);
+    response->Header.Size = static_cast<ULONG>(
+        offsetof(OAC_SNAPSHOT_RESPONSE, Records));
+    response->State = OAC_SNAPSHOT_STATE_CLOSED;
+    response->RecordCount = 0;
+    response->NextCursor = 0;
+    log.Expect("valid snapshot close correlation",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_VALID);
+    response->SnapshotId.Low++;
+    log.Expect("snapshot close binds the snapshot ID",
+        OacValidateSnapshotCorrelation(
+            &request, response) == OAC_V5_INVALID_CORRELATION);
+}
+
+void TestLabEvidenceContract(TestLog& log)
+{
+    OAC_TEST_INJECT_EVIDENCE_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_TEST_MESSAGE_INJECT_EVIDENCE);
+    request.TestVersion = OAC_TEST_PROTOCOL_VERSION;
+    request.Count = 1;
+    request.RuleId = OAC_V5_RULE_KERNEL_IMAGE_LOADED;
+    request.EventType = OAC_V5_EVENT_OBSERVATION;
+    request.ObservationSeverity = OAC_V5_OBSERVATION_INFO;
+    request.PolicySeverity = OAC_V5_POLICY_NOT_EVALUATED;
+    request.Confidence = OAC_V5_CONFIDENCE_HIGH;
+    request.Category = OAC_V5_CATEGORY_DRIVER;
+    request.EvidenceFlags = OAC_V5_EVIDENCE_KERNEL_SOURCE;
+    log.Expect("valid lab evidence injection", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    log.Expect("null lab evidence injection", OacValidateTestEvidenceRequest(
+        nullptr, sizeof(request)) == OAC_V5_INVALID_POINTER);
+    request.Count = OAC_TEST_MAX_INJECTED_RECORDS;
+    log.Expect("maximum lab evidence batch", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request.Count++;
+    log.Expect("lab evidence batch is bounded", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request.Count = 1;
+    request.TestVersion++;
+    log.Expect("lab test protocol is exact", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request.TestVersion = OAC_TEST_PROTOCOL_VERSION;
+    request.EventType = OAC_V5_EVENT_POLICY_VIOLATION;
+    log.Expect("lab policy violation must be evaluated",
+        OacValidateTestEvidenceRequest(
+            &request, sizeof(request)) == OAC_V5_INVALID_VALUE);
+    request.PolicySeverity = OAC_V5_POLICY_HIGH;
+    log.Expect("valid lab policy alert", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_VALID);
+    request.Reserved = 1;
+    log.Expect("lab request reserved field", OacValidateTestEvidenceRequest(
+        &request, sizeof(request)) == OAC_V5_INVALID_RESERVED);
 }
 
 void TestEventRecords(TestLog& log)
@@ -1811,6 +2363,9 @@ int main()
     TestSessionTransitions(log);
     TestLaunchDecision(log);
     TestLeasePolicy(log);
+    TestEvidenceTransport(log);
+    TestSnapshotTransport(log);
+    TestLabEvidenceContract(log);
     TestEventRecords(log);
     return log.ExitCode();
 }

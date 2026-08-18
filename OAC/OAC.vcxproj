@@ -72,6 +72,7 @@
   <ItemGroup>
     <ClCompile Include="compat.c" />
     <ClCompile Include="cpu_snapshot.c" />
+    <ClCompile Include="evidence.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="protection.c" />
     <ClCompile Include="scanner.c" />
@@ -82,6 +83,7 @@
     <ClInclude Include="compat.h" />
     <ClInclude Include="cpu_snapshot.h" />
     <ClInclude Include="descriptor.h" />
+    <ClInclude Include="evidence.h" />
     <ClInclude Include="protection.h" />
     <ClInclude Include="scanner.h" />
     <ClInclude Include="session.h" />
@@ -90,6 +92,7 @@
     <ClInclude Include="..\shared\oac_protocol.h" />
     <ClInclude Include="..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\shared\protocol\oac_validate.h" />
+    <ClInclude Include="..\shared\protocol\oac_test.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

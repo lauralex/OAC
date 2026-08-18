@@ -1,7 +1,7 @@
 # OAC test matrix
 
-**Status:** WP-01 through WP-05 tested at implementation commit
-`a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100
+**Status:** WP-01 through WP-06 tested at acceptance commit
+`ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 build 26100
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,7 +19,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local and PR #11 hosted Debug/Release runs passed `314/314` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `406/406`; PR #11 hosted the earlier `314/314` WP-05 suite |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #11 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -44,6 +44,8 @@ The pure C/C++ unit source covers:
 - stable rule/event IDs, severity, confidence, category, and the exact session transition matrix;
 - event provenance rules and hostile none, binary, and UTF-16 payload cases, including dirty tails,
   embedded nulls, and invalid surrogate pairs;
+- retained-alert acknowledgement, event-gap/loss reconciliation, record-channel classification,
+  snapshot request/response/paging correlation, and lab-only overflow injection validation;
 - launch-ticket layouts, strict canonical NT paths, expiry/cancel/replay decisions, exact process
   handles, response correlation, and terminal state invariants;
 - explicit session-revoke layouts, status-latch consistency, idempotent transition expectations,
@@ -76,15 +78,21 @@ driver-gate coverage plus these production cases:
   a different file immediately claims a distinct, higher-generation session;
 - malformed launch requests are rejected while diagnostic sessions receive `ERROR_NOT_SUPPORTED`
   for production arm, cancel, and confirm operations; and
+- retained alerts survive a 10,000-record lower-priority burst, acknowledgements reject replay and
+  undelivered cursors, concurrent producers preserve exact sequence/drop accounting, snapshot pages
+  remain stable through close, full alert queues preserve existing data and latch first loss, and
+  diagnostic overflow does not silently revoke lab authority; and
 - explicit revoke rejects malformed provenance/reserved/size fields, increments the session-loss
   sequence once, and returns the same terminal result on repetition.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
-standard Driver Verifier run passed on implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f`.
+standard Driver Verifier run passed on acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d`.
 Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
-service-owned launch; alert acknowledgement and snapshot paging remain later work.
+service-owned launch. The retained-alert, acknowledgement, event-gap, concurrent-publication,
+overflow, snapshot-paging, and service alert-poll paths passed in the same baseline and Driver
+Verifier campaign.
 
 ## Service and launcher coverage
 
@@ -116,15 +124,16 @@ negative effective-service-right and reboot-persistence cases remain pending.
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `a30ef78`; 29 exact results, overall pass, Secure Boot disabled |
-| Standard Driver Verifier on `OAC.sys` | Tested at `a30ef78`; reset and inactive at completion, zero crashes/dumps |
-| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `a30ef78`; status three times, launch twice, and LocalSystem/limited/admin direct opens denied |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `ae1102b`; 29 exact results, overall pass, Secure Boot disabled |
+| Standard Driver Verifier on `OAC.sys` | Tested at `ae1102b`; three loads/unloads, reset and inactive at completion, zero crashes/dumps |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `ae1102b`; status three times, launch twice, and LocalSystem/limited/admin direct opens denied |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| Production per-file cleanup/close and concurrent status teardown | Tested at `a30ef78` in baseline and Verifier protocol executions |
-| Live-target tombstone and later retirement | Tested at `a30ef78` in the driver-backed lifecycle suite |
-| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `a30ef78` |
-| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `a30ef78`; both process trees terminated and SCM recovery completed |
-| Renamed, signed normal post-start driver image | Tested at `a30ef78`; armed callback and persistent latch both observed |
+| Production per-file cleanup/close and concurrent status teardown | Tested at `ae1102b` in baseline and Verifier protocol executions |
+| Live-target tombstone and later retirement | Tested at `ae1102b` in the driver-backed lifecycle suite |
+| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `ae1102b` |
+| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `ae1102b`; both process trees terminated and SCM recovery completed |
+| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `ae1102b`; four driver-backed executions passed `129/129` |
+| Renamed, signed normal post-start driver image | Tested at `ae1102b`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
 | Secure Boot production signing path | Planned |
@@ -141,18 +150,18 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | Work package | Required evidence | State |
 |---|---|---|
 | WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Local and VM-tested foundation; hosted CI required at merge |
-| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `a30ef78` |
-| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `a30ef78`; broader negative matrix remains |
-| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `a30ef78`; literal numeric PID reuse remains unforced |
-| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `a30ef78` |
-| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `a30ef78` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Planned |
+| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `ae1102b` |
+| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `ae1102b`; broader negative matrix remains |
+| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `ae1102b`; literal numeric PID reuse remains unforced |
+| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `ae1102b` |
+| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `ae1102b` |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Local `406/406`, Debug/Release, PREfast, driver-backed `129/129`, and VM/Verifier acceptance passed at `ae1102b` |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Planned |
 | WP-08 policy | Stable rule decisions, corroboration, display-text independence | Planned |
 | WP-09/10 signatures | Wrong key/scope/build, expiry, rollback, canonical serialization | Planned |
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
-WP-02 through WP-05 acceptance is recorded only for the exact commit and environment above. Later
+WP-02 through WP-06 acceptance is recorded only for the exact commit and environment above. Later
 work packages remain planned.
 
 ## Exact host commands

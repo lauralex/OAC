@@ -1,5 +1,7 @@
 #include <Windows.h>
 
+#include <memory>
+
 #include "service.hpp"
 #include "..\shared\oac_ipc.h"
 
@@ -102,18 +104,22 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
     {
         try
         {
-            ServiceHost host(g_StopEvent);
-            result = host.Start(failureStage);
+            auto host = std::make_unique<ServiceHost>(g_StopEvent);
+            result = host->Start(failureStage);
             if (result == ERROR_SUCCESS)
             {
                 ReportStatus(SERVICE_RUNNING, ERROR_SUCCESS, 0, 0);
-                result = host.Wait();
+                result = host->Wait();
                 if (result != ERROR_SUCCESS && result != ERROR_OPERATION_ABORTED)
                     failureStage = OAC_SERVICE_STAGE_RUNTIME;
                 if (InterlockedCompareExchange(&g_StopRequested, TRUE, FALSE) == FALSE)
                     ReportStatus(SERVICE_STOP_PENDING, ERROR_SUCCESS, 0, 10000);
             }
-            host.Stop();
+            host->Stop();
+        }
+        catch (const std::bad_alloc&)
+        {
+            result = ERROR_NOT_ENOUGH_MEMORY;
         }
         catch (...)
         {

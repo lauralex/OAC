@@ -6,10 +6,10 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-05 form the accepted production-control and target-lifetime MVP. Implementation
-commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed the commit-bound disposable-VM and
-standard Driver Verifier campaign described below. Status still distinguishes source, evidence,
-and the remaining production-hardening work packages.
+WP-01 through WP-06 form the accepted production-control, target-lifetime, and local-evidence MVP.
+Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the commit-bound
+disposable-VM and standard Driver Verifier campaign described below. Status still distinguishes
+source, evidence, and the remaining production-hardening work packages.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -19,7 +19,7 @@ and the remaining production-hardening work packages.
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
 | WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
-| WP-06 Alert/event/snapshot transport | Planned | Typed event schema exists; no production event transport is advertised or dispatched |
+| WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
 | WP-07 Bounded service scheduler | Planned | No independent health loop or bounded worker scheduler exists |
 | WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
@@ -77,14 +77,19 @@ The working tree adds or changes these implementation areas:
   cleanup/close, and target tombstones.
 - `OAC/main.c`: production negotiate/claim/status/revoke and launch-ticket dispatch, plus lab-only
   diagnostic authorization.
+- `OAC/evidence.c`, `OAC/protection.c`, and `OAC/scanner.c`: callback-safe typed publication,
+  independent retained-alert and overwrite-event queues, explicit loss accounting, and frozen
+  paged kernel-module snapshots.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
-  service-owned target job, and a backend-independent lease-state policy seam.
+  service-owned target job, bounded alert polling/handoff, and a backend-independent lease-state
+  policy seam.
 - Package/install and VM harness changes for the service boundary, production session lifecycle/race test, and
   Driver Verifier rerun.
 
-The current driver advertises production session control, launch tickets, and session liveness.
-Scan, event, CPU, signed-manifest, signed-policy, and backend capabilities remain unavailable.
+The current driver advertises production session control, launch tickets, session liveness, typed
+evidence, and paged snapshots. Production configuration/scan, signed-manifest, signed-policy, and
+backend capabilities remain unavailable.
 
 ## Current local validation
 
@@ -92,7 +97,7 @@ Scan, event, CPU, signed-manifest, signed-policy, and backend capabilities remai
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `314/314` in each configuration after the WP-05 implementation |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `406/406` in each configuration after the WP-06 implementation |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
@@ -107,7 +112,7 @@ explicit remaining CI/static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed on Microsoft Windows
+Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
 and Secure Boot disabled. The host accepted 29 exact result records, including five protocol
 executions and twelve client, launcher, and preflight executions. The campaign passed production
@@ -118,21 +123,26 @@ idempotent explicit revoke, and monotonic session-loss transitions from sequence
 with reasons `none`, `service exit`, and `requested shutdown`. Exact remove/reinstall, per-file
 cleanup and tombstone races, the armed renamed-driver load gate, kernel provenance, and standard
 Driver Verifier passed. Final Verifier flags were clear, both OAC services were stopped, the VM was
-Off with zero adapters, and there were zero crash events and zero minidumps. The validated result
-ZIP SHA-256 was `15079AE8CADD19FC550A76693CDFCF0F360BD4E262A9B60BFC1CAD50B19A0724`.
+Off with zero adapters, and there were zero crash events and zero minidumps. The driver-free unit
+suite passed `406/406`; each of four driver-backed protocol executions passed `129/129`. Those
+executions covered retained-alert acknowledgement and replay rejection, exact event-gap accounting,
+concurrent publication, immutable paged snapshots, overflow provenance, and evidence reads after
+revocation. Driver Verifier recorded three OAC loads and three unloads. The validated result ZIP
+SHA-256 was `E2FA489A7F97730FC6A625F3E65D8EE2858D103AF2F8610DFDFAA7330557714F`.
 
-Compact evidence is retained at `C:\OAC-VM\evidence\20260818-a30ef78`. The VM, checkpoint,
-VHD/AVHDX, package, seed, results ZIP, and obsolete evidence were deleted after validation; only
-the verified Windows installation ISO and the compact current evidence remain under `C:\OAC-VM`.
+Compact evidence is retained at `C:\OAC-VM\evidence\20260818-ae1102b`. The exact VM, checkpoint,
+VHD/AVHDX, package, seed, and campaign directory were deleted after validation. Under `C:\OAC-VM`,
+only the verified Windows installation ISO, this 2.71 MB bundle, and the 9.9 KB prior milestone
+record remain.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #11 and remain
   required for each merge.
-- WP-06 through WP-08 must add production evidence transport, bounded scheduling, and centralized
-  typed policy before the hardened-foundation definition is met.
+- WP-07 and WP-08 must still add bounded scheduling and centralized typed policy before the
+  hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
-No milestone is described as production-ready or as a complete hardened foundation. The minimal
-control plane still lacks production telemetry, policy, signed manifest, and backend work listed
-above.
+No milestone is described as production-ready or as a complete hardened foundation. The control
+plane still lacks bounded scan scheduling, centralized policy, signed manifests, and authenticated
+backend delivery listed above.

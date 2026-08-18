@@ -15,12 +15,15 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Suspended launch | The service resolves and holds the executable under the caller identity, creates it suspended with the caller's primary token, confirms the exact process handle, and then resumes the first thread. |
 | Target-tree containment | The service assigns the confirmed target to an unnamed kill-on-close job before resume. Children inherit the job, and graceful stop or service failure terminates the tree. |
 | Session-loss reporting | A device-lifetime monotonic sequence and stable loss reason let a replacement service distinguish requested shutdown from unexpected controller loss. |
+| Retained alerts | High and critical typed records remain in a dedicated queue until the controlling service acknowledges an exact delivered sequence. Full-queue loss preserves existing data, records severity counts, and revokes production authority. |
+| Operational events | Info, low, and medium records use an independent bounded queue with explicit sequence gaps and drop counts, so inventory pressure cannot overwrite retained alerts. |
+| Paged snapshots | One frozen kernel-module inventory is bound to the current session, random snapshot identity, scan identity, cursor generation, and 30-second expiration. |
 | Handle protection | Signed object callbacks filter selected dangerous user-mode process and thread rights for the bound target. |
 | Cleanup and retirement | Per-file cleanup revokes authority and completes rundown. A cleaned session that still references a live target remains as an unusable tombstone until target exit. |
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
 
 The current production path intentionally supports one target and no command-line arguments.
-Production evidence transport, signed authorization, backend leases, and target-session reuse
+Authenticated evidence upload, signed authorization, backend leases, and target-session reuse
 remain planned work.
 
 ## Lab scanner matrix
@@ -57,6 +60,10 @@ service does not expose these scans.
 OAC correlates independent observations and preserves confidence and policy state. The diagnostic
 client can enforce a chosen finding threshold, but a finding remains evidence rather than an
 automatic claim that a process is malicious.
+
+Production evidence records preserve the kernel session, generation, sequence, timestamp, rule,
+severity, confidence, category, and fixed provenance fields. The service currently keeps a bounded
+in-memory alert handoff; authenticated persistence and server acknowledgement are later work.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or
