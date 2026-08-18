@@ -1030,7 +1030,10 @@ function Wait-LivenessProcesses(
     if ($ExpectedParentProcessId -le 0) {
         throw 'The liveness parent process ID is invalid.'
     }
-    $expectedParentPath = [IO.Path]::GetFullPath($ParentExecutablePath)
+    $expectedParentName = [IO.Path]::GetFileName($ParentExecutablePath)
+    if ([string]::IsNullOrWhiteSpace($expectedParentName)) {
+        throw 'The liveness parent executable name is invalid.'
+    }
     $expectedChildPath = [IO.Path]::GetFullPath($ChildExecutablePath)
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
@@ -1040,9 +1043,10 @@ function Wait-LivenessProcesses(
             throw 'The liveness parent process identity is ambiguous.'
         }
         if ($parents.Count -eq 1) {
-            if ([string]::IsNullOrWhiteSpace([string]$parents[0].ExecutablePath) -or
-                [IO.Path]::GetFullPath([string]$parents[0].ExecutablePath) -ine
-                    $expectedParentPath) {
+            # The protected target intentionally denies WMI enough access to
+            # read ExecutablePath. Its PID and path are already bound by the
+            # launch ticket, so identify the live process by exact image name.
+            if ([string]$parents[0].Name -ine $expectedParentName) {
                 throw 'The liveness parent has the wrong executable identity.'
             }
             $children = @(Get-CimInstance Win32_Process `
