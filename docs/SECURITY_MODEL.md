@@ -1,7 +1,6 @@
 # OAC security model
 
-**Status:** WP-01 through WP-04 controls accepted on the named Windows 11 build 26100 campaign;
-WP-05 job and liveness controls are implemented in source and awaiting fresh VM acceptance
+**Status:** WP-01 through WP-05 controls accepted on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -26,10 +25,10 @@ trust boundaries, adversaries, and failure behavior.
 | Driver device | Production DACL grants SYSTEM and the exact service SID; Administrators are added only with `LabMode=1` | Named VM campaign passed service access and denied direct opens from LocalSystem, limited-user, and administrator probes |
 | Service identity | The test installer sets SYSTEM owner/group and explicitly grants Administrators and Interactive query-status/start only; the restricted, session-0 LocalSystem service verifies its enabled and restricted service SID before opening the driver | Structural readback and the complete service start/status/launch path passed on Windows 11 build 26100; broader effective-right and production-deployment testing remains pending |
 | Driver controller | One production session is bound to the CREATE-owner process object, service process object, exact file object, random session ID, and generation | Driver-backed lifecycle, wrong-process, cleanup, and race cases passed on the named campaign |
-| Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Two standard-user status calls and one launch passed; dedicated AppContainer, remote, and impersonation-negative cases remain pending |
+| Launcher IPC | Local, remote-rejecting named pipe with server/client identity cross-checks for status and one executable launch | Three standard-user status calls and two launches passed; dedicated AppContainer, remote, and impersonation-negative cases remain pending |
 | Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Creation-time binding, exact-handle confirmation, and resume passed on the named campaign |
-| Target-tree lifetime | The service assigns the suspended target to an unnamed kill-on-close job before resume; graceful stop explicitly revokes the driver session and service failure closes both authority handles | Source and bounded crash/stop acceptance tests are present; fresh VM execution pending |
-| Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | Strict unit and driver-backed tests are present; service recovery path awaits the fresh VM run |
+| Target-tree lifetime | The service assigns the suspended target to an unnamed kill-on-close job before resume; graceful stop explicitly revokes the driver session and service failure closes both authority handles | The named VM campaign verified parent/child termination after service crash and graceful stop, plus SCM recovery |
+| Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | The named campaign observed exact sequence `0,1,2` with `none`, `service exit`, then `requested shutdown` |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Stable production IDs and a provenance-preserving record schema are defined with pure validation tests | Test source present; production transport planned |
@@ -62,7 +61,7 @@ protection state is still active.
 
 The invariant is implemented for diagnostic binding and the production service's serialized arm,
 suspended create, confirm-or-cancel, and resume transaction. Driver-backed acceptance was recorded
-for implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11 build 26100.
+for implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100.
 
 ## In-scope adversaries
 
@@ -102,9 +101,10 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - File cleanup drains in-flight requests, revokes authority, and preserves a live-target tombstone.
 - A production launch ticket is random, bounded, one-use, and bound to the exact service creator and
   canonical image path; monitoring requires confirmation through an exact user-mode process handle.
-- Handle filtering covers the creation-bound target immediately. Only protected Windows bootstrap
-  processes are exempt while that target remains suspended and awaits exact-handle confirmation;
-  the exemption ends before its first thread resumes.
+- Handle filtering covers the creation-bound target immediately for ordinary user-mode requestors.
+  The System process and Windows protected processes remain explicit trusted operating-system
+  requestors because required process and thread initialization continues after the first resume;
+  this exemption does not grant production-session authority.
 - The service authenticates the pipe client, opens and resolves the executable under impersonation,
   duplicates the same identity to a primary token, and keeps the selected file locked against writes
   and deletion through process creation.
@@ -116,11 +116,10 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   only the first loss cause, and a monotonic latch makes prior loss visible to a replacement service.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-04 statements combine source behavior with one exact platform acceptance run. The
-current driver-backed production, service installation, lifecycle, race, and standard Driver
-Verifier campaign passed on Windows 11 build 26100 with zero crash events and minidumps. The new
-WP-05 job and liveness statements are source claims until the pending campaign passes. Neither
-result replaces the broader supported-platform, effective-right, compatibility, or
+WP-01 through WP-05 statements combine source behavior with one exact platform acceptance run. The
+current driver-backed production, service installation, lifecycle, race, job/liveness, and standard
+Driver Verifier campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That
+result does not replace the broader supported-platform, effective-right, compatibility, or
 production-deployment matrix.
 
 ## Planned controls
@@ -142,7 +141,7 @@ text has no policy meaning in the production schema.
 Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
 path can fail its gate after detecting the latch; the production launch transaction closes the
 creation-time target-binding gap but does not replace Windows Code Integrity or the later signed
-manifest and liveness controls.
+manifest, policy, and evidence-transport controls.
 
 ## Unsupported guarantees
 

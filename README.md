@@ -150,14 +150,15 @@ does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 
-The implementation merged by [PR #8](https://github.com/lauralex/OAC/pull/8) passed:
+Implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `284/284` driver-free protocol tests in both configurations;
+- `314/314` driver-free protocol tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
-- a networkless Windows 11 build 26100 campaign with 27 exact results, standard Driver Verifier,
-  three driver load/unload cycles, and zero crashes or minidumps.
+- a networkless Windows 11 build 26100 campaign with 29 exact results, standard Driver Verifier,
+  verified job ownership, service-crash and graceful-stop process-tree containment, and zero crashes
+  or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

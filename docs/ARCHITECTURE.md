@@ -1,7 +1,6 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-04 accepted on the named Windows 11 build 26100 campaign; WP-05 job
-and liveness controls are implemented in source and awaiting the fresh disposable-VM campaign
+**Status:** WP-01 through WP-05 accepted on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -110,8 +109,9 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; implementation commit
-`bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the driver-backed target-live, cleanup, and
-standard-user launch cases under the baseline and Driver Verifier phases.
+`a30ef78819b865786f6f4e104b7a54f48678da7f` passed the driver-backed target-live, cleanup,
+standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
+cases under the baseline and Driver Verifier phases.
 
 ## Protocol and evidence boundary
 
@@ -119,8 +119,7 @@ Production control dispatches negotiate, claim, status, explicit revoke, arm, ca
 while advertising session control, launch-ticket, and session-liveness support.
 The shared ABI defines stable rule/event IDs and a provenance-preserving event record, and the pure
 unit suite validates that schema. The driver does not yet expose production configuration, scanning,
-event read, CPU snapshot, or revoke operations. Existing findings still travel through the
-diagnostic ring.
+event read, or CPU snapshot operations. Existing findings still travel through the diagnostic ring.
 
 ## Planned sequence
 
@@ -135,5 +134,5 @@ The complete target and migration rationale is in [`hardening-plan.md`](hardenin
 
 Portable checks use documented interfaces and dynamically resolved optional APIs. Unsupported APIs
 produce an explicit unavailable or degraded capability. Private offsets are never guessed. The x64
-implementation does not establish x86, ARM64, or historical Windows support, and no current production VM
-result has yet established compatibility beyond successful host compilation and pure validation.
+implementation passed one exact Windows 11 Pro build 26100 VM configuration; it does not establish
+x86, ARM64, historical Windows, other security configurations, hardware, or game compatibility.

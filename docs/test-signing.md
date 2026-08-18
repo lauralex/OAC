@@ -100,16 +100,17 @@ after verifying the complete file set and rejecting PFX/P12/key material. Run
 `tools\vm\Start-OACHyperVTest.ps1` from a 64-bit elevated terminal with that seed and a Windows
 installation ISO to create a
 networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
-boundary including one standard-user creation-time-bound launch, protocol lifecycle/race, baseline
-scanner, and standard Driver Verifier phases,
+boundary including crash and graceful-stop standard-user launches with job-owned child processes,
+protocol lifecycle/race, baseline scanner, and standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
 because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
-campaign passed at implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` on Windows 11
-Pro build 26100: 27 exact results, standard Driver Verifier, zero crash events/minidumps, and final
-containment were accepted. The validated result ZIP SHA-256 was
-`46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`. This is evidence for that
-exact test configuration, not authorization to use test signing outside a disposable VM.
+campaign passed at implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11
+Pro build 26100: 29 exact results, verified job ownership and process-tree termination, standard
+Driver Verifier, zero crash events/minidumps, and final containment were accepted. The validated
+result ZIP SHA-256 was `15079AE8CADD19FC550A76693CDFCF0F360BD4E262A9B60BFC1CAD50B19A0724`.
+This is evidence for that exact test configuration, not authorization to use test signing outside
+a disposable VM.
 
 ## Test matrix
 

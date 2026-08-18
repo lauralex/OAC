@@ -16,11 +16,11 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the complete
+  Implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-04. The WP-05 job/liveness implementation still requires its fresh commit-bound
-  campaign. Signed manifests or policy, authenticated backend leases, and split alert/event/snapshot
-  transports are not implemented.
+  WP-01 through WP-05, including service-crash and graceful-stop target-tree containment and
+  session-loss reporting. Signed manifests or policy, authenticated backend leases, and split
+  alert/event/snapshot transports are not implemented.
 
 ## Repository map
 

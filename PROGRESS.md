@@ -6,11 +6,10 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-04 form the accepted production-control MVP. Implementation commit
-`bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the commit-bound disposable-VM and standard
-Driver Verifier campaign described below. WP-05 job and liveness controls are now implemented in
-the current source; their one fresh disposable-VM acceptance campaign remains pending. Status still
-distinguishes source, evidence, and the remaining production-hardening work packages.
+WP-01 through WP-05 form the accepted production-control and target-lifetime MVP. Implementation
+commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed the commit-bound disposable-VM and
+standard Driver Verifier campaign described below. Status still distinguishes source, evidence,
+and the remaining production-hardening work packages.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -19,7 +18,7 @@ distinguishes source, evidence, and the remaining production-hardening work pack
 | WP-02 Service and device identity | VM-tested foundation | Restricted service, identity-checked launcher IPC, production device ACL, exact install/remove, standard-user status, and direct-open denials passed on the named campaign |
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
 | WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
-| WP-05 Job and liveness | Source present; VM pending | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop tests are implemented; final VM/Verifier acceptance is pending |
+| WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
 | WP-06 Alert/event/snapshot transport | Planned | Typed event schema exists; no production event transport is advertised or dispatched |
 | WP-07 Bounded service scheduler | Planned | No independent health loop or bounded worker scheduler exists |
 | WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
@@ -108,27 +107,28 @@ explicit remaining CI/static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Implementation commit `bbf8f06bd9383be2d9de079a95b67d87848c280c` passed on Microsoft Windows
+Implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
-and Secure Boot disabled. The host accepted 27 exact result records, including five protocol
-executions and ten client, launcher, and preflight executions. The campaign passed production
-service identity and direct-open boundaries, one standard-user suspended launch with creation-time
-binding and exact-handle confirmation, exact remove/reinstall, per-file cleanup and tombstone races,
-the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier. Verifier
-recorded three loads and three unloads of `OAC.sys`; final Verifier flags were clear, both OAC
-services were stopped, the VM was Off with zero adapters, and there were zero crash events and zero
-minidumps. The validated result ZIP SHA-256 was
-`46BE5BF86FB46AA1839864DE4A0240840EDED0095CA70A7FFBE49BF8E8A8EC64`.
+and Secure Boot disabled. The host accepted 29 exact result records, including five protocol
+executions and twelve client, launcher, and preflight executions. The campaign passed production
+service identity and direct-open boundaries, two standard-user suspended launches with
+creation-time binding, exact-handle confirmation, verified job assignment, and first-thread resume.
+It also proved service-crash and graceful-stop termination of both target and child, SCM recovery,
+idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to `1` to `2`
+with reasons `none`, `service exit`, and `requested shutdown`. Exact remove/reinstall, per-file
+cleanup and tombstone races, the armed renamed-driver load gate, kernel provenance, and standard
+Driver Verifier passed. Final Verifier flags were clear, both OAC services were stopped, the VM was
+Off with zero adapters, and there were zero crash events and zero minidumps. The validated result
+ZIP SHA-256 was `15079AE8CADD19FC550A76693CDFCF0F360BD4E262A9B60BFC1CAD50B19A0724`.
 
-Compact evidence is retained at `C:\OAC-VM\evidence\20260817-bbf8f06`. Large disposable artifacts
-were deleted after validation.
+Compact evidence is retained at `C:\OAC-VM\evidence\20260818-a30ef78`. The VM, checkpoint,
+VHD/AVHDX, package, seed, results ZIP, and obsolete evidence were deleted after validation; only
+the verified Windows installation ISO and the compact current evidence remain under `C:\OAC-VM`.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #8 and remain
   required for each merge.
-- WP-05 requires one commit-bound disposable-VM/Verifier acceptance run for the implemented
-  crash, graceful-stop, child-process, explicit-revoke, and recovery paths.
 - WP-06 through WP-08 must add production evidence transport, bounded scheduling, and centralized
   typed policy before the hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.

@@ -97,7 +97,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-010: Let the Windows job own target-tree lifetime
 
-- **Status:** Accepted; source implemented, VM acceptance pending
+- **Status:** Accepted; source implemented and VM tested
 - **Date:** 2026-08-18
 - **Decision:** Create one unnamed service-owned job with exactly
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, assign and verify the confirmed target while it is still
@@ -107,5 +107,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   process registry, or polling-based lifetime authority for this milestone.
 - **Consequence:** The operating system terminates the target tree when the service loses ownership,
   children inherit the same containment boundary, and a replacement service can observe prior
-  session loss. Completion notification, evidence transport, and authenticated backend leases remain
-  separate work packages.
+  session loss. The crash and graceful-stop paths passed at implementation commit
+  `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Completion notification,
+  evidence transport, and authenticated backend leases remain separate work packages; the local
+  lease-state helper is a policy seam, not a simulated backend.
