@@ -623,26 +623,14 @@ int SendLaunchRequest(const std::wstring& executablePath)
     return 0;
 }
 
-bool GetCurrentExecutablePath(std::wstring& path)
-{
-    path.assign(32768, L'\0');
-    const DWORD length = GetModuleFileNameW(
-        nullptr,
-        path.data(),
-        static_cast<DWORD>(path.size()));
-    if (length == 0 || length >= path.size()) return false;
-    path.resize(length);
-    return true;
-}
-
-bool IsLivenessTargetExecutable()
+bool IsLivenessTargetExecutable(const wchar_t* argumentZero)
 {
     /* The disposable-VM harness reuses this signed, as-invoker binary under a
      * dedicated role name so job inheritance can be tested without adding a
      * second test executable to the package. The normal launcher name never
      * enters this path. */
-    std::wstring path;
-    if (!GetCurrentExecutablePath(path)) return false;
+    if (argumentZero == nullptr || argumentZero[0] == L'\0') return false;
+    const std::wstring path(argumentZero);
     const std::size_t separator = path.find_last_of(L"\\/");
     const std::wstring name = separator == std::wstring::npos
         ? path
@@ -652,22 +640,16 @@ bool IsLivenessTargetExecutable()
 
 int RunLivenessTarget()
 {
-    std::wstring executable;
-    if (!GetCurrentExecutablePath(executable)) return 65;
-    if (executable.rfind(L"\\\\?\\", 0) == 0)
-    {
-        if (executable.size() < 7 ||
-            !((executable[4] >= L'A' && executable[4] <= L'Z') ||
-              (executable[4] >= L'a' && executable[4] <= L'z')) ||
-            executable[5] != L':' || executable[6] != L'\\')
-        {
-            return 65;
-        }
-        executable.erase(0, 4);
-    }
+    std::wstring executable(32768, L'\0');
+    const UINT length = GetSystemDirectoryW(
+        executable.data(),
+        static_cast<UINT>(executable.size()));
+    if (length == 0 || length >= executable.size()) return 65;
+    executable.resize(length);
+    executable += L"\\PING.EXE";
 
     std::wstring commandLine = L"\"" + executable +
-        L"\" --liveness-child";
+        L"\" -t 127.0.0.1";
     std::vector<wchar_t> mutableCommandLine(
         commandLine.begin(),
         commandLine.end());
@@ -700,14 +682,9 @@ int RunLivenessTarget()
 
 int wmain(int argumentCount, wchar_t** arguments)
 {
-    const bool livenessTarget = IsLivenessTargetExecutable();
+    const bool livenessTarget = argumentCount >= 1 &&
+        IsLivenessTargetExecutable(arguments[0]);
     if (livenessTarget && argumentCount == 1) return RunLivenessTarget();
-    if (livenessTarget && argumentCount == 2 &&
-        std::wstring(arguments[1]) == L"--liveness-child")
-    {
-        Sleep(INFINITE);
-        return 0;
-    }
 
     ULONG type = OAC_IPC_TYPE_STATUS_REQUEST;
     if (argumentCount == 2 && std::wstring(arguments[1]) == L"--hello")
