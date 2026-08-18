@@ -1,5 +1,6 @@
 #include <Windows.h>
 #include <bcrypt.h>
+#include <ShlObj.h>
 
 #include <iomanip>
 #include <iostream>
@@ -652,16 +653,21 @@ bool IsLivenessTargetExecutable()
 
 bool GetLivenessMarkerPath(std::wstring& path)
 {
-    const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
-    if (required <= 1 || required > 32768) return false;
-    std::wstring localAppData(required, L'\0');
-    const DWORD written = GetEnvironmentVariableW(
-        L"LOCALAPPDATA",
-        localAppData.data(),
-        required);
-    if (written == 0 || written >= required) return false;
-    localAppData.resize(written);
-    path = localAppData + L"\\OAC-Liveness-Target.txt";
+    PWSTR localAppData = nullptr;
+    const HRESULT result = SHGetKnownFolderPath(
+        FOLDERID_LocalAppData,
+        KF_FLAG_DEFAULT,
+        nullptr,
+        &localAppData);
+    if (FAILED(result) || localAppData == nullptr)
+    {
+        CoTaskMemFree(localAppData);
+        return false;
+    }
+    path.assign(localAppData);
+    CoTaskMemFree(localAppData);
+    if (path.empty()) return false;
+    path += L"\\OAC-Liveness-Target.txt";
     return true;
 }
 
