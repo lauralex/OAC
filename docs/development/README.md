@@ -12,7 +12,7 @@ product guarantees.
 | [`../../PROGRESS.md`](../../PROGRESS.md) | Current work-package status, exact validation evidence, and remaining gates |
 | [`../TEST_MATRIX.md`](../TEST_MATRIX.md) | Local, CI, protocol, service, VM, compatibility, and acceptance coverage |
 | [`../../DECISIONS.md`](../../DECISIONS.md) | Accepted architecture and validation decisions |
-| [`../hardening-plan.md`](../hardening-plan.md) | Proposed work beyond the implemented MVP; roadmap text is not implementation evidence |
+| [`../hardening-plan.md`](../hardening-plan.md) | Target architecture and remaining work packages; roadmap text is not implementation evidence |
 
 ## Historical and operational records
 

@@ -26,7 +26,9 @@ $requiredZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-launcher-3',
     'production-launch',
+    'production-launch-graceful',
     'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator',
@@ -48,6 +50,9 @@ $auxiliaryExitValues = [ordered]@{
     'baseline-driver-gate-oac-stop' = @(0)
     'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
+    'production-service-crash' = @(0)
+    'production-service-graceful-stop' = @(0)
+    'production-service-post-stop-start' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
     'baseline-target-stop' = @(0)
@@ -91,6 +96,9 @@ $baselineAuxiliaryRequired = @(
     'baseline-driver-gate-oac-stop',
     'baseline-driver-gate-oac-start',
     'production-launcher-started-service',
+    'production-service-crash',
+    'production-service-graceful-stop',
+    'production-service-post-stop-start',
     'production-legacy-driver-start',
     'baseline-sc-stop',
     'baseline-target-stop')
@@ -723,7 +731,7 @@ function Wait-ForInteractiveTestUser {
     throw 'The bounded wait for the OACAdmin interactive session expired.'
 }
 
-function Get-InteractiveTaskRootPath {
+function Get-InteractiveProfilePath {
     $userName = "$env:COMPUTERNAME\OACAdmin"
     $account = [Security.Principal.NTAccount]::new($userName)
     $userSid = $account.Translate([Security.Principal.SecurityIdentifier])
@@ -733,8 +741,11 @@ function Get-InteractiveTaskRootPath {
     if ($profiles.Count -ne 1) {
         throw 'The interactive test user does not have one verifiable local profile.'
     }
-    $profilePath = [IO.Path]::GetFullPath([string]$profiles[0].LocalPath)
-    return Join-Path $profilePath `
+    return [IO.Path]::GetFullPath([string]$profiles[0].LocalPath)
+}
+
+function Get-InteractiveTaskRootPath {
+    return Join-Path (Get-InteractiveProfilePath) `
         ("AppData\Local\OAC-VM-Tasks\{0}" -f $script:CampaignId)
 }
 
@@ -922,6 +933,178 @@ function Write-TaskScript([string]$Path, [string]$Content) {
         [Text.UnicodeEncoding]::new($false, $true))
 }
 
+function Remove-RegularTestFile([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return }
+    if ($item.PSIsContainer -or
+        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to remove an unsafe test file: $Path"
+    }
+    if ($item.IsReadOnly) { $item.IsReadOnly = $false }
+    Remove-Item -LiteralPath $Path -Force
+}
+
+function Invoke-ProductionStatus([string]$Launcher, [string]$Name) {
+    $workspace = New-InteractiveTaskWorkspace $Name
+    $scriptPath = Join-Path $workspace 'task.ps1'
+    $resultPath = Join-Path $workspace 'result.txt'
+    $outputPath = Join-Path $workspace 'stdout.txt'
+    $scriptText = @"
+`$output = & '$Launcher' --status 2>&1
+`$code = `$LASTEXITCODE
+`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+[IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
+exit `$code
+"@
+    Write-TaskScript $scriptPath $scriptText
+    $exitCode = [int64](Invoke-InteractiveTask $Name $workspace 'Limited')
+    $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
+    $matches = [regex]::Matches(
+        $output,
+        '(?m)^OACService status; service-pid=([1-9][0-9]*); client-session=([0-9]+); driver-protocol=0x[0-9a-f]+; capabilities=0x[0-9a-f]+; flags=0x[0-9a-f]+; session-loss-sequence=([0-9]+); last-session-loss=([0-9]+)\r?$')
+    if ($exitCode -ne 0 -or $matches.Count -ne 1) {
+        throw "$Name did not return one valid service status."
+    }
+
+    [int64]$serviceProcessId = 0
+    [int64]$clientSessionId = -1
+    [int64]$lossSequence = -1
+    [int64]$lossReason = -1
+    if (-not [int64]::TryParse($matches[0].Groups[1].Value, [ref]$serviceProcessId) -or
+        -not [int64]::TryParse($matches[0].Groups[2].Value, [ref]$clientSessionId) -or
+        -not [int64]::TryParse($matches[0].Groups[3].Value, [ref]$lossSequence) -or
+        -not [int64]::TryParse($matches[0].Groups[4].Value, [ref]$lossReason) -or
+        $serviceProcessId -le 0 -or $clientSessionId -lt 0 -or
+        $lossSequence -lt 0 -or $lossReason -lt 0) {
+        throw "$Name returned malformed numeric status fields."
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        ServiceProcessId = $serviceProcessId
+        LossSequence = $lossSequence
+        LossReason = $lossReason
+    }
+}
+
+function Invoke-ProductionLaunch(
+    [string]$Launcher,
+    [string]$Target,
+    [string]$Name
+) {
+    $workspace = New-InteractiveTaskWorkspace $Name
+    $scriptPath = Join-Path $workspace 'task.ps1'
+    $resultPath = Join-Path $workspace 'result.txt'
+    $outputPath = Join-Path $workspace 'stdout.txt'
+    $scriptText = @"
+`$output = & '$Launcher' --launch '$Target' 2>&1
+`$code = `$LASTEXITCODE
+`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+[IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
+exit `$code
+"@
+    Write-TaskScript $scriptPath $scriptText
+    $exitCode = [int64](Invoke-InteractiveTask $Name $workspace 'Limited')
+    $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
+    $matches = [regex]::Matches(
+        $output,
+        '(?m)^OACService launched target; target-pid=([1-9][0-9]*); binding=confirmed; job=assigned; thread=resumed\r?$')
+    [int64]$targetProcessId = 0
+    if ($exitCode -ne 0 -or $matches.Count -ne 1 -or
+        -not [int64]::TryParse(
+            $matches[0].Groups[1].Value,
+            [ref]$targetProcessId) -or
+        $targetProcessId -le 0) {
+        throw "$Name did not return one valid target-launch result."
+    }
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        TargetProcessId = $targetProcessId
+    }
+}
+
+function Wait-LivenessProcesses(
+    [string]$ParentExecutablePath,
+    [string]$ChildExecutablePath,
+    [int64]$ExpectedParentProcessId
+) {
+    if ($ExpectedParentProcessId -le 0) {
+        throw 'The liveness parent process ID is invalid.'
+    }
+    $expectedParentName = [IO.Path]::GetFileName($ParentExecutablePath)
+    if ([string]::IsNullOrWhiteSpace($expectedParentName)) {
+        throw 'The liveness parent executable name is invalid.'
+    }
+    $expectedChildPath = [IO.Path]::GetFullPath($ChildExecutablePath)
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $parents = @(Get-CimInstance Win32_Process `
+                -Filter "ProcessId=$ExpectedParentProcessId")
+        if ($parents.Count -gt 1) {
+            throw 'The liveness parent process identity is ambiguous.'
+        }
+        if ($parents.Count -eq 1) {
+            # The protected target intentionally denies WMI enough access to
+            # read ExecutablePath. Its PID and path are already bound by the
+            # launch ticket, so identify the live process by exact image name.
+            if ([string]$parents[0].Name -ine $expectedParentName) {
+                throw 'The liveness parent has the wrong executable identity.'
+            }
+            $children = @(Get-CimInstance Win32_Process `
+                    -Filter "ParentProcessId=$ExpectedParentProcessId")
+            $livenessChildren = @($children | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+                    [IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq
+                        $expectedChildPath
+                })
+            if ($livenessChildren.Count -gt 1) {
+                throw 'The liveness parent created more than one liveness child.'
+            }
+            if ($livenessChildren.Count -eq 1) {
+                $child = $livenessChildren[0]
+                $expectedChildCommandLine = '"' +
+                    [string]$child.ExecutablePath + '" -t 127.0.0.1'
+                if ([int64]$child.ProcessId -le 0 -or
+                    [int64]$child.ProcessId -eq $ExpectedParentProcessId -or
+                    [string]$child.CommandLine -ine $expectedChildCommandLine) {
+                    throw 'The liveness child has the wrong process identity or role.'
+                }
+                return [pscustomobject]@{
+                    ParentProcessId = $ExpectedParentProcessId
+                    ChildProcessId = [int64]$child.ProcessId
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'The liveness parent did not expose exactly one verified child process.'
+}
+
+function Wait-ProcessesExited([int64[]]$ProcessIds, [string]$Context) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $active = @($ProcessIds | Where-Object {
+                $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue)
+            })
+        if ($active.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "$Context left liveness processes running: $($active -join ', ')"
+}
+
+function Wait-ServiceRestart([int64]$PreviousProcessId) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        $services = @(Get-CimInstance Win32_Service -Filter "Name='OACService'")
+        if ($services.Count -eq 1 -and $services[0].State -ceq 'Running' -and
+            [int64]$services[0].ProcessId -gt 0 -and
+            [int64]$services[0].ProcessId -ne $PreviousProcessId) {
+            return [int64]$services[0].ProcessId
+        }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'OACService did not complete its bounded recovery restart.'
+}
+
 function Test-CurrentDeviceOpenDenied([string]$Name) {
     $probe = @'
 Add-Type -TypeDefinition @"
@@ -966,7 +1149,7 @@ public static class OacSystemDeviceProbe
 }
 
 function Test-ProductionBoundary {
-    Write-RunLog 'Beginning bounded LabMode=0 service and IPC boundary tests.'
+    Write-RunLog 'Beginning bounded production service, launch, and liveness tests.'
     $installDirectory = Join-Path $env:ProgramFiles 'OAC-Test'
     $launcher = Join-Path $installDirectory 'OAC-Launcher.exe'
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
@@ -974,17 +1157,33 @@ function Test-ProductionBoundary {
     }
 
     $launcherExits = [Collections.Generic.List[int64]]::new()
+    $launchExits = [Collections.Generic.List[int64]]::new()
+    $lossSequences = [Collections.Generic.List[int64]]::new()
+    $lossReasons = [Collections.Generic.List[int64]]::new()
     $probeExits = [ordered]@{
         localsystem = [int64]-1
         limited = [int64]-1
         administrator = [int64]-1
     }
-    $launchExit = [int64]-1
-    $launchTargetProcessId = [int64]0
+    $crashParentProcessId = [int64]0
+    $crashChildProcessId = [int64]0
+    $gracefulParentProcessId = [int64]0
+    $gracefulChildProcessId = [int64]0
+    $crashProcessesTerminated = $false
+    $gracefulProcessesTerminated = $false
+    $serviceCrashRestarted = $false
     $launchBindingConfirmed = $false
+    $launchJobAssigned = $false
     $launchThreadResumed = $false
+    $gracefulLaunchBindingConfirmed = $false
+    $gracefulLaunchJobAssigned = $false
+    $gracefulLaunchThreadResumed = $false
     $testError = $null
-    $cleanupError = $null
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
+    $livenessSource = $launcher
+    $livenessTarget = Join-Path $installDirectory 'OAC-Liveness-Target.exe'
+    $livenessChild = Join-Path $env:SystemRoot 'System32\PING.EXE'
+    $livenessAliasCreated = $false
     try {
         Stop-TestService 'production-service-pre-stop' 'OACService'
         Stop-TestService 'production-driver-pre-stop' 'OAC'
@@ -992,29 +1191,31 @@ function Test-ProductionBoundary {
         Wait-TestServiceState OACService `
             ([ServiceProcess.ServiceControllerStatus]::Stopped)
 
-        for ($iteration = 1; $iteration -le 2; ++$iteration) {
-            $name = "production-launcher-$iteration"
-            $workspace = New-InteractiveTaskWorkspace $name
-            $scriptPath = Join-Path $workspace 'task.ps1'
-            $resultPath = Join-Path $workspace 'result.txt'
-            $outputPath = Join-Path $workspace 'stdout.txt'
-            $scriptText = @"
-`$output = & '$launcher' --status 2>&1
-`$code = `$LASTEXITCODE
-`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
-[IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
-exit `$code
-"@
-            Write-TaskScript $scriptPath $scriptText
-            $launcherExits.Add((Invoke-InteractiveTask `
-                $name $workspace 'Limited'))
-            Wait-TestServiceState OACService `
-                ([ServiceProcess.ServiceControllerStatus]::Running)
-            if ($iteration -eq 1) {
-                Invoke-ConsoleCapture 'production-launcher-started-service' `
-                    'sc.exe' @('query', 'OACService') | Out-Null
-            }
+        if ($null -ne (Get-Item -LiteralPath $livenessTarget -Force `
+                    -ErrorAction SilentlyContinue)) {
+            throw "The liveness test alias already exists: $livenessTarget"
         }
+        Copy-Item -LiteralPath $livenessSource -Destination $livenessTarget
+        $livenessAliasCreated = $true
+        if ((Get-FileHash -LiteralPath $livenessSource -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $livenessTarget -Algorithm SHA256).Hash) {
+            throw 'The liveness target alias does not match the installed launcher.'
+        }
+        if (-not (Test-Path -LiteralPath $livenessChild -PathType Leaf)) {
+            throw "The liveness child executable is missing: $livenessChild"
+        }
+
+        $initialStatus = Invoke-ProductionStatus $launcher 'production-launcher-1'
+        $launcherExits.Add($initialStatus.ExitCode)
+        $lossSequences.Add($initialStatus.LossSequence)
+        $lossReasons.Add($initialStatus.LossReason)
+        if ($initialStatus.LossSequence -ne 0 -or $initialStatus.LossReason -ne 0) {
+            throw 'The fresh production driver lifetime reported prior session loss.'
+        }
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Running)
+        Invoke-ConsoleCapture 'production-launcher-started-service' `
+            'sc.exe' @('query', 'OACService') | Out-Null
 
         $probeExits.localsystem = Test-CurrentDeviceOpenDenied `
             'production-direct-open-localsystem'
@@ -1072,75 +1273,172 @@ exit $code
                 ([ServiceProcess.ServiceControllerStatus]::Running)
         }
 
-        # Launch last because target exit revokes the one-use production
-        # controller session. The service is stopped in the common cleanup.
-        $launchName = 'production-launch'
-        $launchWorkspace = New-InteractiveTaskWorkspace $launchName
-        $launchScriptPath = Join-Path $launchWorkspace 'task.ps1'
-        $launchResultPath = Join-Path $launchWorkspace 'result.txt'
-        $launchOutputPath = Join-Path $launchWorkspace 'stdout.txt'
-        $launchTarget = Join-Path $env:SystemRoot 'System32\whoami.exe'
-        $launchScript = @"
-`$output = & '$launcher' --launch '$launchTarget' 2>&1
-`$code = `$LASTEXITCODE
-`$output | Out-File -LiteralPath '$launchOutputPath' -Encoding utf8
-[IO.File]::WriteAllText('$launchResultPath', [string]`$code, [Text.Encoding]::ASCII)
-exit `$code
-"@
-        Write-TaskScript $launchScriptPath $launchScript
-        $launchExit = Invoke-InteractiveTask $launchName $launchWorkspace 'Limited'
-        $launchOutput = Get-Content -LiteralPath `
-            (Join-Path $results 'production-launch.stdout.txt') -Raw
-        $launchMatches = [regex]::Matches(
-            $launchOutput,
-            '(?m)^OACService launched target; target-pid=([1-9][0-9]*); binding=confirmed; thread=resumed\r?$')
-        if ($launchMatches.Count -eq 1) {
-            $parsedTargetProcessId = [int64]0
-            if ([int64]::TryParse(
-                    $launchMatches[0].Groups[1].Value,
-                    [ref]$parsedTargetProcessId) -and
-                $parsedTargetProcessId -gt 0) {
-                $launchTargetProcessId = $parsedTargetProcessId
-                $launchBindingConfirmed = $true
-                $launchThreadResumed = $true
-            }
+        $crashLaunch = Invoke-ProductionLaunch `
+            $launcher $livenessTarget 'production-launch'
+        $launchExits.Add($crashLaunch.ExitCode)
+        $crashProcesses = Wait-LivenessProcesses `
+            $livenessTarget $livenessChild $crashLaunch.TargetProcessId
+        $crashParentProcessId = $crashProcesses.ParentProcessId
+        $crashChildProcessId = $crashProcesses.ChildProcessId
+        $launchBindingConfirmed = $true
+        $launchJobAssigned = $true
+        $launchThreadResumed = $true
+
+        $runningServices = @(Get-CimInstance Win32_Service -Filter "Name='OACService'")
+        if ($runningServices.Count -ne 1 -or
+            $runningServices[0].State -cne 'Running' -or
+            [int64]$runningServices[0].ProcessId -ne
+                $initialStatus.ServiceProcessId) {
+            throw 'OACService process identity changed before the crash test.'
+        }
+        $crashExit = Invoke-ConsoleCapture 'production-service-crash' `
+            'taskkill.exe' @('/PID', [string]$initialStatus.ServiceProcessId, '/F') `
+            ([TimeSpan]::FromSeconds(20))
+        if ($crashExit -ne 0) {
+            throw "Could not terminate OACService for the crash test; exit=$crashExit."
+        }
+        Wait-ProcessesExited `
+            @($crashParentProcessId, $crashChildProcessId) `
+            'OACService crash'
+        $crashProcessesTerminated = $true
+        $restartedServiceProcessId = Wait-ServiceRestart `
+            $initialStatus.ServiceProcessId
+        $serviceCrashRestarted = $true
+
+        $recoveredStatus = Invoke-ProductionStatus $launcher 'production-launcher-2'
+        $launcherExits.Add($recoveredStatus.ExitCode)
+        $lossSequences.Add($recoveredStatus.LossSequence)
+        $lossReasons.Add($recoveredStatus.LossReason)
+        if ($recoveredStatus.ServiceProcessId -ne $restartedServiceProcessId -or
+            $recoveredStatus.LossSequence -ne 1 -or
+            $recoveredStatus.LossReason -notin @(2, 3)) {
+            throw 'The recovered service did not report exactly one prior session loss.'
+        }
+
+        $gracefulLaunch = Invoke-ProductionLaunch `
+            $launcher $livenessTarget 'production-launch-graceful'
+        $launchExits.Add($gracefulLaunch.ExitCode)
+        $gracefulProcesses = Wait-LivenessProcesses `
+            $livenessTarget $livenessChild $gracefulLaunch.TargetProcessId
+        $gracefulParentProcessId = $gracefulProcesses.ParentProcessId
+        $gracefulChildProcessId = $gracefulProcesses.ChildProcessId
+        $gracefulLaunchBindingConfirmed = $true
+        $gracefulLaunchJobAssigned = $true
+        $gracefulLaunchThreadResumed = $true
+
+        $gracefulStopExit = Invoke-ConsoleCapture `
+            'production-service-graceful-stop' 'sc.exe' @('stop', 'OACService')
+        if ($gracefulStopExit -ne 0) {
+            throw "Could not stop OACService gracefully; exit=$gracefulStopExit."
+        }
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        Wait-ProcessesExited `
+            @($gracefulParentProcessId, $gracefulChildProcessId) `
+            'OACService graceful stop'
+        $gracefulProcessesTerminated = $true
+
+        $postStopStartExit = Invoke-ConsoleCapture `
+            'production-service-post-stop-start' 'sc.exe' @('start', 'OACService')
+        if ($postStopStartExit -ne 0) {
+            throw "Could not restart OACService after its graceful stop; exit=$postStopStartExit."
+        }
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Running)
+        $postStopStatus = Invoke-ProductionStatus $launcher 'production-launcher-3'
+        $launcherExits.Add($postStopStatus.ExitCode)
+        $lossSequences.Add($postStopStatus.LossSequence)
+        $lossReasons.Add($postStopStatus.LossReason)
+        if ($postStopStatus.LossSequence -ne 2 -or
+            $postStopStatus.LossReason -ne 1) {
+            throw 'The graceful stop did not publish one explicit session revocation.'
         }
 
         if (@($launcherExits | Where-Object { $_ -ne 0 }).Count -ne 0 -or
+            @($launchExits | Where-Object { $_ -ne 0 }).Count -ne 0 -or
             @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -ne 0 -or
-            $launchExit -ne 0 -or -not $launchBindingConfirmed -or
-            -not $launchThreadResumed) {
-            throw 'The production service/launcher/direct-open boundary did not pass.'
+            -not $crashProcessesTerminated -or
+            -not $gracefulProcessesTerminated -or
+            -not $serviceCrashRestarted) {
+            throw 'The production service, launch, and liveness boundary did not pass.'
         }
     } catch {
         $testError = $_.Exception.Message
     } finally {
         try {
             Stop-TestService 'production-service-stop' 'OACService'
+        } catch {
+            $cleanupErrors.Add("Stop OACService: $($_.Exception.Message)")
+        }
+        try {
             Stop-TestService 'production-driver-stop' 'OAC'
+        } catch {
+            $cleanupErrors.Add("Stop OAC: $($_.Exception.Message)")
+        }
+        try {
             Set-DriverLabMode 1
+        } catch {
+            $cleanupErrors.Add("Restore LabMode: $($_.Exception.Message)")
+        }
+        try {
             Start-TestService 'production-legacy-driver-start' 'OAC'
         } catch {
-            $cleanupError = $_.Exception.Message
+            $cleanupErrors.Add("Start OAC: $($_.Exception.Message)")
+        }
+        if ($livenessAliasCreated) {
+            try {
+                Remove-RegularTestFile $livenessTarget
+            } catch {
+                $cleanupErrors.Add("Remove liveness target alias: $($_.Exception.Message)")
+            }
         }
     }
 
+    $cleanupError = if ($cleanupErrors.Count -eq 0) {
+        $null
+    } else {
+        $cleanupErrors -join '; '
+    }
     $passed = $null -eq $testError -and $null -eq $cleanupError -and
-        $launcherExits.Count -eq 2 -and
+        $launcherExits.Count -eq 3 -and $launchExits.Count -eq 2 -and
         @($launcherExits | Where-Object { $_ -ne 0 }).Count -eq 0 -and
+        @($launchExits | Where-Object { $_ -ne 0 }).Count -eq 0 -and
         @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -eq 0 -and
-        $launchExit -eq 0 -and $launchTargetProcessId -gt 0 -and
-        $launchBindingConfirmed -and $launchThreadResumed
+        $crashParentProcessId -gt 0 -and $crashChildProcessId -gt 0 -and
+        $gracefulParentProcessId -gt 0 -and $gracefulChildProcessId -gt 0 -and
+        $launchBindingConfirmed -and $launchJobAssigned -and
+        $launchThreadResumed -and $gracefulLaunchBindingConfirmed -and
+        $gracefulLaunchJobAssigned -and $gracefulLaunchThreadResumed -and
+        $crashProcessesTerminated -and $gracefulProcessesTerminated -and
+        $serviceCrashRestarted -and
+        $lossSequences.Count -eq 3 -and $lossSequences[0] -eq 0 -and
+        $lossSequences[1] -eq 1 -and $lossSequences[2] -eq 2 -and
+        $lossReasons.Count -eq 3 -and $lossReasons[0] -eq 0 -and
+        $lossReasons[1] -in @(2, 3) -and $lossReasons[2] -eq 1
     [ordered]@{
         timestamp_utc = [DateTime]::UtcNow.ToString('o')
         launcher_exits = @($launcherExits)
+        launch_exits = @($launchExits)
         direct_open_localsystem_exit = $probeExits.localsystem
         direct_open_limited_exit = $probeExits.limited
         direct_open_administrator_exit = $probeExits.administrator
-        launch_exit = $launchExit
-        launch_target_process_id = $launchTargetProcessId
+        launch_exit = if ($launchExits.Count -gt 0) { $launchExits[0] } else { -1 }
+        launch_target_process_id = $crashParentProcessId
         launch_binding_confirmed = $launchBindingConfirmed
+        launch_job_assigned = $launchJobAssigned
         launch_thread_resumed = $launchThreadResumed
+        graceful_launch_exit = if ($launchExits.Count -gt 1) { $launchExits[1] } else { -1 }
+        graceful_launch_target_process_id = $gracefulParentProcessId
+        graceful_launch_binding_confirmed = $gracefulLaunchBindingConfirmed
+        graceful_launch_job_assigned = $gracefulLaunchJobAssigned
+        graceful_launch_thread_resumed = $gracefulLaunchThreadResumed
+        crash_child_process_id = $crashChildProcessId
+        graceful_child_process_id = $gracefulChildProcessId
+        crash_processes_terminated = $crashProcessesTerminated
+        graceful_processes_terminated = $gracefulProcessesTerminated
+        service_crash_restarted = $serviceCrashRestarted
+        session_loss_sequences = @($lossSequences)
+        session_loss_reasons = @($lossReasons)
         test_error = $testError
         cleanup_error = $cleanupError
         lab_mode_restored = $null -eq $cleanupError
@@ -1150,7 +1448,7 @@ exit `$code
     if (-not $passed) {
         throw "Production boundary failed; test='$testError' cleanup='$cleanupError'."
     }
-    Write-RunLog 'Production service boundary passed: status was queried twice, direct device opens were denied, and one standard-user target was bound and resumed.'
+    Write-RunLog 'Production boundary passed: direct opens were denied, both launches were job-owned, crash and graceful stop terminated each process tree, and session loss was reported exactly once per service lifetime.'
 }
 
 function Assert-KernelFindingProvenance([string]$ReportPath) {

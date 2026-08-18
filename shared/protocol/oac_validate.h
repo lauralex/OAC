@@ -507,6 +507,14 @@ static __inline BOOLEAN OacV5RevokeReasonValid(OAC_V5_REVOKE_REASON Reason)
     return Reason <= OAC_REVOKE_TARGET_CONFIRMATION_FAILED;
 }
 
+static __inline BOOLEAN OacSessionLossStateValid(
+    ULONGLONG Sequence,
+    OAC_V5_REVOKE_REASON Reason)
+{
+    return OacV5RevokeReasonValid(Reason) &&
+        ((Sequence == 0) == (Reason == OAC_V5_REVOKE_NONE));
+}
+
 static __inline BOOLEAN OacV5RuleIdValid(OAC_V5_RULE_ID RuleId)
 {
     ULONG group = RuleId & OAC_V5_RULE_GROUP_MASK;
@@ -721,6 +729,22 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusRequest(
         sizeof(*Request), OAC_V5_MESSAGE_GET_STATUS, 0);
 }
 
+static __inline OAC_V5_VALIDATION OacValidateRevokeSessionRequest(
+    const OAC_REVOKE_SESSION_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_V5_MESSAGE_REVOKE_SESSION, 0);
+    if (result != OAC_V5_VALID) return result;
+    if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
+    return Request->RevokeReason == OAC_V5_REVOKE_REQUESTED
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_VALUE;
+}
+
 static __inline OAC_V5_VALIDATION OacValidateArmLaunchRequest(
     const OAC_ARM_LAUNCH_REQUEST* Request,
     ULONG InputLength)
@@ -889,6 +913,32 @@ static __inline OAC_V5_VALIDATION OacValidateConfirmTargetResponse(
         : OAC_V5_INVALID_RESERVED;
 }
 
+static __inline OAC_V5_VALIDATION OacValidateRevokeSessionResponse(
+    const OAC_REVOKE_SESSION_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_V5_MESSAGE_REVOKE_SESSION,
+        OAC_V5_RESPONSE_REVOKED, OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->Header.Flags != OAC_V5_RESPONSE_REVOKED ||
+        Response->State != OAC_V5_SESSION_REVOKED ||
+        Response->RevokeReason == OAC_V5_REVOKE_NONE ||
+        !OacV5RevokeReasonValid(Response->RevokeReason) ||
+        !OacSessionLossStateValid(
+            Response->SessionLossSequence,
+            Response->LastSessionLossReason))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return Response->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     const OAC_V5_STATUS_RESPONSE* Response,
     ULONG OutputLength)
@@ -903,6 +953,9 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     if (!OacV5SessionStateValid(Response->State) ||
         Response->State < OAC_V5_SESSION_CLAIMED ||
         !OacV5RevokeReasonValid(Response->RevokeReason) ||
+        !OacSessionLossStateValid(
+            Response->SessionLossSequence,
+            Response->LastSessionLossReason) ||
         OacV5ValidateFlags(Response->Capabilities, OAC_V5_CAP_ALL) != OAC_V5_VALID ||
         OacV5ValidateFlags(Response->ConfigurationFlags,
             OAC_V5_CONFIG_FLAGS) != OAC_V5_VALID)
@@ -925,5 +978,7 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     {
         return OAC_V5_INVALID_VALUE;
     }
-    return OAC_V5_VALID;
+    return Response->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
 }

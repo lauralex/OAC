@@ -13,13 +13,15 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Session authority | The driver binds authority to the service SID, creator process object, exact file object, random session identifier, and monotonic generation. |
 | Early target binding | A bounded, one-use launch ticket matches the trusted creator and canonical executable path in the process-creation callback. |
 | Suspended launch | The service resolves and holds the executable under the caller identity, creates it suspended with the caller's primary token, confirms the exact process handle, and then resumes the first thread. |
+| Target-tree containment | The service assigns the confirmed target to an unnamed kill-on-close job before resume. Children inherit the job, and graceful stop or service failure terminates the tree. |
+| Session-loss reporting | A device-lifetime monotonic sequence and stable loss reason let a replacement service distinguish requested shutdown from unexpected controller loss. |
 | Handle protection | Signed object callbacks filter selected dangerous user-mode process and thread rights for the bound target. |
 | Cleanup and retirement | Per-file cleanup revokes authority and completes rundown. A cleaned session that still references a live target remains as an unusable tombstone until target exit. |
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
 
-The current production path intentionally supports one target and no command-line arguments. Job
-containment, child-process ownership, production evidence transport, signed authorization, backend
-leases, and target-session reuse remain planned work.
+The current production path intentionally supports one target and no command-line arguments.
+Production evidence transport, signed authorization, backend leases, and target-session reuse
+remain planned work.
 
 ## Lab scanner matrix
 

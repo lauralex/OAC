@@ -54,7 +54,9 @@ $baselineZeroTests = @(
     'baseline-client',
     'production-launcher-1',
     'production-launcher-2',
+    'production-launcher-3',
     'production-launch',
+    'production-launch-graceful',
     'production-direct-open-localsystem',
     'production-direct-open-limited',
     'production-direct-open-administrator')
@@ -87,6 +89,9 @@ $auxiliaryExitValues = [ordered]@{
     'baseline-driver-gate-oac-stop' = @(0)
     'baseline-driver-gate-oac-start' = @(0)
     'production-launcher-started-service' = @(0)
+    'production-service-crash' = @(0)
+    'production-service-graceful-stop' = @(0)
+    'production-service-post-stop-start' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
     'baseline-target-stop' = @(0)
@@ -130,6 +135,9 @@ $baselineAuxiliaryRequired = @(
     'baseline-driver-gate-oac-stop',
     'baseline-driver-gate-oac-start',
     'production-launcher-started-service',
+    'production-service-crash',
+    'production-service-graceful-stop',
+    'production-service-post-stop-start',
     'production-legacy-driver-start',
     'baseline-sc-stop',
     'baseline-target-stop')
@@ -636,8 +644,16 @@ function Assert-IntegerValue(
 function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
     Assert-Boolean $Summary 'pass' $Context
     $launcherExits = @(Get-RequiredValue $Summary 'launcher_exits' $Context)
-    if ($launcherExits.Count -ne 2) {
-        throw "$Context does not contain two successful launcher results."
+    if ($launcherExits.Count -ne 3) {
+        throw "$Context does not contain three successful status results."
+    }
+    $launchExits = @(Get-RequiredValue $Summary 'launch_exits' $Context)
+    if ($launchExits.Count -ne 2) {
+        throw "$Context does not contain two successful launch results."
+    }
+    for ($index = 0; $index -lt $launchExits.Count; ++$index) {
+        Assert-IntegerValue $launchExits[$index] 0 `
+            "$Context launch_exits[$index]"
     }
     for ($index = 0; $index -lt $launcherExits.Count; ++$index) {
         Assert-IntegerValue $launcherExits[$index] 0 `
@@ -652,14 +668,50 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
     }
     Assert-IntegerValue (Get-RequiredValue $Summary 'launch_exit' $Context) 0 `
         "$Context launch_exit"
-    $targetProcessId = Get-RequiredValue $Summary `
-        'launch_target_process_id' $Context
-    if (($targetProcessId -isnot [int] -and $targetProcessId -isnot [long]) -or
-        [int64]$targetProcessId -le 0) {
-        throw "$Context does not contain a valid launched target process ID."
+    Assert-IntegerValue (Get-RequiredValue $Summary `
+            'graceful_launch_exit' $Context) 0 `
+        "$Context graceful_launch_exit"
+    foreach ($name in @(
+            'launch_target_process_id',
+            'graceful_launch_target_process_id',
+            'crash_child_process_id',
+            'graceful_child_process_id')) {
+        $processId = Get-RequiredValue $Summary $name $Context
+        if (($processId -isnot [int] -and $processId -isnot [long]) -or
+            [int64]$processId -le 0) {
+            throw "$Context does not contain a valid $name."
+        }
     }
-    Assert-Boolean $Summary 'launch_binding_confirmed' $Context
-    Assert-Boolean $Summary 'launch_thread_resumed' $Context
+    foreach ($name in @(
+            'launch_binding_confirmed',
+            'launch_job_assigned',
+            'launch_thread_resumed',
+            'graceful_launch_binding_confirmed',
+            'graceful_launch_job_assigned',
+            'graceful_launch_thread_resumed',
+            'crash_processes_terminated',
+            'graceful_processes_terminated',
+            'service_crash_restarted',
+            'lab_mode_restored')) {
+        Assert-Boolean $Summary $name $Context
+    }
+
+    $lossSequences = @(Get-RequiredValue `
+            $Summary 'session_loss_sequences' $Context)
+    $lossReasons = @(Get-RequiredValue $Summary 'session_loss_reasons' $Context)
+    if ($lossSequences.Count -ne 3 -or $lossReasons.Count -ne 3) {
+        throw "$Context does not contain three liveness status observations."
+    }
+    foreach ($index in 0..2) {
+        Assert-IntegerValue $lossSequences[$index] $index `
+            "$Context session_loss_sequences[$index]"
+    }
+    Assert-IntegerValue $lossReasons[0] 0 "$Context session_loss_reasons[0]"
+    if (($lossReasons[1] -isnot [int] -and $lossReasons[1] -isnot [long]) -or
+        [int64]$lossReasons[1] -notin @(2, 3)) {
+        throw "$Context crash loss reason is not file cleanup or service exit."
+    }
+    Assert-IntegerValue $lossReasons[2] 1 "$Context session_loss_reasons[2]"
 }
 
 function Assert-DriverGateSummary([object]$Summary, [string]$Context) {
@@ -1654,7 +1706,7 @@ function Assert-FinalStatus([object]$Status) {
         'protocol_test_count' 'final status') 5 `
         'final status protocol_test_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
-        'client_scan_count' 'final status') 10 `
+        'client_scan_count' 'final status') 12 `
         'final status client_scan_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
         'minidump_count' 'final status') 0 `

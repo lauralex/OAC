@@ -1,7 +1,6 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-04 production-control MVP implemented and accepted on the named
-Windows 11 build 26100 disposable-VM campaign
+**Status:** WP-01 through WP-05 accepted on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -16,6 +15,8 @@ flowchart TD
     S -->|"caller-token suspended create"| T["Bound target process"]
     S -->|"arm and exact-handle confirm"| D
     D -->|"creation-time path and creator match"| T
+    S -->|"assign before resume"| J["Kill-on-close job"]
+    J -->|"owns target tree"| T
 
     X["Elevated OAC-Client"] -->|"diagnostic protocol; LabMode=1 only"| D
     X -->|"system, target, policy, and HWID scans"| W["Documented Windows user-mode APIs"]
@@ -32,7 +33,7 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | Component | Current responsibility | Boundary |
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, own the production driver session, answer status, and serialize one caller-token suspended launch | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OACService` | Verify its restricted identity, own the production driver session and target job, answer status, and serialize one caller-token suspended launch | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
@@ -66,10 +67,12 @@ and authorization checks, not cryptographic backend authentication.
 The IPC surface contains hello, status, and one absolute executable launch request. The service
 opens and resolves the executable under client impersonation, keeps the file locked against writes
 and deletion, arms a bounded kernel ticket for the exact volume-device and DOS-device path spellings,
-creates the process suspended
-under the client's primary token, confirms the exact process handle, validates monitoring state,
-and resumes the initial thread. There is no argument transport, policy transfer, signed manifest,
-evidence upload, backend lease, job ownership, or service-session reuse after the target exits.
+creates the process suspended under the client's primary token, confirms the exact process handle,
+validates monitoring state, assigns the process to a service-owned kill-on-close job, and resumes
+the initial thread. Child processes inherit that job. Graceful stop explicitly revokes the driver
+session before closing the job; unexpected service exit closes both driver and job handles through
+normal Windows handle teardown. There is no argument transport, policy transfer, signed manifest,
+evidence upload, authenticated backend lease, or service-session reuse after the target exits.
 
 ## Per-file driver session
 
@@ -92,6 +95,11 @@ marks the session closing, waits for in-flight requests, and releases the contro
 Close releases the file-context reference. Driver shutdown marks the session closing and releases
 all held objects.
 
+An explicit revoke request is idempotent and records requested-shutdown provenance. If cleanup or
+service exit wins instead, the first observed cause is recorded. The driver exposes a monotonic
+device-lifetime sequence and last-cause pair through status; the next restricted service relays it
+to the standard-user launcher. This is a narrow liveness latch, not the later alert/event channel.
+
 ### Live-target tombstone
 
 A cleaned session with no target retires immediately. If a referenced target is still live, the
@@ -101,24 +109,23 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; implementation commit
-`bbf8f06bd9383be2d9de079a95b67d87848c280c` passed the driver-backed target-live, cleanup, and
-standard-user launch cases under the baseline and Driver Verifier phases.
+`a30ef78819b865786f6f4e104b7a54f48678da7f` passed the driver-backed target-live, cleanup,
+standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
+cases under the baseline and Driver Verifier phases.
 
 ## Protocol and evidence boundary
 
-Production control dispatches negotiate, claim, status, arm, cancel, and confirm while advertising
-session control and launch-ticket support.
+Production control dispatches negotiate, claim, status, explicit revoke, arm, cancel, and confirm
+while advertising session control, launch-ticket, and session-liveness support.
 The shared ABI defines stable rule/event IDs and a provenance-preserving event record, and the pure
 unit suite validates that schema. The driver does not yet expose production configuration, scanning,
-event read, CPU snapshot, or revoke operations. Existing findings still travel through the
-diagnostic ring.
+event read, or CPU snapshot operations. Existing findings still travel through the diagnostic ring.
 
 ## Planned sequence
 
-1. Assign the target tree to a service-owned kill-on-close job and finish liveness rules.
-2. Separate critical alerts, operational events, and paged snapshots.
-3. Keep health and evidence acknowledgement independent of expensive scan workers.
-4. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
+1. Separate critical alerts, operational events, and paged snapshots.
+2. Keep health and evidence acknowledgement independent of expensive scan workers.
+3. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
    and backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
@@ -127,5 +134,5 @@ The complete target and migration rationale is in [`hardening-plan.md`](hardenin
 
 Portable checks use documented interfaces and dynamically resolved optional APIs. Unsupported APIs
 produce an explicit unavailable or degraded capability. Private offsets are never guessed. The x64
-implementation does not establish x86, ARM64, or historical Windows support, and no current production VM
-result has yet established compatibility beyond successful host compilation and pure validation.
+implementation passed one exact Windows 11 Pro build 26100 VM configuration; it does not establish
+x86, ARM64, historical Windows, other security configurations, hardware, or game compatibility.

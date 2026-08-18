@@ -25,9 +25,12 @@ private:
 
     HANDLE stopEvent_ = nullptr;
     HANDLE fatalEvent_ = nullptr;
+    HANDLE targetReadyEvent_ = nullptr;
     HANDLE pipeThread_ = nullptr;
     HANDLE firstPipe_ = INVALID_HANDLE_VALUE;
     HANDLE driver_ = INVALID_HANDLE_VALUE;
+    HANDLE targetJob_ = nullptr;
+    HANDLE targetProcess_ = nullptr;
     volatile LONG stopped_ = FALSE;
     volatile LONG fatalError_ = ERROR_SUCCESS;
     ULONG driverVersion_ = 0;
