@@ -2,6 +2,9 @@
 
 #include <Windows.h>
 
+#include <array>
+#include <cstddef>
+
 #include "..\shared\oac_ipc.h"
 #include "..\shared\protocol\oac_v5.h"
 
@@ -15,12 +18,15 @@ public:
     ServiceHost& operator=(const ServiceHost&) = delete;
 
     DWORD Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept;
-    DWORD Wait() const noexcept;
+    DWORD Wait() noexcept;
     void Stop() noexcept;
 
 private:
+    static constexpr std::size_t kAlertCacheCapacity = 32;
+
     static DWORD WINAPI PipeThreadEntry(void* context) noexcept;
     DWORD PipeLoop() noexcept;
+    DWORD PollAlerts() noexcept;
     void SetFatalError(DWORD error) noexcept;
 
     HANDLE stopEvent_ = nullptr;
@@ -37,4 +43,11 @@ private:
     ULONGLONG driverCapabilities_ = 0;
     OAC_V5_SESSION_ID driverSessionId_{};
     ULONGLONG driverSessionGeneration_ = 0;
+    // Alerts remain in a bounded handoff until authenticated upload exists.
+    // Filling this cache is a fail-closed service error, never silent loss.
+    std::array<OAC_V5_EVENT_RECORD, kAlertCacheCapacity> alerts_{};
+    ULONG alertCount_ = 0;
+    ULONGLONG alertCursor_ = 0;
+    ULONGLONG alertAcknowledgement_ = 0;
+    ULONGLONG serviceEvidenceSequence_ = 0;
 };

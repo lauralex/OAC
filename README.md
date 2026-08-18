@@ -15,7 +15,7 @@ then resume its first thread.
 
 > [!IMPORTANT]
 > OAC is an engineering reference, not a production-ready anti-cheat release. It does not yet include
-> production telemetry delivery, signed game manifests or policy, authenticated backend leases, a
+> authenticated backend evidence delivery, signed game manifests or policy, backend leases, a
 > supported compatibility matrix, or production driver signing. Never install the
 > disposable test package on a workstation or production system.
 
@@ -44,7 +44,7 @@ flowchart LR
     Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
     Job --> Target["Protected target tree"]
     Driver -->|"creation-time bind"| Target
-    Driver -->|"status and bounded protection"| Service
+    Driver -->|"status and typed alerts"| Service
 ```
 
 The launcher exposes status and one serialized executable-launch request. The service authenticates
@@ -70,6 +70,11 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
 - Service-owned target-tree lifetime with kill-on-close containment on graceful stop or service
   failure, plus explicit idempotent driver-session revocation.
 - A monotonic session-loss status latch for service recovery diagnostics.
+- Separate bounded channels for retained high/critical alerts and lower-priority operational
+  events, with explicit sequence, acknowledgement, and loss metadata.
+- Frozen, expiring kernel-module snapshots with stable identifiers and cursor-based paging.
+- A bounded service alert poll path that fails closed on alert loss, session revocation, or local
+  handoff exhaustion.
 - Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
 - Demand-start driver and service installation with strict package, service-policy, and cleanup
   verification in the disposable test workflow.
@@ -85,7 +90,6 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Production alert, event, and snapshot transport.
 - Bounded service scheduling and centralized typed policy.
 - Stable executable identity plus signed manifests and policy.
 - Authenticated backend sessions, leases, and evidence acknowledgement.

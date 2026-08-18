@@ -12,13 +12,15 @@
 #include <winioctl.h>
 #endif
 
-#define OAC_PRODUCTION_PROTOCOL_VERSION 0x00050003UL
+#define OAC_PRODUCTION_PROTOCOL_VERSION 0x00050004UL
 #define OAC_V5_VERSION OAC_PRODUCTION_PROTOCOL_VERSION
 #define OAC_V5_ULONG_MAX 0xFFFFFFFFUL
 #define OAC_V5_MAX_INPUT_SIZE (64UL * 1024UL)
 #define OAC_V5_MAX_OUTPUT_SIZE (1024UL * 1024UL)
-#define OAC_V5_MAX_EVENT_COUNT 64UL
+#define OAC_EVIDENCE_MAX_RECORDS_PER_PAGE 16UL
 #define OAC_V5_MAX_EVENT_TEXT 192UL
+#define OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE 16UL
+#define OAC_SNAPSHOT_MAX_NAME_CHARS 256UL
 #define OAC_LAUNCH_MIN_TTL_MS 100UL
 #define OAC_LAUNCH_MAX_TTL_MS 10000UL
 #define OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS 512UL
@@ -33,9 +35,9 @@
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x812, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
 #define IOCTL_OAC_V5_RUN_SCAN \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x813, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
-#define IOCTL_OAC_V5_READ_EVENTS \
+#define IOCTL_OAC_READ_EVIDENCE \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x814, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
-#define IOCTL_OAC_V5_CPU_SNAPSHOT \
+#define IOCTL_OAC_MANAGE_SNAPSHOT \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x815, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
 #define IOCTL_OAC_V5_GET_STATUS \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x816, METHOD_BUFFERED, OAC_V5_IOCTL_ACCESS)
@@ -68,8 +70,8 @@ typedef ULONG OAC_V5_REVOKE_REASON;
 #define OAC_V5_MESSAGE_CLAIM_SESSION  0x00000811UL
 #define OAC_V5_MESSAGE_SET_CONFIG     0x00000812UL
 #define OAC_V5_MESSAGE_RUN_SCAN       0x00000813UL
-#define OAC_V5_MESSAGE_READ_EVENTS    0x00000814UL
-#define OAC_V5_MESSAGE_CPU_SNAPSHOT   0x00000815UL
+#define OAC_MESSAGE_READ_EVIDENCE     0x00000814UL
+#define OAC_MESSAGE_MANAGE_SNAPSHOT   0x00000815UL
 #define OAC_V5_MESSAGE_GET_STATUS     0x00000816UL
 #define OAC_V5_MESSAGE_REVOKE_SESSION 0x00000817UL
 #define OAC_MESSAGE_ARM_LAUNCH     0x00000818UL
@@ -87,6 +89,12 @@ typedef struct OAC_LAUNCH_ID_TAG
     ULONGLONG High;
     ULONGLONG Low;
 } OAC_LAUNCH_ID, *POAC_LAUNCH_ID;
+
+typedef struct OAC_SNAPSHOT_ID_TAG
+{
+    ULONGLONG High;
+    ULONGLONG Low;
+} OAC_SNAPSHOT_ID, *POAC_SNAPSHOT_ID;
 
 /* Session modes accepted by OAC_V5_CLAIM_REQUEST.Mode. */
 #define OAC_V5_SESSION_PRODUCTION 0x00000001UL
@@ -141,13 +149,13 @@ typedef ULONG OAC_LAUNCH_DECISION;
 #define OAC_V5_CAP_SESSION_CONTROL 0x00000001UL
 #define OAC_V5_CAP_TYPED_EVENTS    0x00000002UL
 #define OAC_V5_CAP_KERNEL_SCAN     0x00000004UL
-#define OAC_V5_CAP_CPU_SNAPSHOT    0x00000008UL
+#define OAC_V5_CAP_PAGED_SNAPSHOTS 0x00000008UL
 #define OAC_V5_CAP_DRIVER_GATE     0x00000010UL
 #define OAC_V5_CAP_LAUNCH_TICKET   0x00000020UL
 #define OAC_V5_CAP_SESSION_LIVENESS 0x00000040UL
 #define OAC_V5_CAP_ALL (OAC_V5_CAP_SESSION_CONTROL | \
     OAC_V5_CAP_TYPED_EVENTS | OAC_V5_CAP_KERNEL_SCAN | \
-    OAC_V5_CAP_CPU_SNAPSHOT | OAC_V5_CAP_DRIVER_GATE | \
+    OAC_V5_CAP_PAGED_SNAPSHOTS | OAC_V5_CAP_DRIVER_GATE | \
     OAC_V5_CAP_LAUNCH_TICKET | OAC_V5_CAP_SESSION_LIVENESS)
 
 #define OAC_V5_PROTOCOL_STRICT_LENGTHS 0x00000001UL
@@ -189,6 +197,7 @@ typedef ULONG OAC_LAUNCH_DECISION;
 #define OAC_V5_RULE_TARGET_BOUND          0x00010005UL
 #define OAC_V5_RULE_TARGET_EXITED         0x00010006UL
 #define OAC_V5_RULE_HANDLE_RIGHTS_STRIPPED 0x00020001UL
+#define OAC_V5_RULE_PROCESS_IMAGE_LOADED    0x00020002UL
 #define OAC_V5_RULE_KERNEL_IMAGE_LOADED   0x00030001UL
 #define OAC_V5_RULE_DRIVER_DENY_MATCH     0x00030002UL
 #define OAC_V5_RULE_DRIVER_GATE_TRIP      0x00030003UL
@@ -254,6 +263,22 @@ typedef ULONG OAC_LAUNCH_DECISION;
 #define OAC_V5_CATEGORY_DEVICE         11UL
 #define OAC_V5_CATEGORY_WINDOW         12UL
 #define OAC_V5_CATEGORY_HWID           13UL
+
+#define OAC_EVIDENCE_CHANNEL_ALERT 1UL
+#define OAC_EVIDENCE_CHANNEL_EVENT 2UL
+
+#define OAC_SNAPSHOT_OPERATION_OPEN  1UL
+#define OAC_SNAPSHOT_OPERATION_READ  2UL
+#define OAC_SNAPSHOT_OPERATION_CLOSE 3UL
+
+#define OAC_SNAPSHOT_TYPE_KERNEL_MODULES 1UL
+
+#define OAC_SNAPSHOT_STATE_READY  1UL
+#define OAC_SNAPSHOT_STATE_FAILED 2UL
+#define OAC_SNAPSHOT_STATE_CLOSED 3UL
+
+#define OAC_SNAPSHOT_RECORD_KERNEL_MODULE 1UL
+#define OAC_SNAPSHOT_RECORD_FLAGS 0UL
 
 typedef struct OAC_V5_REQUEST_HEADER_TAG
 {
@@ -407,6 +432,16 @@ typedef struct OAC_CONFIRM_TARGET_RESPONSE_TAG
     ULONG Reserved;
 } OAC_CONFIRM_TARGET_RESPONSE, *POAC_CONFIRM_TARGET_RESPONSE;
 
+typedef struct OAC_EVIDENCE_READ_REQUEST_TAG
+{
+    OAC_V5_REQUEST_HEADER Header;
+    ULONG Channel;
+    ULONG MaximumRecords;
+    ULONGLONG AfterSequence;
+    ULONGLONG AcknowledgeThrough;
+    ULONGLONG Reserved;
+} OAC_EVIDENCE_READ_REQUEST, *POAC_EVIDENCE_READ_REQUEST;
+
 /* Display text is optional and has no policy meaning. PayloadLength is bytes
  * used in Text; UTF-16 payloads include their trailing null WCHAR. */
 typedef struct OAC_V5_EVENT_RECORD_TAG
@@ -441,6 +476,71 @@ typedef struct OAC_V5_EVENT_RECORD_TAG
     WCHAR Text[OAC_V5_MAX_EVENT_TEXT];
 } OAC_V5_EVENT_RECORD, *POAC_V5_EVENT_RECORD;
 
+typedef struct OAC_EVIDENCE_READ_RESPONSE_TAG
+{
+    OAC_V5_RESPONSE_HEADER Header;
+    ULONG Channel;
+    ULONG RecordCount;
+    ULONGLONG PublishedSequence;
+    ULONGLONG FirstAvailableSequence;
+    ULONGLONG LastAvailableSequence;
+    ULONGLONG AcknowledgedSequence;
+    ULONGLONG DroppedCount;
+    ULONGLONG FirstLostSequence;
+    ULONGLONG LostHighCount;
+    ULONGLONG LostCriticalCount;
+    ULONG LossLatched;
+    ULONG Reserved;
+    OAC_V5_EVENT_RECORD Records[ANYSIZE_ARRAY];
+} OAC_EVIDENCE_READ_RESPONSE, *POAC_EVIDENCE_READ_RESPONSE;
+
+typedef struct OAC_SNAPSHOT_RECORD_TAG
+{
+    ULONG Version;
+    ULONG Size;
+    ULONG RecordType;
+    ULONG Flags;
+    ULONGLONG Index;
+    ULONGLONG Address;
+    ULONGLONG Length;
+    ULONG NameLength;
+    ULONG Reserved;
+    WCHAR Name[OAC_SNAPSHOT_MAX_NAME_CHARS];
+} OAC_SNAPSHOT_RECORD, *POAC_SNAPSHOT_RECORD;
+
+typedef struct OAC_SNAPSHOT_REQUEST_TAG
+{
+    OAC_V5_REQUEST_HEADER Header;
+    ULONG Operation;
+    ULONG SnapshotType;
+    OAC_SNAPSHOT_ID SnapshotId;
+    ULONGLONG CursorGeneration;
+    ULONGLONG Cursor;
+    ULONG MaximumRecords;
+    ULONG Reserved;
+} OAC_SNAPSHOT_REQUEST, *POAC_SNAPSHOT_REQUEST;
+
+typedef struct OAC_SNAPSHOT_RESPONSE_TAG
+{
+    OAC_V5_RESPONSE_HEADER Header;
+    OAC_SNAPSHOT_ID SnapshotId;
+    OAC_V5_SCAN_ID ScanId;
+    ULONGLONG CreatedTimestamp100ns;
+    ULONGLONG ExpirationInterruptTime100ns;
+    ULONGLONG CursorGeneration;
+    ULONGLONG Cursor;
+    ULONGLONG NextCursor;
+    ULONG SnapshotType;
+    ULONG State;
+    ULONG TotalItems;
+    ULONG AvailableItems;
+    ULONG RecordCount;
+    ULONG Truncated;
+    LONG FailureStatus;
+    ULONG Reserved;
+    OAC_SNAPSHOT_RECORD Records[ANYSIZE_ARRAY];
+} OAC_SNAPSHOT_RESPONSE, *POAC_SNAPSHOT_RESPONSE;
+
 #ifdef __cplusplus
 #define OAC_V5_STATIC_ASSERT(Expression, Message) static_assert((Expression), Message)
 #elif defined(_KERNEL_MODE)
@@ -458,10 +558,10 @@ OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_SET_CONFIG >> 2) & 0xFFFUL) ==
     OAC_V5_MESSAGE_SET_CONFIG, "config message ID drifted");
 OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_RUN_SCAN >> 2) & 0xFFFUL) ==
     OAC_V5_MESSAGE_RUN_SCAN, "scan message ID drifted");
-OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_READ_EVENTS >> 2) & 0xFFFUL) ==
-    OAC_V5_MESSAGE_READ_EVENTS, "event message ID drifted");
-OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_CPU_SNAPSHOT >> 2) & 0xFFFUL) ==
-    OAC_V5_MESSAGE_CPU_SNAPSHOT, "CPU message ID drifted");
+OAC_V5_STATIC_ASSERT(((IOCTL_OAC_READ_EVIDENCE >> 2) & 0xFFFUL) ==
+    OAC_MESSAGE_READ_EVIDENCE, "evidence message ID drifted");
+OAC_V5_STATIC_ASSERT(((IOCTL_OAC_MANAGE_SNAPSHOT >> 2) & 0xFFFUL) ==
+    OAC_MESSAGE_MANAGE_SNAPSHOT, "snapshot message ID drifted");
 OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_GET_STATUS >> 2) & 0xFFFUL) ==
     OAC_V5_MESSAGE_GET_STATUS, "status message ID drifted");
 OAC_V5_STATIC_ASSERT(((IOCTL_OAC_V5_REVOKE_SESSION >> 2) & 0xFFFUL) ==
@@ -476,6 +576,8 @@ OAC_V5_STATIC_ASSERT(sizeof(OAC_V5_SESSION_ID) == 16,
     "OAC_V5_SESSION_ID layout changed");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_LAUNCH_ID) == 16,
     "OAC_LAUNCH_ID layout changed");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_SNAPSHOT_ID) == 16,
+    "OAC_SNAPSHOT_ID layout changed");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_V5_REQUEST_HEADER) == 48,
     "OAC_V5_REQUEST_HEADER layout changed");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_REQUEST_HEADER, RequestId) == 8,
@@ -605,25 +707,188 @@ OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_RESPONSE,
     State) == 64, "confirm-target state moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_CONFIRM_TARGET_RESPONSE,
     Reserved) == 68, "confirm-target reserved field moved");
-OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ObservationSeverity) == 16,
+OAC_V5_STATIC_ASSERT(sizeof(OAC_EVIDENCE_READ_REQUEST) == 80,
+    "OAC_EVIDENCE_READ_REQUEST layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    Header) == 0, "evidence request header moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    Channel) == 48, "evidence channel moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    MaximumRecords) == 52, "evidence page bound moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    AfterSequence) == 56, "evidence cursor moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    AcknowledgeThrough) == 64, "evidence acknowledgement moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_REQUEST,
+    Reserved) == 72, "evidence reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Version) == 0,
+    "OAC_V5_EVENT_RECORD version moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Size) == 4,
+    "OAC_V5_EVENT_RECORD size moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, RuleId) == 8,
+    "OAC_V5_EVENT_RECORD rule ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, EventType) == 12,
+    "OAC_V5_EVENT_RECORD event type moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD,
+    ObservationSeverity) == 16,
     "OAC_V5_EVENT_RECORD observation severity moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, PolicySeverity) == 20,
     "OAC_V5_EVENT_RECORD policy severity moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Confidence) == 24,
     "OAC_V5_EVENT_RECORD confidence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Category) == 28,
+    "OAC_V5_EVENT_RECORD category moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, PayloadType) == 32,
     "OAC_V5_EVENT_RECORD payload type moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Reserved) == 36,
     "OAC_V5_EVENT_RECORD reserved field moved");
-OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Text) == 176,
-    "OAC_V5_EVENT_RECORD prefix layout changed");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, SessionId) == 40,
     "OAC_V5_EVENT_RECORD session ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Generation) == 56,
+    "OAC_V5_EVENT_RECORD generation moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Sequence) == 64,
     "OAC_V5_EVENT_RECORD provenance moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Timestamp100ns) == 72,
+    "OAC_V5_EVENT_RECORD timestamp moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ScanId) == 80,
+    "OAC_V5_EVENT_RECORD scan ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD,
+    IngestionTimestamp100ns) == 88,
+    "OAC_V5_EVENT_RECORD ingestion timestamp moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ServiceSequence) == 96,
+    "OAC_V5_EVENT_RECORD service sequence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, OccurrenceCount) == 104,
+    "OAC_V5_EVENT_RECORD occurrence count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD,
+    FirstOccurrence100ns) == 112,
+    "OAC_V5_EVENT_RECORD first occurrence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD,
+    LastOccurrence100ns) == 120,
+    "OAC_V5_EVENT_RECORD last occurrence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ProcessId) == 128,
+    "OAC_V5_EVENT_RECORD process ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, ThreadId) == 136,
+    "OAC_V5_EVENT_RECORD thread ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Address) == 144,
+    "OAC_V5_EVENT_RECORD address moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Auxiliary) == 152,
+    "OAC_V5_EVENT_RECORD auxiliary value moved");
 OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, EvidenceFlags) == 160,
     "OAC_V5_EVENT_RECORD evidence flags moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, PayloadLength) == 168,
+    "OAC_V5_EVENT_RECORD payload length moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Flags) == 172,
+    "OAC_V5_EVENT_RECORD flags moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Text) == 176,
+    "OAC_V5_EVENT_RECORD payload moved");
 OAC_V5_STATIC_ASSERT(sizeof(OAC_V5_EVENT_RECORD) == 560,
     "OAC_V5_EVENT_RECORD layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    Header) == 0, "evidence response header moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    Channel) == 56, "evidence response channel moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    RecordCount) == 60, "evidence response record count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    PublishedSequence) == 64, "evidence publication cursor moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    FirstAvailableSequence) == 72,
+    "evidence first available sequence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    LastAvailableSequence) == 80,
+    "evidence last available sequence moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    AcknowledgedSequence) == 88, "evidence response acknowledgement moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    DroppedCount) == 96, "evidence drop count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    FirstLostSequence) == 104, "evidence loss provenance moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    LostHighCount) == 112, "evidence high-loss count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    LostCriticalCount) == 120,
+    "evidence critical-loss count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    LossLatched) == 128, "evidence loss latch moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    Reserved) == 132, "evidence response reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE,
+    Records) == 136, "evidence response prefix changed");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_SNAPSHOT_RECORD) == 560,
+    "OAC_SNAPSHOT_RECORD layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Version) == 0, "snapshot record version moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Size) == 4, "snapshot record size moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    RecordType) == 8, "snapshot record type moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Flags) == 12, "snapshot record flags moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Index) == 16, "snapshot record identity moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Address) == 24, "snapshot record address moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Length) == 32, "snapshot record length moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    NameLength) == 40, "snapshot record name length moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Reserved) == 44, "snapshot record reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RECORD,
+    Name) == 48, "snapshot record name moved");
+OAC_V5_STATIC_ASSERT(sizeof(OAC_SNAPSHOT_REQUEST) == 96,
+    "OAC_SNAPSHOT_REQUEST layout changed");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    Header) == 0, "snapshot request header moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    Operation) == 48, "snapshot request operation moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    SnapshotType) == 52, "snapshot request type moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    SnapshotId) == 56, "snapshot request ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    CursorGeneration) == 72, "snapshot cursor generation moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    Cursor) == 80, "snapshot request cursor moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    MaximumRecords) == 88, "snapshot page bound moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_REQUEST,
+    Reserved) == 92, "snapshot request reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    Header) == 0, "snapshot response header moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    SnapshotId) == 56, "snapshot response ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    ScanId) == 72, "snapshot response scan ID moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    CreatedTimestamp100ns) == 80,
+    "snapshot creation timestamp moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    ExpirationInterruptTime100ns) == 88,
+    "snapshot expiration moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    CursorGeneration) == 96, "snapshot response generation moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    Cursor) == 104, "snapshot response cursor moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    NextCursor) == 112, "snapshot response next cursor moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    SnapshotType) == 120, "snapshot response type moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    State) == 124, "snapshot state moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    TotalItems) == 128, "snapshot total count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    AvailableItems) == 132, "snapshot available count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    RecordCount) == 136, "snapshot response record count moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    Truncated) == 140, "snapshot truncation flag moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    FailureStatus) == 144, "snapshot failure status moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    Reserved) == 148, "snapshot response reserved field moved");
+OAC_V5_STATIC_ASSERT(FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE,
+    Records) == 152, "snapshot response prefix changed");
 
 #undef OAC_V5_STATIC_ASSERT

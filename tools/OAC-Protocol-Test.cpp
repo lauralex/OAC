@@ -1,6 +1,7 @@
 #include <Windows.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -12,11 +13,13 @@
 #include <new>
 #include <string>
 #include <type_traits>
+#include <thread>
 #include <vector>
 
 #include "..\shared\oac_protocol.h"
 #include "..\shared\protocol\oac_v5.h"
 #include "..\shared\protocol\oac_validate.h"
+#include "..\shared\protocol\oac_test.h"
 
 namespace
 {
@@ -401,8 +404,8 @@ bool RunContenderProcess(TestLog& log)
 
 ULONGLONG NextRequestId()
 {
-    static ULONGLONG requestId = 0x1020304050607000ULL;
-    return ++requestId;
+    static volatile LONG64 requestId = 0x1020304050607000LL;
+    return static_cast<ULONGLONG>(InterlockedIncrement64(&requestId));
 }
 
 BOOL CallIoctl(
@@ -619,6 +622,159 @@ bool ClaimV5(
         response.Header.Status == 0 &&
         response.Header.Reason == OAC_V5_REASON_NONE &&
         response.Header.Flags == 0;
+}
+
+OAC_EVIDENCE_READ_REQUEST ValidEvidenceRead(
+    const OAC_V5_CLAIM_RESPONSE& claim,
+    ULONG channel,
+    ULONGLONG afterSequence = 0,
+    ULONGLONG acknowledgeThrough = 0,
+    ULONG maximumRecords = OAC_EVIDENCE_MAX_RECORDS_PER_PAGE)
+{
+    OAC_EVIDENCE_READ_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_MESSAGE_READ_EVIDENCE;
+    request.Channel = channel;
+    request.MaximumRecords = maximumRecords;
+    request.AfterSequence = afterSequence;
+    request.AcknowledgeThrough = acknowledgeThrough;
+    return request;
+}
+
+OAC_SNAPSHOT_REQUEST ValidSnapshotOperation(
+    const OAC_V5_CLAIM_RESPONSE& claim,
+    ULONG operation,
+    const OAC_SNAPSHOT_ID& snapshotId = {},
+    ULONGLONG cursorGeneration = 0,
+    ULONGLONG cursor = 0,
+    ULONG maximumRecords = OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE)
+{
+    OAC_SNAPSHOT_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_MESSAGE_MANAGE_SNAPSHOT;
+    request.Operation = operation;
+    request.SnapshotType = OAC_SNAPSHOT_TYPE_KERNEL_MODULES;
+    request.SnapshotId = snapshotId;
+    request.CursorGeneration = cursorGeneration;
+    request.Cursor = cursor;
+    request.MaximumRecords = operation == OAC_SNAPSHOT_OPERATION_CLOSE
+        ? 0
+        : maximumRecords;
+    return request;
+}
+
+OAC_TEST_INJECT_EVIDENCE_REQUEST ValidEvidenceInjection(
+    const OAC_V5_CLAIM_RESPONSE& claim,
+    ULONG count,
+    OAC_V5_OBSERVATION_SEVERITY severity)
+{
+    OAC_TEST_INJECT_EVIDENCE_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_TEST_MESSAGE_INJECT_EVIDENCE;
+    request.TestVersion = OAC_TEST_PROTOCOL_VERSION;
+    request.Count = count;
+    request.RuleId = OAC_V5_RULE_INVALID_REQUEST;
+    request.EventType = OAC_V5_EVENT_OBSERVATION;
+    request.ObservationSeverity = severity;
+    request.PolicySeverity = OAC_V5_POLICY_NOT_EVALUATED;
+    request.Confidence = OAC_V5_CONFIDENCE_HIGH;
+    request.Category = OAC_V5_CATEGORY_DRIVER;
+    request.EvidenceFlags = OAC_V5_EVIDENCE_KERNEL_SOURCE;
+    return request;
+}
+
+bool ReadEvidence(
+    HANDLE device,
+    OAC_EVIDENCE_READ_REQUEST& request,
+    std::vector<std::byte>& output,
+    DWORD& returned,
+    DWORD& error)
+{
+    const std::size_t size =
+        offsetof(OAC_EVIDENCE_READ_RESPONSE, Records) +
+        static_cast<std::size_t>(request.MaximumRecords) *
+            sizeof(OAC_V5_EVENT_RECORD);
+    output.assign(size, std::byte{});
+    const BOOL succeeded = CallIoctl(
+        device,
+        IOCTL_OAC_READ_EVIDENCE,
+        &request,
+        sizeof(request),
+        output.data(),
+        static_cast<DWORD>(output.size()),
+        returned,
+        error);
+    if (!succeeded || returned <
+        offsetof(OAC_EVIDENCE_READ_RESPONSE, Records))
+    {
+        return false;
+    }
+    const auto* response = reinterpret_cast<
+        const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+    return OacValidateEvidenceReadResponse(response, returned) == OAC_V5_VALID &&
+        OacValidateEvidenceReadCorrelation(
+            &request,
+            response) == OAC_V5_VALID;
+}
+
+bool ManageSnapshot(
+    HANDLE device,
+    OAC_SNAPSHOT_REQUEST& request,
+    std::vector<std::byte>& output,
+    DWORD& returned,
+    DWORD& error)
+{
+    const std::size_t size = offsetof(OAC_SNAPSHOT_RESPONSE, Records) +
+        static_cast<std::size_t>(request.MaximumRecords) *
+            sizeof(OAC_SNAPSHOT_RECORD);
+    output.assign(size, std::byte{});
+    const BOOL succeeded = CallIoctl(
+        device,
+        IOCTL_OAC_MANAGE_SNAPSHOT,
+        &request,
+        sizeof(request),
+        output.data(),
+        static_cast<DWORD>(output.size()),
+        returned,
+        error);
+    if (!succeeded || returned < offsetof(OAC_SNAPSHOT_RESPONSE, Records))
+        return false;
+    const auto* response = reinterpret_cast<
+        const OAC_SNAPSHOT_RESPONSE*>(output.data());
+    return OacValidateSnapshotResponse(response, returned) == OAC_V5_VALID &&
+        OacValidateSnapshotCorrelation(
+            &request,
+            response) == OAC_V5_VALID;
+}
+
+bool InjectEvidence(
+    HANDLE device,
+    OAC_TEST_INJECT_EVIDENCE_REQUEST& request,
+    DWORD& error)
+{
+    DWORD returned = 0;
+    const BOOL succeeded = CallIoctl(
+        device,
+        IOCTL_OAC_TEST_INJECT_EVIDENCE,
+        &request,
+        sizeof(request),
+        nullptr,
+        0,
+        returned,
+        error);
+    return succeeded && returned == 0;
 }
 
 bool ParseUnsigned(_In_z_ const wchar_t* text, _Out_ ULONGLONG& value)
@@ -2034,6 +2190,746 @@ void RunV5CleanupRace(TestLog& log)
     CloseHandle(device);
 }
 
+void RunEvidenceTransportTests(
+    HANDLE device,
+    const OAC_V5_CLAIM_RESPONSE& claim,
+    TestLog& log)
+{
+    DWORD returned = 0;
+    DWORD error = ERROR_SUCCESS;
+    std::vector<std::byte> output;
+
+    auto malformedRead = ValidEvidenceRead(
+        claim,
+        OAC_EVIDENCE_CHANNEL_EVENT);
+    malformedRead.Channel = 0;
+    std::array<std::byte, offsetof(OAC_EVIDENCE_READ_RESPONSE, Records)>
+        shortOutput{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"evidence read rejects an unknown channel",
+        IOCTL_OAC_READ_EVIDENCE,
+        &malformedRead,
+        sizeof(malformedRead),
+        shortOutput.data(),
+        static_cast<DWORD>(shortOutput.size()),
+        {ERROR_INVALID_PARAMETER});
+
+    auto eventRead = ValidEvidenceRead(
+        claim,
+        OAC_EVIDENCE_CHANNEL_EVENT);
+    if (ReadEvidence(device, eventRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        bool foundClaim = false;
+        for (ULONG index = 0; index < response->RecordCount; ++index)
+        {
+            foundClaim = foundClaim ||
+                response->Records[index].RuleId ==
+                    OAC_V5_RULE_SESSION_CLAIMED;
+        }
+        if (foundClaim && response->LossLatched == 0)
+            log.Pass(L"typed session event is available after claim");
+        else
+            log.Fail(
+                L"typed session event is available after claim",
+                L"claim event missing or queue already lost data");
+    }
+    else
+    {
+        log.Fail(
+            L"typed session event is available after claim",
+            ErrorText(error));
+    }
+
+    auto malformedInjection = ValidEvidenceInjection(
+        claim,
+        1,
+        OAC_V5_OBSERVATION_INFO);
+    malformedInjection.Reserved = 1;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"lab evidence injection rejects reserved data",
+        IOCTL_OAC_TEST_INJECT_EVIDENCE,
+        &malformedInjection,
+        sizeof(malformedInjection),
+        nullptr,
+        0,
+        {ERROR_INVALID_PARAMETER});
+
+    auto critical = ValidEvidenceInjection(
+        claim,
+        1,
+        OAC_V5_OBSERVATION_CRITICAL);
+    auto alertRead = ValidEvidenceRead(
+        claim,
+        OAC_EVIDENCE_CHANNEL_ALERT);
+    std::vector<std::byte> firstAlert;
+    DWORD firstAlertBytes = 0;
+    bool stableAlert = InjectEvidence(device, critical, error) &&
+        ReadEvidence(
+            device,
+            alertRead,
+            firstAlert,
+            firstAlertBytes,
+            error);
+    OAC_V5_EVENT_RECORD expectedAlert{};
+    if (stableAlert)
+    {
+        const auto* first = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(firstAlert.data());
+        stableAlert = first->RecordCount == 1 &&
+            first->LossLatched == 0 &&
+            first->Records[0].RuleId == OAC_V5_RULE_INVALID_REQUEST &&
+            first->Records[0].ObservationSeverity ==
+                OAC_V5_OBSERVATION_CRITICAL;
+        if (stableAlert) expectedAlert = first->Records[0];
+    }
+    alertRead = ValidEvidenceRead(claim, OAC_EVIDENCE_CHANNEL_ALERT);
+    if (stableAlert &&
+        ReadEvidence(device, alertRead, output, returned, error))
+    {
+        const auto* repeated = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        stableAlert = repeated->RecordCount == 1 &&
+            std::memcmp(
+                &expectedAlert,
+                &repeated->Records[0],
+                sizeof(expectedAlert)) == 0;
+    }
+    else
+    {
+        stableAlert = false;
+    }
+    if (stableAlert)
+        log.Pass(L"critical alert remains stable until acknowledged");
+    else
+        log.Fail(
+            L"critical alert remains stable until acknowledged",
+            ErrorText(error));
+
+    bool acknowledgementReady = false;
+    if (stableAlert)
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            expectedAlert.Sequence,
+            expectedAlert.Sequence);
+        if (ReadEvidence(device, alertRead, output, returned, error))
+        {
+            const auto* acknowledged = reinterpret_cast<
+                const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+            acknowledgementReady = acknowledged->RecordCount == 0 &&
+                acknowledged->AcknowledgedSequence == expectedAlert.Sequence;
+        }
+    }
+    if (acknowledgementReady)
+        log.Pass(L"critical alert acknowledgement retires exact data");
+    else
+        log.Fail(
+            L"critical alert acknowledgement retires exact data",
+            ErrorText(error));
+    ULONGLONG alertAcknowledgedThrough = acknowledgementReady
+        ? expectedAlert.Sequence
+        : 0;
+
+    auto highPair = ValidEvidenceInjection(
+        claim,
+        2,
+        OAC_V5_OBSERVATION_HIGH);
+    ULONGLONG acknowledgedThrough = 0;
+    if (InjectEvidence(device, highPair, error))
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            alertAcknowledgedThrough);
+        if (ReadEvidence(device, alertRead, output, returned, error))
+        {
+            const auto* response = reinterpret_cast<
+                const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+            if (response->RecordCount == 2)
+                acknowledgedThrough = response->Records[1].Sequence;
+        }
+    }
+    if (acknowledgedThrough != 0)
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            acknowledgedThrough,
+            acknowledgedThrough);
+        if (!ReadEvidence(device, alertRead, output, returned, error))
+            acknowledgedThrough = 0;
+        else
+            alertAcknowledgedThrough = acknowledgedThrough;
+    }
+    if (acknowledgedThrough != 0)
+    {
+        auto staleCursor = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            acknowledgedThrough - 1,
+            acknowledgedThrough - 1);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"alert read rejects a stale acknowledged cursor",
+            IOCTL_OAC_READ_EVIDENCE,
+            &staleCursor,
+            sizeof(staleCursor),
+            output.data(),
+            static_cast<DWORD>(output.size()),
+            {ERROR_INVALID_PARAMETER});
+        auto stale = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            acknowledgedThrough,
+            acknowledgedThrough - 1);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"alert acknowledgement rejects replay",
+            IOCTL_OAC_READ_EVIDENCE,
+            &stale,
+            sizeof(stale),
+            output.data(),
+            static_cast<DWORD>(output.size()),
+            {ERROR_INVALID_PARAMETER});
+        auto future = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            acknowledgedThrough,
+            acknowledgedThrough + 1);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"alert acknowledgement rejects undelivered data",
+            IOCTL_OAC_READ_EVIDENCE,
+            &future,
+            sizeof(future),
+            output.data(),
+            static_cast<DWORD>(output.size()),
+            {ERROR_INVALID_PARAMETER});
+    }
+    else
+    {
+        log.Fail(
+            L"alert read rejects a stale acknowledged cursor",
+            L"could not establish an acknowledgement cursor");
+        log.Fail(
+            L"alert acknowledgement rejects replay",
+            L"could not establish an acknowledgement cursor");
+        log.Fail(
+            L"alert acknowledgement rejects undelivered data",
+            L"could not establish an acknowledgement cursor");
+    }
+
+    auto inventoryCritical = ValidEvidenceInjection(
+        claim,
+        1,
+        OAC_V5_OBSERVATION_CRITICAL);
+    OAC_V5_EVENT_RECORD retainedCritical{};
+    bool retainedCriticalReady = InjectEvidence(
+        device,
+        inventoryCritical,
+        error);
+    alertRead = ValidEvidenceRead(
+        claim,
+        OAC_EVIDENCE_CHANNEL_ALERT,
+        alertAcknowledgedThrough);
+    if (retainedCriticalReady &&
+        ReadEvidence(device, alertRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        retainedCriticalReady = response->RecordCount == 1 &&
+            response->LossLatched == 0 &&
+            response->Records[0].ObservationSeverity ==
+                OAC_V5_OBSERVATION_CRITICAL;
+        if (retainedCriticalReady)
+            retainedCritical = response->Records[0];
+    }
+    else
+    {
+        retainedCriticalReady = false;
+    }
+
+    eventRead = ValidEvidenceRead(claim, OAC_EVIDENCE_CHANNEL_EVENT);
+    ULONGLONG eventPublishedBefore = 0;
+    if (ReadEvidence(device, eventRead, output, returned, error))
+    {
+        eventPublishedBefore = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data())->
+                PublishedSequence;
+    }
+    auto eventBurst = ValidEvidenceInjection(
+        claim,
+        OAC_TEST_MAX_INJECTED_RECORDS,
+        OAC_V5_OBSERVATION_INFO);
+    const bool burstInjected = InjectEvidence(device, eventBurst, error);
+    eventRead = ValidEvidenceRead(claim, OAC_EVIDENCE_CHANNEL_EVENT);
+    if (burstInjected && eventPublishedBefore != 0 &&
+        ReadEvidence(device, eventRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        const ULONGLONG retained = response->LastAvailableSequence -
+            response->FirstAvailableSequence + 1;
+        if (response->PublishedSequence >=
+                eventPublishedBefore + OAC_TEST_MAX_INJECTED_RECORDS &&
+            retained >= response->RecordCount &&
+            response->DroppedCount == response->PublishedSequence - retained &&
+            response->LossLatched != 0 &&
+            response->FirstLostSequence != 0 &&
+            (response->Header.Flags & OAC_V5_RESPONSE_PARTIAL) != 0)
+        {
+            log.Pass(
+                L"event burst reports an exact bounded gap",
+                L"published=" + std::to_wstring(response->PublishedSequence) +
+                    L" retained=" + std::to_wstring(retained) +
+                    L" dropped=" + std::to_wstring(response->DroppedCount));
+        }
+        else
+        {
+            log.Fail(
+                L"event burst reports an exact bounded gap",
+                L"event loss metadata did not reconcile");
+        }
+    }
+    else
+    {
+        log.Fail(L"event burst reports an exact bounded gap", ErrorText(error));
+    }
+
+    bool retainedAcrossInventory = false;
+    if (retainedCriticalReady)
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            alertAcknowledgedThrough);
+        if (ReadEvidence(device, alertRead, output, returned, error))
+        {
+            const auto* response = reinterpret_cast<
+                const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+            retainedAcrossInventory = response->RecordCount == 1 &&
+                std::memcmp(
+                    &retainedCritical,
+                    &response->Records[0],
+                    sizeof(retainedCritical)) == 0;
+        }
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            retainedCritical.Sequence,
+            retainedCritical.Sequence);
+        if (!ReadEvidence(device, alertRead, output, returned, error))
+            retainedAcrossInventory = false;
+        else
+            alertAcknowledgedThrough = retainedCritical.Sequence;
+    }
+    if (retainedAcrossInventory)
+        log.Pass(L"critical alert survives maximum event inventory");
+    else
+        log.Fail(
+            L"critical alert survives maximum event inventory",
+            ErrorText(error));
+    if (!retainedCriticalReady)
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            alertAcknowledgedThrough);
+        if (ReadEvidence(device, alertRead, output, returned, error))
+        {
+            const auto* response = reinterpret_cast<
+                const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+            if (response->RecordCount != 0)
+            {
+                const ULONGLONG cleanupCursor =
+                    response->Records[response->RecordCount - 1].Sequence;
+                alertRead = ValidEvidenceRead(
+                    claim,
+                    OAC_EVIDENCE_CHANNEL_ALERT,
+                    cleanupCursor,
+                    cleanupCursor);
+                if (ReadEvidence(
+                    device,
+                    alertRead,
+                    output,
+                    returned,
+                    error))
+                {
+                    alertAcknowledgedThrough = cleanupCursor;
+                }
+            }
+        }
+    }
+
+    eventRead = ValidEvidenceRead(claim, OAC_EVIDENCE_CHANNEL_EVENT);
+    ULONGLONG concurrentPublishedBefore = 0;
+    ULONGLONG concurrentDroppedBefore = 0;
+    if (ReadEvidence(device, eventRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        concurrentPublishedBefore = response->PublishedSequence;
+        concurrentDroppedBefore = response->DroppedCount;
+    }
+    constexpr ULONG threadCount = 4;
+    constexpr ULONG recordsPerThread = 100;
+    std::atomic<unsigned> injectionFailures{0};
+    std::vector<std::thread> producers;
+    try
+    {
+        producers.reserve(threadCount);
+        for (ULONG index = 0; index < threadCount; ++index)
+        {
+            producers.emplace_back([&claim, device, &injectionFailures]()
+            {
+                DWORD threadError = ERROR_SUCCESS;
+                auto request = ValidEvidenceInjection(
+                    claim,
+                    recordsPerThread,
+                    OAC_V5_OBSERVATION_INFO);
+                if (!InjectEvidence(device, request, threadError))
+                    injectionFailures.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+    }
+    catch (...)
+    {
+        injectionFailures.fetch_add(1, std::memory_order_relaxed);
+    }
+    for (auto& producer : producers)
+        if (producer.joinable()) producer.join();
+    eventRead = ValidEvidenceRead(claim, OAC_EVIDENCE_CHANNEL_EVENT);
+    if (injectionFailures.load(std::memory_order_relaxed) == 0 &&
+        concurrentPublishedBefore != 0 &&
+        ReadEvidence(device, eventRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        const ULONGLONG published =
+            response->PublishedSequence - concurrentPublishedBefore;
+        const ULONGLONG dropped =
+            response->DroppedCount - concurrentDroppedBefore;
+        if (published >= threadCount * recordsPerThread && dropped == published)
+            log.Pass(
+                L"concurrent event producers preserve sequence accounting",
+                L"published=" + std::to_wstring(published));
+        else
+            log.Fail(
+                L"concurrent event producers preserve sequence accounting",
+                L"published and dropped deltas diverged");
+    }
+    else
+    {
+        log.Fail(
+            L"concurrent event producers preserve sequence accounting",
+            injectionFailures.load(std::memory_order_relaxed) == 0
+                ? ErrorText(error)
+                : L"one or more producer requests failed");
+    }
+
+    auto openSnapshot = ValidSnapshotOperation(
+        claim,
+        OAC_SNAPSHOT_OPERATION_OPEN);
+    std::vector<std::byte> openedOutput;
+    DWORD openedBytes = 0;
+    if (ManageSnapshot(
+            device,
+            openSnapshot,
+            openedOutput,
+            openedBytes,
+            error))
+    {
+        const auto* opened = reinterpret_cast<const OAC_SNAPSHOT_RESPONSE*>(
+            openedOutput.data());
+        const OAC_SNAPSHOT_ID snapshotId = opened->SnapshotId;
+        const ULONGLONG cursorGeneration = opened->CursorGeneration;
+        const OAC_V5_SCAN_ID scanId = opened->ScanId;
+        const ULONG available = opened->AvailableItems;
+        const ULONG firstCount = opened->RecordCount;
+        std::vector<OAC_SNAPSHOT_RECORD> firstPage(
+            opened->Records,
+            opened->Records + firstCount);
+        bool stable = opened->State == OAC_SNAPSHOT_STATE_READY &&
+            available != 0 && firstCount != 0;
+
+        auto duplicateOpen = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_OPEN);
+        std::vector<std::byte> pageBuffer(
+            offsetof(OAC_SNAPSHOT_RESPONSE, Records) +
+            OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE * sizeof(OAC_SNAPSHOT_RECORD));
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"one snapshot is active per session",
+            IOCTL_OAC_MANAGE_SNAPSHOT,
+            &duplicateOpen,
+            sizeof(duplicateOpen),
+            pageBuffer.data(),
+            static_cast<DWORD>(pageBuffer.size()),
+            {ERROR_BUSY});
+
+        auto repeatFirst = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_READ,
+            snapshotId,
+            cursorGeneration);
+        std::vector<std::byte> repeatedOutput;
+        DWORD repeatedBytes = 0;
+        if (stable && ManageSnapshot(
+                device,
+                repeatFirst,
+                repeatedOutput,
+                repeatedBytes,
+                error))
+        {
+            const auto* repeated = reinterpret_cast<
+                const OAC_SNAPSHOT_RESPONSE*>(repeatedOutput.data());
+            stable = repeated->ScanId == scanId &&
+                repeated->AvailableItems == available &&
+                repeated->RecordCount == firstPage.size() &&
+                std::memcmp(
+                    repeated->Records,
+                    firstPage.data(),
+                    firstPage.size() * sizeof(OAC_SNAPSHOT_RECORD)) == 0;
+        }
+        else
+        {
+            stable = false;
+        }
+        if (stable)
+            log.Pass(L"snapshot pages are immutable during their lifetime");
+        else
+            log.Fail(
+                L"snapshot pages are immutable during their lifetime",
+                ErrorText(error));
+
+        ULONGLONG cursor = opened->NextCursor;
+        ULONGLONG seen = firstCount;
+        unsigned pages = 1;
+        bool paged = stable;
+        while (paged && cursor < available && pages <= 128)
+        {
+            auto request = ValidSnapshotOperation(
+                claim,
+                OAC_SNAPSHOT_OPERATION_READ,
+                snapshotId,
+                cursorGeneration,
+                cursor);
+            if (!ManageSnapshot(
+                    device,
+                    request,
+                    output,
+                    returned,
+                    error))
+            {
+                paged = false;
+                break;
+            }
+            const auto* page = reinterpret_cast<
+                const OAC_SNAPSHOT_RESPONSE*>(output.data());
+            paged = page->ScanId == scanId && page->Cursor == cursor &&
+                page->NextCursor > cursor;
+            cursor = page->NextCursor;
+            seen += page->RecordCount;
+            ++pages;
+        }
+        paged = paged && cursor == available && seen == available &&
+            pages <= 128;
+        if (paged)
+            log.Pass(
+                L"kernel-module snapshot paginates to completion",
+                L"records=" + std::to_wstring(seen) +
+                    L" pages=" + std::to_wstring(pages));
+        else
+            log.Fail(
+                L"kernel-module snapshot paginates to completion",
+                ErrorText(error));
+
+        auto wrongGeneration = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_READ,
+            snapshotId,
+            cursorGeneration + 1);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"snapshot rejects a stale cursor generation",
+            IOCTL_OAC_MANAGE_SNAPSHOT,
+            &wrongGeneration,
+            sizeof(wrongGeneration),
+            pageBuffer.data(),
+            static_cast<DWORD>(pageBuffer.size()),
+            {ERROR_NOT_FOUND, ERROR_FILE_NOT_FOUND});
+
+        auto badCursor = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_READ,
+            snapshotId,
+            cursorGeneration,
+            static_cast<ULONGLONG>(available) + 1);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"snapshot rejects a cursor beyond frozen data",
+            IOCTL_OAC_MANAGE_SNAPSHOT,
+            &badCursor,
+            sizeof(badCursor),
+            pageBuffer.data(),
+            static_cast<DWORD>(pageBuffer.size()),
+            {ERROR_INVALID_PARAMETER});
+
+        auto closeSnapshot = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_CLOSE,
+            snapshotId,
+            cursorGeneration);
+        const bool closed = ManageSnapshot(
+            device,
+            closeSnapshot,
+            output,
+            returned,
+            error) &&
+            reinterpret_cast<const OAC_SNAPSHOT_RESPONSE*>(output.data())->
+                State == OAC_SNAPSHOT_STATE_CLOSED;
+        if (closed)
+            log.Pass(L"snapshot close releases frozen data");
+        else
+            log.Fail(L"snapshot close releases frozen data", ErrorText(error));
+
+        auto readClosed = ValidSnapshotOperation(
+            claim,
+            OAC_SNAPSHOT_OPERATION_READ,
+            snapshotId,
+            cursorGeneration);
+        ExpectIoctlFailure(
+            log,
+            device,
+            L"closed snapshot cannot be replayed",
+            IOCTL_OAC_MANAGE_SNAPSHOT,
+            &readClosed,
+            sizeof(readClosed),
+            pageBuffer.data(),
+            static_cast<DWORD>(pageBuffer.size()),
+            {ERROR_NOT_FOUND, ERROR_FILE_NOT_FOUND});
+    }
+    else
+    {
+        const std::array<std::wstring, 7> failedSnapshotTests =
+        {
+            L"one snapshot is active per session",
+            L"snapshot pages are immutable during their lifetime",
+            L"kernel-module snapshot paginates to completion",
+            L"snapshot rejects a stale cursor generation",
+            L"snapshot rejects a cursor beyond frozen data",
+            L"snapshot close releases frozen data",
+            L"closed snapshot cannot be replayed"
+        };
+        for (const auto& name : failedSnapshotTests)
+            log.Fail(name, ErrorText(error));
+    }
+
+    auto alertBurst = ValidEvidenceInjection(
+        claim,
+        32,
+        OAC_V5_OBSERVATION_HIGH);
+    bool delivered = InjectEvidence(device, alertBurst, error);
+    ULONGLONG alertCursor = alertAcknowledgedThrough;
+    ULONG alertsSeen = 0;
+    while (delivered && alertsSeen < 32)
+    {
+        alertRead = ValidEvidenceRead(
+            claim,
+            OAC_EVIDENCE_CHANNEL_ALERT,
+            alertCursor);
+        if (!ReadEvidence(device, alertRead, output, returned, error))
+        {
+            delivered = false;
+            break;
+        }
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        if (response->RecordCount == 0)
+        {
+            delivered = false;
+            break;
+        }
+        alertsSeen += response->RecordCount;
+        alertCursor = response->Records[response->RecordCount - 1].Sequence;
+    }
+    auto overflow = ValidEvidenceInjection(
+        claim,
+        1,
+        OAC_V5_OBSERVATION_CRITICAL);
+    const bool overflowed = delivered && alertsSeen == 32 &&
+        InjectEvidence(device, overflow, error);
+    alertRead = ValidEvidenceRead(
+        claim,
+        OAC_EVIDENCE_CHANNEL_ALERT,
+        alertAcknowledgedThrough);
+    if (overflowed &&
+        ReadEvidence(device, alertRead, output, returned, error))
+    {
+        const auto* response = reinterpret_cast<
+            const OAC_EVIDENCE_READ_RESPONSE*>(output.data());
+        if (response->LossLatched != 0 && response->DroppedCount == 1 &&
+            response->LostHighCount == 0 &&
+            response->LostCriticalCount == 1 &&
+            response->FirstLostSequence == response->PublishedSequence &&
+            response->LastAvailableSequence < response->PublishedSequence)
+        {
+            log.Pass(L"full alert queue preserves data and latches first loss");
+        }
+        else
+        {
+            log.Fail(
+                L"full alert queue preserves data and latches first loss",
+                L"loss provenance did not match the rejected alert");
+        }
+    }
+    else
+    {
+        log.Fail(
+            L"full alert queue preserves data and latches first loss",
+            ErrorText(error));
+    }
+
+    auto statusRequest = ValidV5Status(claim);
+    OAC_V5_STATUS_RESPONSE status{};
+    const BOOL statusSucceeded = CallIoctl(
+        device,
+        IOCTL_OAC_V5_GET_STATUS,
+        &statusRequest,
+        sizeof(statusRequest),
+        &status,
+        sizeof(status),
+        returned,
+        error);
+    if (statusSucceeded && returned == sizeof(status) &&
+        OacV5ValidateStatusResponse(&status, returned) == OAC_V5_VALID &&
+        status.State == OAC_V5_SESSION_CLAIMED &&
+        status.RevokeReason == OAC_V5_REVOKE_NONE)
+    {
+        log.Pass(L"lab alert overflow preserves diagnostic authority");
+    }
+    else
+    {
+        log.Fail(
+            L"lab alert overflow preserves diagnostic authority",
+            ErrorText(error));
+    }
+}
+
 void RunV5Tests(TestLog& log)
 {
     DWORD returned = 0;
@@ -2163,13 +3059,17 @@ void RunV5Tests(TestLog& log)
     if (NegotiateV5(device, negotiateRequest, negotiateResponse, error) &&
         (negotiateResponse.Capabilities &
             (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-             OAC_V5_CAP_SESSION_LIVENESS)) ==
+             OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
+             OAC_V5_CAP_PAGED_SNAPSHOTS)) ==
             (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-             OAC_V5_CAP_SESSION_LIVENESS) &&
+             OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
+             OAC_V5_CAP_PAGED_SNAPSHOTS) &&
         (negotiateResponse.ProtocolFlags &
             (OAC_V5_PROTOCOL_STRICT_LENGTHS |
+             OAC_V5_PROTOCOL_TYPED_EVENTS |
              OAC_V5_PROTOCOL_V4_DIAGNOSTIC)) ==
             (OAC_V5_PROTOCOL_STRICT_LENGTHS |
+             OAC_V5_PROTOCOL_TYPED_EVENTS |
              OAC_V5_PROTOCOL_V4_DIAGNOSTIC))
     {
         log.Pass(L"v5 exact negotiation and correlation");
@@ -2517,6 +3417,8 @@ void RunV5Tests(TestLog& log)
 
     (VOID)RunV5HandleContenderProcess(device, claimResponse, log);
 
+    RunEvidenceTransportTests(device, claimResponse, log);
+
     auto revokeRequest = ValidRevokeSession(claimResponse);
     OAC_REVOKE_SESSION_RESPONSE revokeResponse{};
     auto badRevoke = revokeRequest;
@@ -2594,6 +3496,46 @@ void RunV5Tests(TestLog& log)
     {
         log.Fail(L"v5 explicit revoke records one session loss", ErrorText(error));
     }
+
+    auto revokedEvidenceRequest = ValidEvidenceRead(
+        claimResponse,
+        OAC_EVIDENCE_CHANNEL_ALERT);
+    std::vector<std::byte> revokedEvidence;
+    if (ReadEvidence(
+            device,
+            revokedEvidenceRequest,
+            revokedEvidence,
+            returned,
+            error) &&
+        (reinterpret_cast<const OAC_EVIDENCE_READ_RESPONSE*>(
+            revokedEvidence.data())->Header.Flags &
+            OAC_V5_RESPONSE_REVOKED) != 0)
+    {
+        log.Pass(L"revoked session retains bounded evidence reads");
+    }
+    else
+    {
+        log.Fail(
+            L"revoked session retains bounded evidence reads",
+            ErrorText(error));
+    }
+
+    auto revokedSnapshot = ValidSnapshotOperation(
+        claimResponse,
+        OAC_SNAPSHOT_OPERATION_OPEN);
+    std::vector<std::byte> revokedSnapshotOutput(
+        offsetof(OAC_SNAPSHOT_RESPONSE, Records) +
+        OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE * sizeof(OAC_SNAPSHOT_RECORD));
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"revoked session cannot start new snapshot work",
+        IOCTL_OAC_MANAGE_SNAPSHOT,
+        &revokedSnapshot,
+        sizeof(revokedSnapshot),
+        revokedSnapshotOutput.data(),
+        static_cast<DWORD>(revokedSnapshotOutput.size()),
+        {ERROR_BAD_COMMAND, ERROR_INVALID_STATE});
 
     revokeRequest = ValidRevokeSession(claimResponse);
     OAC_REVOKE_SESSION_RESPONSE repeatedRevoke{};

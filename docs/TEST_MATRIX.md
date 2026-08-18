@@ -1,7 +1,8 @@
 # OAC test matrix
 
 **Status:** WP-01 through WP-05 tested at implementation commit
-`a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100
+`a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100; WP-06
+transport has local source/unit/static-analysis evidence and awaits its commit-bound VM campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,7 +20,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local and PR #11 hosted Debug/Release runs passed `314/314` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `406/406`; PR #11 hosted the earlier `314/314` WP-05 suite |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #11 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -44,6 +45,8 @@ The pure C/C++ unit source covers:
 - stable rule/event IDs, severity, confidence, category, and the exact session transition matrix;
 - event provenance rules and hostile none, binary, and UTF-16 payload cases, including dirty tails,
   embedded nulls, and invalid surrogate pairs;
+- retained-alert acknowledgement, event-gap/loss reconciliation, record-channel classification,
+  snapshot request/response/paging correlation, and lab-only overflow injection validation;
 - launch-ticket layouts, strict canonical NT paths, expiry/cancel/replay decisions, exact process
   handles, response correlation, and terminal state invariants;
 - explicit session-revoke layouts, status-latch consistency, idempotent transition expectations,
@@ -76,6 +79,10 @@ driver-gate coverage plus these production cases:
   a different file immediately claims a distinct, higher-generation session;
 - malformed launch requests are rejected while diagnostic sessions receive `ERROR_NOT_SUPPORTED`
   for production arm, cancel, and confirm operations; and
+- retained alerts survive a 10,000-record lower-priority burst, acknowledgements reject replay and
+  undelivered cursors, concurrent producers preserve exact sequence/drop accounting, snapshot pages
+  remain stable through close, full alert queues preserve existing data and latch first loss, and
+  diagnostic overflow does not silently revoke lab authority; and
 - explicit revoke rejects malformed provenance/reserved/size fields, increments the session-loss
   sequence once, and returns the same terminal result on repetition.
 
@@ -84,7 +91,8 @@ standard Driver Verifier run passed on implementation commit `a30ef78819b865786f
 Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
-service-owned launch; alert acknowledgement and snapshot paging remain later work.
+service-owned launch. The new transport integration cases and the service alert poll path are source
+present and require the next commit-bound VM/Verifier execution.
 
 ## Service and launcher coverage
 
@@ -146,14 +154,15 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `a30ef78`; literal numeric PID reuse remains unforced |
 | WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `a30ef78` |
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `a30ef78` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Planned |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Source present; local `406/406`, Debug/Release, and PREfast pass; VM/Verifier pending |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Planned |
 | WP-08 policy | Stable rule decisions, corroboration, display-text independence | Planned |
 | WP-09/10 signatures | Wrong key/scope/build, expiry, rollback, canonical serialization | Planned |
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
-WP-02 through WP-05 acceptance is recorded only for the exact commit and environment above. Later
-work packages remain planned.
+WP-02 through WP-05 acceptance is recorded only for the exact commit and environment above. WP-06
+is not promoted to Tested until its own exact-commit VM evidence passes; later work packages remain
+planned.
 
 ## Exact host commands
 

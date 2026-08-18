@@ -5,8 +5,10 @@
 #include "..\shared\oac_protocol.h"
 #include "..\shared\protocol\oac_v5.h"
 #include "..\shared\protocol\oac_validate.h"
+#include "..\shared\protocol\oac_test.h"
 #include "compat.h"
 #include "cpu_snapshot.h"
+#include "evidence.h"
 #include "protection.h"
 #include "scanner.h"
 #include "session.h"
@@ -23,6 +25,7 @@ static UNICODE_STRING g_DosDeviceName;
 static PDEVICE_OBJECT g_DeviceObject;
 static BOOLEAN g_DosLinkCreated;
 static BOOLEAN g_TelemetryInitialized;
+static BOOLEAN g_EvidenceInitialized;
 static BOOLEAN g_ScannerInitialized;
 static BOOLEAN g_CpuSnapshotInitialized;
 static BOOLEAN g_ProtectionInitialized;
@@ -113,7 +116,8 @@ NTSTATUS OacClose(
 static ULONG OacV5Capabilities(VOID)
 {
     return OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-        OAC_V5_CAP_SESSION_LIVENESS;
+        OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
+        OAC_V5_CAP_PAGED_SNAPSHOTS;
 }
 
 static VOID OacInitializeV5Response(
@@ -374,8 +378,10 @@ NTSTATUS OacDeviceControl(
             response->Capabilities = OacV5Capabilities();
             response->MaximumInputSize = OAC_V5_MAX_INPUT_SIZE;
             response->MaximumOutputSize = OAC_V5_MAX_OUTPUT_SIZE;
-            response->MaximumEventCount = OAC_V5_MAX_EVENT_COUNT;
-            response->ProtocolFlags = OAC_V5_PROTOCOL_STRICT_LENGTHS;
+            response->MaximumEventCount =
+                OAC_EVIDENCE_MAX_RECORDS_PER_PAGE;
+            response->ProtocolFlags = OAC_V5_PROTOCOL_STRICT_LENGTHS |
+                OAC_V5_PROTOCOL_TYPED_EVENTS;
             if (OacSessionLabMode(DeviceObject))
             {
                 response->ProtocolFlags |= OAC_V5_PROTOCOL_V4_DIAGNOSTIC;
@@ -573,6 +579,20 @@ NTSTATUS OacDeviceControl(
                 &snapshot);
             response->TargetProcessId = snapshot.TargetProcessId;
             response->State = snapshot.State;
+            OacEvidencePublish(
+                &snapshot.SessionId,
+                snapshot.Generation,
+                OAC_V5_RULE_TARGET_BOUND,
+                OAC_V5_EVENT_SESSION_STATE_CHANGED,
+                OAC_V5_OBSERVATION_INFO,
+                OAC_V5_POLICY_NOT_EVALUATED,
+                OAC_V5_CONFIDENCE_HIGH,
+                OAC_V5_CATEGORY_PROCESS,
+                (HANDLE)(ULONG_PTR)snapshot.TargetProcessId,
+                NULL,
+                NULL,
+                0,
+                OAC_V5_EVIDENCE_KERNEL_SOURCE);
             bytesWritten = sizeof(*response);
             status = STATUS_SUCCESS;
         }
@@ -616,6 +636,20 @@ NTSTATUS OacDeviceControl(
                 OacProtectionRevokeController(revokedOwner);
                 ObDereferenceObject(revokedOwner);
             }
+            OacEvidencePublish(
+                &snapshot.SessionId,
+                snapshot.Generation,
+                OAC_V5_RULE_SESSION_REVOKED,
+                OAC_V5_EVENT_REVOCATION,
+                OAC_V5_OBSERVATION_INFO,
+                OAC_V5_POLICY_INFO,
+                OAC_V5_CONFIDENCE_HIGH,
+                OAC_V5_CATEGORY_SERVICE,
+                PsGetCurrentProcessId(),
+                PsGetCurrentThreadId(),
+                NULL,
+                request.RevokeReason,
+                OAC_V5_EVIDENCE_KERNEL_SOURCE);
 
             response = (POAC_REVOKE_SESSION_RESPONSE)buffer;
             RtlZeroMemory(response, sizeof(*response));
@@ -632,6 +666,138 @@ NTSTATUS OacDeviceControl(
             response->LastSessionLossReason =
                 snapshot.LastSessionLossReason;
             bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IOCTL_OAC_READ_EVIDENCE:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateEvidenceReadRequest(
+                (const OAC_EVIDENCE_READ_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        {
+            const OAC_EVIDENCE_READ_REQUEST request =
+                *(const OAC_EVIDENCE_READ_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_EVIDENCE_READ_RESPONSE response =
+                (POAC_EVIDENCE_READ_RESPONSE)buffer;
+
+            status = OacSessionAcquireV5Status(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionSnapshot(&lease, &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            status = OacEvidenceRead(
+                &request,
+                snapshot.State >= OAC_V5_SESSION_REVOKED,
+                response,
+                outputLength,
+                &bytesWritten);
+            if (!NT_SUCCESS(status)) break;
+            OacInitializeV5Response(
+                &response->Header,
+                bytesWritten,
+                request.Header.RequestId,
+                OAC_MESSAGE_READ_EVIDENCE,
+                &snapshot);
+        }
+        break;
+
+    case IOCTL_OAC_MANAGE_SNAPSHOT:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateSnapshotRequest(
+                (const OAC_SNAPSHOT_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        {
+            const OAC_SNAPSHOT_REQUEST request =
+                *(const OAC_SNAPSHOT_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_SNAPSHOT_RESPONSE response =
+                (POAC_SNAPSHOT_RESPONSE)buffer;
+
+            if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+            {
+                status = STATUS_INVALID_DEVICE_STATE;
+                break;
+            }
+            status = OacSessionAcquireV5Status(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionSnapshot(&lease, &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            status = OacEvidenceManageSnapshot(
+                &request,
+                snapshot.State >= OAC_V5_SESSION_REVOKED,
+                response,
+                outputLength,
+                &bytesWritten);
+            if (!NT_SUCCESS(status)) break;
+            OacInitializeV5Response(
+                &response->Header,
+                bytesWritten,
+                request.Header.RequestId,
+                OAC_MESSAGE_MANAGE_SNAPSHOT,
+                &snapshot);
+        }
+        break;
+
+    case IOCTL_OAC_TEST_INJECT_EVIDENCE:
+        if (!OacSessionLabMode(DeviceObject) || buffer == NULL ||
+            outputLength != 0 ||
+            OacValidateTestEvidenceRequest(
+                (const OAC_TEST_INJECT_EVIDENCE_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        {
+            const OAC_TEST_INJECT_EVIDENCE_REQUEST request =
+                *(const OAC_TEST_INJECT_EVIDENCE_REQUEST*)buffer;
+            ULONG index;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            if (!OacSessionLeaseIsDiagnostic(&lease))
+            {
+                status = STATUS_ACCESS_DENIED;
+                break;
+            }
+            for (index = 0; index < request.Count; ++index)
+            {
+                OacEvidencePublish(
+                    &request.Header.SessionId,
+                    request.Header.Generation,
+                    request.RuleId,
+                    request.EventType,
+                    request.ObservationSeverity,
+                    request.PolicySeverity,
+                    request.Confidence,
+                    request.Category,
+                    PsGetCurrentProcessId(),
+                    PsGetCurrentThreadId(),
+                    NULL,
+                    index,
+                    request.EvidenceFlags);
+            }
             status = STATUS_SUCCESS;
         }
         break;
@@ -691,8 +857,9 @@ NTSTATUS OacDeviceControl(
             response->RevokeReason = snapshot.RevokeReason;
             response->ServiceProcessId = snapshot.ServiceProcessId;
             response->TargetProcessId = snapshot.TargetProcessId;
-            response->EventsWritten = OacTelemetryWritten();
-            response->EventsDropped = OacTelemetryDropped();
+            OacEvidenceEventCounters(
+                &response->EventsWritten,
+                &response->EventsDropped);
             response->PostStartLoads = OacPostStartLoads();
             response->DriverGateTrips = OacDriverGateTrips();
             response->SessionLossSequence = snapshot.SessionLossSequence;
@@ -868,6 +1035,11 @@ static VOID OacCleanup(VOID)
         OacSessionShutdown(g_DeviceObject);
         g_SessionInitialized = FALSE;
     }
+    if (g_EvidenceInitialized)
+    {
+        OacEvidenceShutdown();
+        g_EvidenceInitialized = FALSE;
+    }
     if (g_CpuSnapshotInitialized)
     {
         OacCpuSnapshotShutdown();
@@ -929,6 +1101,10 @@ NTSTATUS DriverEntry(
     status = OacTelemetryInitialize();
     if (!NT_SUCCESS(status)) goto Failure;
     g_TelemetryInitialized = TRUE;
+
+    status = OacEvidenceInitialize();
+    if (!NT_SUCCESS(status)) goto Failure;
+    g_EvidenceInitialized = TRUE;
 
     status = IoCreateDeviceSecure(
         DriverObject,

@@ -1,6 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-05 accepted on the named Windows 11 build 26100 campaign
+**Status:** WP-01 through WP-05 accepted on the named Windows 11 build 26100 campaign; WP-06
+transport implemented in source with commit-bound VM acceptance pending
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -10,7 +11,7 @@
 flowchart TD
     L["Standard-user OAC-Launcher"] -->|"status and one launch request"| S["Restricted OACService"]
     S -->|"one file-bound production session"| D["Demand-start OAC driver"]
-    D --> C["Session status and driver counters"]
+    D --> C["Session status and retained typed alerts"]
     C --> S
     S -->|"caller-token suspended create"| T["Bound target process"]
     S -->|"arm and exact-handle confirm"| D
@@ -32,8 +33,8 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 
 | Component | Current responsibility | Boundary |
 |---|---|---|
-| `OAC` driver | Device security, production file sessions, callbacks, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, own the production driver session and target job, answer status, and serialize one caller-token suspended launch | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
+| `OACService` | Verify its restricted identity, own the production driver session and target job, poll and validate alerts, answer status, and serialize one caller-token suspended launch | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
@@ -53,8 +54,11 @@ phase. Production deployment tooling must reproduce and verify this policy.
 
 At startup, the service fails closed unless its primary token is session 0, restricted, and contains
 the exact reviewed service SID in both enabled groups and restricted SIDs. It opens the driver,
-negotiates the exact production revision, claims a production session, validates a correlated status response, then keeps
-that driver handle for its lifetime.
+negotiates the exact production revision and evidence bounds, claims a production session,
+validates a correlated status response, then keeps that driver handle for its lifetime. While
+waiting for stop, failure, or target exit, it polls retained alerts on a bounded interval and fails
+closed on loss, revocation, malformed correlation, or local handoff exhaustion. An orderly stop or
+target transition performs one final bounded alert drain before the session is revoked.
 
 The local message-mode pipe rejects remote clients and does not grant clients pipe-instance
 creation. Before returning status or accepting a launch, the service impersonates at impersonation
@@ -72,7 +76,7 @@ validates monitoring state, assigns the process to a service-owned kill-on-close
 the initial thread. Child processes inherit that job. Graceful stop explicitly revokes the driver
 session before closing the job; unexpected service exit closes both driver and job handles through
 normal Windows handle teardown. There is no argument transport, policy transfer, signed manifest,
-evidence upload, authenticated backend lease, or service-session reuse after the target exits.
+authenticated evidence upload, backend lease, or service-session reuse after the target exits.
 
 ## Per-file driver session
 
@@ -98,7 +102,8 @@ all held objects.
 An explicit revoke request is idempotent and records requested-shutdown provenance. If cleanup or
 service exit wins instead, the first observed cause is recorded. The driver exposes a monotonic
 device-lifetime sequence and last-cause pair through status; the next restricted service relays it
-to the standard-user launcher. This is a narrow liveness latch, not the later alert/event channel.
+to the standard-user launcher. This narrow liveness latch remains independent of the typed evidence
+queues because it survives the controller that would otherwise read them.
 
 ### Live-target tombstone
 
@@ -115,17 +120,18 @@ cases under the baseline and Driver Verifier phases.
 
 ## Protocol and evidence boundary
 
-Production control dispatches negotiate, claim, status, explicit revoke, arm, cancel, and confirm
-while advertising session control, launch-ticket, and session-liveness support.
-The shared ABI defines stable rule/event IDs and a provenance-preserving event record, and the pure
-unit suite validates that schema. The driver does not yet expose production configuration, scanning,
-event read, or CPU snapshot operations. Existing findings still travel through the diagnostic ring.
+Production control dispatches negotiate, claim, status, explicit revoke, arm, cancel, confirm,
+evidence read, and snapshot management while advertising session control, launch-ticket,
+session-liveness, typed-evidence, and paged-snapshot support. The driver routes high/critical
+records into a retained acknowledgement queue and lower-priority records into an independent
+overwrite queue with explicit gaps. One frozen, expiring kernel-module snapshot is read by stable
+identifier and cursor. Existing display-oriented findings continue through the separate diagnostic
+ring; production configuration and scan dispatch remain unavailable.
 
 ## Planned sequence
 
-1. Separate critical alerts, operational events, and paged snapshots.
-2. Keep health and evidence acknowledgement independent of expensive scan workers.
-3. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
+1. Keep health and evidence acknowledgement independent of expensive scan workers.
+2. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
    and backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).

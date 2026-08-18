@@ -51,15 +51,16 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   configurations. A green hosted `build` check is still not runtime-driver evidence, and public
   unsigned Release artifacts exclude PDBs.
 
-## ADR-006: Define provenance before adding v5 transport
+## ADR-006: Define provenance before adding production transport
 
-- **Status:** Accepted; schema implemented, transport planned
+- **Status:** Accepted; schema and local transport implemented
 - **Date:** 2026-08-16
 - **Decision:** The v5 event record uses stable rule/event IDs and preserves session, generation,
   kernel sequence/time, scan, occurrence, and optional service-ingestion provenance. Display text is
   optional payload and has no policy meaning.
-- **Consequence:** The schema and hostile payload validation can be tested before WP-06 transport.
-  Defining the record does not advertise typed event delivery or establish policy enforcement.
+- **Consequence:** The transport preserves source identity instead of translating kernel findings
+  into a weaker local record. Delivery does not itself establish policy enforcement or backend
+  authenticity.
 
 ## ADR-007: Retain a live-target tombstone after cleanup
 
@@ -108,6 +109,21 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** The operating system terminates the target tree when the service loses ownership,
   children inherit the same containment boundary, and a replacement service can observe prior
   session loss. The crash and graceful-stop paths passed at implementation commit
-  `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Completion notification,
-  evidence transport, and authenticated backend leases remain separate work packages; the local
+  `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Bounded scheduling,
+  centralized policy, and authenticated backend leases remain separate work packages; the local
   lease-state helper is a policy seam, not a simulated backend.
+
+## ADR-011: Separate alerts, events, and snapshots by delivery semantics
+
+- **Status:** Accepted; source implemented, VM acceptance pending
+- **Date:** 2026-08-18
+- **Decision:** Retain high/critical records in a fixed acknowledgement queue, keep lower-priority
+  operational events in an independent overwrite queue with explicit gaps, and move inventories to
+  frozen cursor-paged snapshots. Callback producers only publish one fixed record under a spin
+  lock. Production alert loss is terminal; diagnostic overflow remains observable without changing
+  lab authority. Keep authenticated persistence and server acknowledgement out of this local
+  transport milestone.
+- **Consequence:** Inventory pressure cannot silently destroy queued alerts, readers can reconcile
+  exact loss, and expensive snapshot capture remains outside callbacks. The service uses one small
+  bounded alert poll/handoff path and fails closed on loss instead of introducing the later worker
+  scheduler or pretending that in-memory delivery is backend evidence.

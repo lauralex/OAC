@@ -12,6 +12,8 @@
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(PAGE, OacRunKernelScan)
+#pragma alloc_text(PAGE, OacCaptureKernelModuleSnapshot)
+#pragma alloc_text(PAGE, OacReleaseKernelModuleSnapshot)
 #endif
 
 #define OAC_SCAN_TAG 'ScaO'
@@ -20,6 +22,7 @@
 #define OAC_EXPORT_BASELINE_BYTES 24UL
 #define OAC_MAX_EXPORT_NAME 128UL
 #define OAC_MAX_IMPORT_THUNKS 65536UL
+#define OAC_MAX_SNAPSHOT_MODULES 1024UL
 #define OAC_MSR_SYSENTER_ESP 0x00000175UL
 #define OAC_MSR_SYSENTER_EIP 0x00000176UL
 #define OAC_MSR_EFER 0xC0000080UL
@@ -468,6 +471,32 @@ static VOID OacAsciiToWide(
     }
     __analysis_assume(i < DestinationCount);
     Destination[i] = L'\0';
+}
+
+static ULONG OacCopySnapshotModuleName(
+    _In_reads_bytes_(SourceLength) const UCHAR* Source,
+    _In_ SIZE_T SourceLength,
+    _Out_writes_(OAC_SNAPSHOT_MAX_NAME_CHARS) PWCHAR Destination)
+{
+    ULONG count = 0;
+
+    while (count + 1 < OAC_SNAPSHOT_MAX_NAME_CHARS &&
+        count < SourceLength && Source[count] != 0)
+    {
+        const UCHAR value = Source[count];
+        Destination[count] = value >= 0x20 && value <= 0x7e
+            ? (WCHAR)value
+            : L'?';
+        ++count;
+    }
+    if (count == 0)
+    {
+        static const WCHAR unnamed[] = L"<unnamed>";
+        RtlCopyMemory(Destination, unnamed, sizeof(unnamed));
+        return RTL_NUMBER_OF(unnamed) - 1;
+    }
+    Destination[count] = L'\0';
+    return count;
 }
 
 static BOOLEAN OacAddressInModules(
@@ -2267,6 +2296,86 @@ ULONG OacScannerCapabilities(VOID)
         capabilities |= OAC_CAP_PRIVATE_TRACE_PROFILE;
     }
     return capabilities;
+}
+
+NTSTATUS OacCaptureKernelModuleSnapshot(
+    _Outptr_result_buffer_maybenull_(*AvailableItems)
+        POAC_SNAPSHOT_RECORD* Records,
+    _Out_ PULONG TotalItems,
+    _Out_ PULONG AvailableItems,
+    _Out_ PBOOLEAN Truncated)
+{
+    PAUX_MODULE_EXTENDED_INFO modules = NULL;
+    POAC_SNAPSHOT_RECORD records = NULL;
+    ULONG moduleCount = 0;
+    ULONG available;
+    ULONG index;
+    NTSTATUS status;
+
+    PAGED_CODE();
+    if (Records == NULL || TotalItems == NULL || AvailableItems == NULL ||
+        Truncated == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    *Records = NULL;
+    *TotalItems = 0;
+    *AvailableItems = 0;
+    *Truncated = FALSE;
+
+    status = OacQueryAuxModules(&modules, &moduleCount);
+    if (!NT_SUCCESS(status)) return status;
+    available = min(moduleCount, OAC_MAX_SNAPSHOT_MODULES);
+    if (available != 0)
+    {
+        records = (POAC_SNAPSHOT_RECORD)OacAllocatePool(
+            TRUE,
+            sizeof(*records) * available,
+            OAC_SCAN_TAG);
+        if (records == NULL)
+        {
+            ExFreePoolWithTag(modules, OAC_SCAN_TAG);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlZeroMemory(records, sizeof(*records) * available);
+        for (index = 0; index < available; ++index)
+        {
+            POAC_SNAPSHOT_RECORD record = &records[index];
+
+            if (modules[index].BasicInfo.ImageBase == NULL ||
+                modules[index].ImageSize == 0)
+            {
+                ExFreePoolWithTag(records, OAC_SCAN_TAG);
+                ExFreePoolWithTag(modules, OAC_SCAN_TAG);
+                return STATUS_DATA_ERROR;
+            }
+            record->Version = OAC_V5_VERSION;
+            record->Size = sizeof(*record);
+            record->RecordType = OAC_SNAPSHOT_RECORD_KERNEL_MODULE;
+            record->Index = index;
+            record->Address =
+                (ULONGLONG)(ULONG_PTR)modules[index].BasicInfo.ImageBase;
+            record->Length = modules[index].ImageSize;
+            record->NameLength = OacCopySnapshotModuleName(
+                modules[index].FullPathName,
+                sizeof(modules[index].FullPathName),
+                record->Name);
+        }
+    }
+
+    ExFreePoolWithTag(modules, OAC_SCAN_TAG);
+    *Records = records;
+    *TotalItems = moduleCount;
+    *AvailableItems = available;
+    *Truncated = available < moduleCount;
+    return STATUS_SUCCESS;
+}
+
+VOID OacReleaseKernelModuleSnapshot(
+    _Frees_ptr_opt_ POAC_SNAPSHOT_RECORD Records)
+{
+    PAGED_CODE();
+    if (Records != NULL) ExFreePoolWithTag(Records, OAC_SCAN_TAG);
 }
 
 NTSTATUS OacRunKernelScan(_In_ const OAC_SCAN_REQUEST* Request)

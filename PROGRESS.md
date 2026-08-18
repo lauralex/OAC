@@ -19,7 +19,7 @@ and the remaining production-hardening work packages.
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
 | WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
-| WP-06 Alert/event/snapshot transport | Planned | Typed event schema exists; no production event transport is advertised or dispatched |
+| WP-06 Alert/event/snapshot transport | Implemented; VM acceptance pending | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, and frozen paged kernel-module snapshots pass local validation |
 | WP-07 Bounded service scheduler | Planned | No independent health loop or bounded worker scheduler exists |
 | WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
@@ -77,14 +77,19 @@ The working tree adds or changes these implementation areas:
   cleanup/close, and target tombstones.
 - `OAC/main.c`: production negotiate/claim/status/revoke and launch-ticket dispatch, plus lab-only
   diagnostic authorization.
+- `OAC/evidence.c`, `OAC/protection.c`, and `OAC/scanner.c`: callback-safe typed publication,
+  independent retained-alert and overwrite-event queues, explicit loss accounting, and frozen
+  paged kernel-module snapshots.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
-  service-owned target job, and a backend-independent lease-state policy seam.
+  service-owned target job, bounded alert polling/handoff, and a backend-independent lease-state
+  policy seam.
 - Package/install and VM harness changes for the service boundary, production session lifecycle/race test, and
   Driver Verifier rerun.
 
-The current driver advertises production session control, launch tickets, and session liveness.
-Scan, event, CPU, signed-manifest, signed-policy, and backend capabilities remain unavailable.
+The current driver advertises production session control, launch tickets, session liveness, typed
+evidence, and paged snapshots. Production configuration/scan, signed-manifest, signed-policy, and
+backend capabilities remain unavailable.
 
 ## Current local validation
 
@@ -92,7 +97,7 @@ Scan, event, CPU, signed-manifest, signed-policy, and backend capabilities remai
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `314/314` in each configuration after the WP-05 implementation |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `406/406` in each configuration after the WP-06 implementation |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
@@ -129,10 +134,11 @@ the verified Windows installation ISO and the compact current evidence remain un
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #11 and remain
   required for each merge.
-- WP-06 through WP-08 must add production evidence transport, bounded scheduling, and centralized
-  typed policy before the hardened-foundation definition is met.
+- WP-06 requires one commit-bound disposable-VM and Driver Verifier acceptance run. WP-07 and
+  WP-08 must still add bounded scheduling and centralized typed policy before the
+  hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
-No milestone is described as production-ready or as a complete hardened foundation. The minimal
-control plane still lacks production telemetry, policy, signed manifest, and backend work listed
-above.
+No milestone is described as production-ready or as a complete hardened foundation. The control
+plane still lacks bounded scan scheduling, centralized policy, signed manifests, and authenticated
+backend delivery listed above.

@@ -62,6 +62,21 @@ static __inline OAC_V5_VALIDATION OacValidateLaunchId(
         : OAC_V5_VALID;
 }
 
+static __inline BOOLEAN OacSnapshotIdIsZero(
+    const OAC_SNAPSHOT_ID* SnapshotId)
+{
+    return SnapshotId != NULL &&
+        SnapshotId->High == 0 && SnapshotId->Low == 0;
+}
+
+static __inline BOOLEAN OacSnapshotIdEqual(
+    const OAC_SNAPSHOT_ID* Left,
+    const OAC_SNAPSHOT_ID* Right)
+{
+    return Left != NULL && Right != NULL &&
+        Left->High == Right->High && Left->Low == Right->Low;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateVersion(ULONG Version)
 {
     return Version == OAC_V5_VERSION ? OAC_V5_VALID : OAC_V5_INVALID_VERSION;
@@ -558,6 +573,41 @@ static __inline BOOLEAN OacV5CategoryValid(OAC_V5_CATEGORY Category)
     return Category <= OAC_V5_CATEGORY_HWID;
 }
 
+static __inline BOOLEAN OacEvidenceChannelValid(ULONG Channel)
+{
+    return Channel == OAC_EVIDENCE_CHANNEL_ALERT ||
+        Channel == OAC_EVIDENCE_CHANNEL_EVENT;
+}
+
+static __inline BOOLEAN OacEventBelongsToEvidenceChannel(
+    const OAC_V5_EVENT_RECORD* Record,
+    ULONG Channel)
+{
+    BOOLEAN alert;
+
+    if (Record == NULL || !OacEvidenceChannelValid(Channel)) return FALSE;
+    alert = Record->ObservationSeverity >= OAC_V5_OBSERVATION_HIGH ||
+        Record->PolicySeverity >= OAC_V5_POLICY_HIGH;
+    return Channel == OAC_EVIDENCE_CHANNEL_ALERT ? alert : !alert;
+}
+
+static __inline BOOLEAN OacSnapshotOperationValid(ULONG Operation)
+{
+    return Operation >= OAC_SNAPSHOT_OPERATION_OPEN &&
+        Operation <= OAC_SNAPSHOT_OPERATION_CLOSE;
+}
+
+static __inline BOOLEAN OacSnapshotTypeValid(ULONG SnapshotType)
+{
+    return SnapshotType == OAC_SNAPSHOT_TYPE_KERNEL_MODULES;
+}
+
+static __inline BOOLEAN OacSnapshotStateValid(ULONG State)
+{
+    return State >= OAC_SNAPSHOT_STATE_READY &&
+        State <= OAC_SNAPSHOT_STATE_CLOSED;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateEventPayload(
     const OAC_V5_EVENT_RECORD* Record)
 {
@@ -680,6 +730,375 @@ static __inline OAC_V5_VALIDATION OacV5ValidateEventRecord(
         return OAC_V5_INVALID_VALUE;
     }
     return OacV5ValidateEventPayload(Record);
+}
+
+static __inline OAC_V5_VALIDATION OacValidateEvidenceReadRequest(
+    const OAC_EVIDENCE_READ_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(
+        &Request->Header,
+        InputLength,
+        sizeof(*Request),
+        OAC_MESSAGE_READ_EVIDENCE,
+        0);
+    if (result != OAC_V5_VALID) return result;
+    if (!OacEvidenceChannelValid(Request->Channel) ||
+        Request->MaximumRecords == 0 ||
+        Request->MaximumRecords > OAC_EVIDENCE_MAX_RECORDS_PER_PAGE ||
+        Request->AcknowledgeThrough > Request->AfterSequence)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if (Request->Channel == OAC_EVIDENCE_CHANNEL_EVENT &&
+        Request->AcknowledgeThrough != 0)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return Request->Reserved == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_RESERVED;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateEvidenceReadResponse(
+    const OAC_EVIDENCE_READ_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    const ULONG prefix = FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE, Records);
+    ULONG expectedLength;
+    ULONG index;
+    ULONGLONG previous = 0;
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    if (Response->RecordCount > OAC_EVIDENCE_MAX_RECORDS_PER_PAGE ||
+        Response->RecordCount > (OAC_V5_ULONG_MAX - prefix) /
+            sizeof(OAC_V5_EVENT_RECORD))
+    {
+        return OAC_V5_INVALID_RANGE;
+    }
+    expectedLength = prefix +
+        Response->RecordCount * sizeof(OAC_V5_EVENT_RECORD);
+    result = OacV5ValidateResponseHeader(
+        &Response->Header,
+        OutputLength,
+        expectedLength,
+        OAC_MESSAGE_READ_EVIDENCE,
+        OAC_V5_RESPONSE_MORE_DATA | OAC_V5_RESPONSE_PARTIAL |
+            OAC_V5_RESPONSE_REVOKED,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (!OacEvidenceChannelValid(Response->Channel) ||
+        Response->Reserved != 0 || Response->LossLatched > 1 ||
+        Response->AcknowledgedSequence > Response->PublishedSequence ||
+        ((Response->FirstAvailableSequence == 0) !=
+         (Response->LastAvailableSequence == 0)) ||
+        (Response->FirstAvailableSequence != 0 &&
+         (Response->FirstAvailableSequence > Response->LastAvailableSequence ||
+          Response->LastAvailableSequence > Response->PublishedSequence)) ||
+        ((Response->LossLatched == 0) !=
+         (Response->FirstLostSequence == 0)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if (Response->Channel == OAC_EVIDENCE_CHANNEL_ALERT)
+    {
+        if (Response->DroppedCount < Response->LostHighCount ||
+            Response->DroppedCount - Response->LostHighCount !=
+                Response->LostCriticalCount ||
+            (Response->FirstAvailableSequence != 0 &&
+             Response->FirstAvailableSequence <=
+                Response->AcknowledgedSequence))
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+    else if (Response->AcknowledgedSequence != 0 ||
+        Response->LostHighCount != 0 ||
+        Response->LostCriticalCount != 0)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if ((Response->LossLatched == 0 && Response->DroppedCount != 0) ||
+        (Response->LossLatched != 0 &&
+         (Response->DroppedCount == 0 ||
+          Response->FirstLostSequence > Response->PublishedSequence)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+
+    for (index = 0; index < Response->RecordCount; ++index)
+    {
+        const OAC_V5_EVENT_RECORD* record = &Response->Records[index];
+
+        result = OacV5ValidateEventRecord(record, sizeof(*record));
+        if (result != OAC_V5_VALID) return result;
+        if (!OacV5SessionIdEqual(
+                &record->SessionId,
+                &Response->Header.SessionId) ||
+            record->Generation != Response->Header.Generation ||
+            !OacEventBelongsToEvidenceChannel(record, Response->Channel) ||
+            record->Sequence <= previous ||
+            record->Sequence < Response->FirstAvailableSequence ||
+            record->Sequence > Response->LastAvailableSequence)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+        previous = record->Sequence;
+    }
+    if (((Response->Header.Flags & OAC_V5_RESPONSE_MORE_DATA) != 0) !=
+        (Response->RecordCount != 0 &&
+         previous < Response->LastAvailableSequence))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateSnapshotRecord(
+    const OAC_SNAPSHOT_RECORD* Record,
+    ULONG RecordLength)
+{
+    ULONG index;
+    OAC_V5_VALIDATION result;
+
+    if (Record == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSize(
+        RecordLength,
+        Record->Size,
+        sizeof(*Record),
+        sizeof(*Record));
+    if (result != OAC_V5_VALID) return result;
+    result = OacV5ValidateVersion(Record->Version);
+    if (result != OAC_V5_VALID) return result;
+    if (Record->RecordType != OAC_SNAPSHOT_RECORD_KERNEL_MODULE ||
+        Record->Flags != OAC_SNAPSHOT_RECORD_FLAGS ||
+        Record->Address == 0 || Record->Length == 0 ||
+        Record->NameLength == 0 ||
+        Record->NameLength >= OAC_SNAPSHOT_MAX_NAME_CHARS ||
+        Record->Reserved != 0 ||
+        Record->Name[Record->NameLength] != L'\0')
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    for (index = 0; index < Record->NameLength; ++index)
+    {
+        USHORT value = (USHORT)Record->Name[index];
+        if (value == 0 || value < 0x20 || value == 0x7f)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+        if (value >= 0xd800 && value <= 0xdbff)
+        {
+            if (index + 1 >= Record->NameLength ||
+                Record->Name[index + 1] < 0xdc00 ||
+                Record->Name[index + 1] > 0xdfff)
+            {
+                return OAC_V5_INVALID_VALUE;
+            }
+            ++index;
+        }
+        else if (value >= 0xdc00 && value <= 0xdfff)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+    return OacV5ValidateReserved(
+        &Record->Name[Record->NameLength + 1],
+        (OAC_SNAPSHOT_MAX_NAME_CHARS - Record->NameLength - 1) *
+            sizeof(WCHAR));
+}
+
+static __inline OAC_V5_VALIDATION OacValidateSnapshotRequest(
+    const OAC_SNAPSHOT_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+    BOOLEAN zeroId;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(
+        &Request->Header,
+        InputLength,
+        sizeof(*Request),
+        OAC_MESSAGE_MANAGE_SNAPSHOT,
+        0);
+    if (result != OAC_V5_VALID) return result;
+    if (!OacSnapshotOperationValid(Request->Operation) ||
+        !OacSnapshotTypeValid(Request->SnapshotType) ||
+        Request->Reserved != 0)
+    {
+        return Request->Reserved != 0
+            ? OAC_V5_INVALID_RESERVED
+            : OAC_V5_INVALID_VALUE;
+    }
+    zeroId = OacSnapshotIdIsZero(&Request->SnapshotId);
+    if (Request->Operation == OAC_SNAPSHOT_OPERATION_OPEN)
+    {
+        return zeroId && Request->CursorGeneration == 0 &&
+            Request->Cursor == 0 && Request->MaximumRecords != 0 &&
+            Request->MaximumRecords <= OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE
+            ? OAC_V5_VALID
+            : OAC_V5_INVALID_VALUE;
+    }
+    if (zeroId || Request->CursorGeneration == 0)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if (Request->Operation == OAC_SNAPSHOT_OPERATION_READ)
+    {
+        return Request->MaximumRecords != 0 &&
+            Request->MaximumRecords <= OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE
+            ? OAC_V5_VALID
+            : OAC_V5_INVALID_VALUE;
+    }
+    return Request->Cursor == 0 && Request->MaximumRecords == 0
+        ? OAC_V5_VALID
+        : OAC_V5_INVALID_VALUE;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateSnapshotResponse(
+    const OAC_SNAPSHOT_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    const ULONG prefix = FIELD_OFFSET(OAC_SNAPSHOT_RESPONSE, Records);
+    ULONG expectedLength;
+    ULONG index;
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    if (Response->RecordCount > OAC_SNAPSHOT_MAX_RECORDS_PER_PAGE ||
+        Response->RecordCount > (OAC_V5_ULONG_MAX - prefix) /
+            sizeof(OAC_SNAPSHOT_RECORD))
+    {
+        return OAC_V5_INVALID_RANGE;
+    }
+    expectedLength = prefix +
+        Response->RecordCount * sizeof(OAC_SNAPSHOT_RECORD);
+    result = OacV5ValidateResponseHeader(
+        &Response->Header,
+        OutputLength,
+        expectedLength,
+        OAC_MESSAGE_MANAGE_SNAPSHOT,
+        OAC_V5_RESPONSE_MORE_DATA | OAC_V5_RESPONSE_REVOKED,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (OacSnapshotIdIsZero(&Response->SnapshotId) ||
+        !OacSnapshotTypeValid(Response->SnapshotType) ||
+        !OacSnapshotStateValid(Response->State) ||
+        Response->ScanId == 0 || Response->CreatedTimestamp100ns == 0 ||
+        Response->ExpirationInterruptTime100ns == 0 ||
+        Response->CursorGeneration == 0 || Response->Truncated > 1 ||
+        Response->Reserved != 0 ||
+        Response->AvailableItems > Response->TotalItems ||
+        Response->Cursor > Response->AvailableItems ||
+        Response->NextCursor < Response->Cursor ||
+        Response->NextCursor > Response->AvailableItems ||
+        Response->NextCursor - Response->Cursor != Response->RecordCount ||
+        (Response->Truncated != 0) !=
+            (Response->AvailableItems < Response->TotalItems))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if (Response->State == OAC_SNAPSHOT_STATE_READY)
+    {
+        if (Response->FailureStatus != 0)
+            return OAC_V5_INVALID_VALUE;
+    }
+    else if (Response->State == OAC_SNAPSHOT_STATE_FAILED)
+    {
+        if (Response->FailureStatus == 0 || Response->TotalItems != 0 ||
+            Response->AvailableItems != 0 || Response->RecordCount != 0 ||
+            Response->Cursor != 0 || Response->NextCursor != 0 ||
+            Response->Truncated != 0)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+    else if (Response->FailureStatus != 0 || Response->RecordCount != 0 ||
+        Response->Cursor != 0 || Response->NextCursor != 0)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+
+    for (index = 0; index < Response->RecordCount; ++index)
+    {
+        result = OacValidateSnapshotRecord(
+            &Response->Records[index],
+            sizeof(Response->Records[index]));
+        if (result != OAC_V5_VALID ||
+            Response->Records[index].Index != Response->Cursor + index)
+        {
+            return OAC_V5_INVALID_VALUE;
+        }
+    }
+    if (((Response->Header.Flags & OAC_V5_RESPONSE_MORE_DATA) != 0) !=
+        (Response->State == OAC_SNAPSHOT_STATE_READY &&
+         Response->NextCursor < Response->AvailableItems))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateEvidenceReadCorrelation(
+    const OAC_EVIDENCE_READ_REQUEST* Request,
+    const OAC_EVIDENCE_READ_RESPONSE* Response)
+{
+    BOOLEAN partial;
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL || Response == NULL)
+        return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateCorrelation(&Request->Header, &Response->Header);
+    if (result != OAC_V5_VALID) return result;
+    partial = Response->FirstAvailableSequence != 0 &&
+        Request->AfterSequence < Response->FirstAvailableSequence - 1;
+    if (Response->Channel != Request->Channel ||
+        Response->RecordCount > Request->MaximumRecords ||
+        Response->PublishedSequence < Request->AfterSequence ||
+        Response->AcknowledgedSequence < Request->AcknowledgeThrough ||
+        Response->AcknowledgedSequence > Request->AfterSequence ||
+        (((Response->Header.Flags & OAC_V5_RESPONSE_PARTIAL) != 0) !=
+            partial) ||
+        (Response->RecordCount != 0 &&
+         Response->Records[0].Sequence <= Request->AfterSequence) ||
+        (Response->RecordCount == 0 &&
+         Response->LastAvailableSequence > Request->AfterSequence))
+    {
+        return OAC_V5_INVALID_CORRELATION;
+    }
+    return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateSnapshotCorrelation(
+    const OAC_SNAPSHOT_REQUEST* Request,
+    const OAC_SNAPSHOT_RESPONSE* Response)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL || Response == NULL)
+        return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateCorrelation(&Request->Header, &Response->Header);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->SnapshotType != Request->SnapshotType ||
+        Response->RecordCount > Request->MaximumRecords ||
+        (Request->Operation != OAC_SNAPSHOT_OPERATION_OPEN &&
+         (!OacSnapshotIdEqual(
+              &Request->SnapshotId,
+              &Response->SnapshotId) ||
+          Request->CursorGeneration != Response->CursorGeneration)) ||
+        (Request->Operation != OAC_SNAPSHOT_OPERATION_CLOSE &&
+         Request->Cursor != Response->Cursor) ||
+        (Request->Operation == OAC_SNAPSHOT_OPERATION_CLOSE &&
+         Response->State != OAC_SNAPSHOT_STATE_CLOSED))
+    {
+        return OAC_V5_INVALID_CORRELATION;
+    }
+    return OAC_V5_VALID;
 }
 
 static __inline OAC_V5_VALIDATION OacV5ValidateNegotiateRequest(
@@ -822,7 +1241,7 @@ static __inline OAC_V5_VALIDATION OacV5ValidateNegotiateResponse(
         Response->MaximumOutputSize < sizeof(OAC_V5_STATUS_RESPONSE) ||
         Response->MaximumOutputSize > OAC_V5_MAX_OUTPUT_SIZE ||
         Response->MaximumEventCount == 0 ||
-        Response->MaximumEventCount > OAC_V5_MAX_EVENT_COUNT)
+        Response->MaximumEventCount > OAC_EVIDENCE_MAX_RECORDS_PER_PAGE)
     {
         return OAC_V5_INVALID_VALUE;
     }
@@ -953,6 +1372,7 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     if (!OacV5SessionStateValid(Response->State) ||
         Response->State < OAC_V5_SESSION_CLAIMED ||
         !OacV5RevokeReasonValid(Response->RevokeReason) ||
+        Response->EventsDropped > Response->EventsWritten ||
         !OacSessionLossStateValid(
             Response->SessionLossSequence,
             Response->LastSessionLossReason) ||
