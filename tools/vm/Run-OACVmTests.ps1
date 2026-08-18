@@ -1023,50 +1023,53 @@ exit `$code
 }
 
 function Wait-LivenessProcesses(
-    [string]$MarkerPath,
     [string]$ExecutablePath,
     [int64]$ExpectedParentProcessId
 ) {
+    if ($ExpectedParentProcessId -le 0) {
+        throw 'The liveness parent process ID is invalid.'
+    }
+    $expectedPath = [IO.Path]::GetFullPath($ExecutablePath)
+    $expectedChildCommandLine = '"' + $expectedPath + '" --liveness-child'
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    $item = $null
     do {
-        $item = Get-Item -LiteralPath $MarkerPath -Force -ErrorAction SilentlyContinue
-        if ($null -ne $item) { break }
+        $parents = @(Get-CimInstance Win32_Process `
+                -Filter "ProcessId=$ExpectedParentProcessId")
+        if ($parents.Count -gt 1) {
+            throw 'The liveness parent process identity is ambiguous.'
+        }
+        if ($parents.Count -eq 1) {
+            if ([string]::IsNullOrWhiteSpace([string]$parents[0].ExecutablePath) -or
+                [IO.Path]::GetFullPath([string]$parents[0].ExecutablePath) -ine
+                    $expectedPath) {
+                throw 'The liveness parent has the wrong executable identity.'
+            }
+            $children = @(Get-CimInstance Win32_Process `
+                    -Filter "ParentProcessId=$ExpectedParentProcessId")
+            $livenessChildren = @($children | Where-Object {
+                    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+                    [IO.Path]::GetFullPath([string]$_.ExecutablePath) -ieq
+                        $expectedPath
+                })
+            if ($livenessChildren.Count -gt 1) {
+                throw 'The liveness parent created more than one liveness child.'
+            }
+            if ($livenessChildren.Count -eq 1) {
+                $child = $livenessChildren[0]
+                if ([int64]$child.ProcessId -le 0 -or
+                    [int64]$child.ProcessId -eq $ExpectedParentProcessId -or
+                    [string]$child.CommandLine -cne $expectedChildCommandLine) {
+                    throw 'The liveness child has the wrong process identity or role.'
+                }
+                return [pscustomobject]@{
+                    ParentProcessId = $ExpectedParentProcessId
+                    ChildProcessId = [int64]$child.ProcessId
+                }
+            }
+        }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $item -or $item.PSIsContainer -or
-        ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-        $item.Length -lt 1 -or $item.Length -gt 128) {
-        throw 'The liveness target did not publish one safe bounded marker.'
-    }
-
-    $text = [IO.File]::ReadAllText($item.FullName, [Text.Encoding]::ASCII)
-    $match = [regex]::Match(
-        $text,
-        '\Aparent_pid=([1-9][0-9]*)\r\nchild_pid=([1-9][0-9]*)\r\n\z')
-    [int64]$parentProcessId = 0
-    [int64]$childProcessId = 0
-    if (-not $match.Success -or
-        -not [int64]::TryParse($match.Groups[1].Value, [ref]$parentProcessId) -or
-        -not [int64]::TryParse($match.Groups[2].Value, [ref]$childProcessId) -or
-        $parentProcessId -ne $ExpectedParentProcessId -or
-        $childProcessId -le 0 -or $childProcessId -eq $parentProcessId) {
-        throw 'The liveness marker does not identify the launched parent and one child.'
-    }
-
-    $expectedPath = [IO.Path]::GetFullPath($ExecutablePath)
-    foreach ($processId in @($parentProcessId, $childProcessId)) {
-        $processes = @(Get-CimInstance Win32_Process -Filter "ProcessId=$processId")
-        if ($processes.Count -ne 1 -or
-            [string]::IsNullOrWhiteSpace([string]$processes[0].ExecutablePath) -or
-            [IO.Path]::GetFullPath([string]$processes[0].ExecutablePath) -ine $expectedPath) {
-            throw "Liveness process $processId is missing or has the wrong executable identity."
-        }
-    }
-    return [pscustomobject]@{
-        ParentProcessId = $parentProcessId
-        ChildProcessId = $childProcessId
-    }
+    throw 'The liveness parent did not expose exactly one verified child process.'
 }
 
 function Wait-ProcessesExited([int64[]]$ProcessIds, [string]$Context) {
@@ -1172,8 +1175,6 @@ function Test-ProductionBoundary {
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     $livenessSource = $launcher
     $livenessTarget = Join-Path $installDirectory 'OAC-Liveness-Target.exe'
-    $livenessMarker = Join-Path (Get-InteractiveProfilePath) `
-        'AppData\Local\OAC-Liveness-Target.txt'
     $livenessAliasCreated = $false
     try {
         Stop-TestService 'production-service-pre-stop' 'OACService'
@@ -1182,7 +1183,6 @@ function Test-ProductionBoundary {
         Wait-TestServiceState OACService `
             ([ServiceProcess.ServiceControllerStatus]::Stopped)
 
-        Remove-RegularTestFile $livenessMarker
         if ($null -ne (Get-Item -LiteralPath $livenessTarget -Force `
                     -ErrorAction SilentlyContinue)) {
             throw "The liveness test alias already exists: $livenessTarget"
@@ -1266,7 +1266,7 @@ exit $code
             $launcher $livenessTarget 'production-launch'
         $launchExits.Add($crashLaunch.ExitCode)
         $crashProcesses = Wait-LivenessProcesses `
-            $livenessMarker $livenessTarget $crashLaunch.TargetProcessId
+            $livenessTarget $crashLaunch.TargetProcessId
         $crashParentProcessId = $crashProcesses.ParentProcessId
         $crashChildProcessId = $crashProcesses.ChildProcessId
         $launchBindingConfirmed = $true
@@ -1304,12 +1304,11 @@ exit $code
             throw 'The recovered service did not report exactly one prior session loss.'
         }
 
-        Remove-RegularTestFile $livenessMarker
         $gracefulLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch-graceful'
         $launchExits.Add($gracefulLaunch.ExitCode)
         $gracefulProcesses = Wait-LivenessProcesses `
-            $livenessMarker $livenessTarget $gracefulLaunch.TargetProcessId
+            $livenessTarget $gracefulLaunch.TargetProcessId
         $gracefulParentProcessId = $gracefulProcesses.ParentProcessId
         $gracefulChildProcessId = $gracefulProcesses.ChildProcessId
         $gracefulLaunchBindingConfirmed = $true
@@ -1374,11 +1373,6 @@ exit $code
             Start-TestService 'production-legacy-driver-start' 'OAC'
         } catch {
             $cleanupErrors.Add("Start OAC: $($_.Exception.Message)")
-        }
-        try {
-            Remove-RegularTestFile $livenessMarker
-        } catch {
-            $cleanupErrors.Add("Remove liveness marker: $($_.Exception.Message)")
         }
         if ($livenessAliasCreated) {
             try {

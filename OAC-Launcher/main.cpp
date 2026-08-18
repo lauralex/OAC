@@ -1,6 +1,5 @@
 #include <Windows.h>
 #include <bcrypt.h>
-#include <ShlObj.h>
 
 #include <iomanip>
 #include <iostream>
@@ -651,26 +650,6 @@ bool IsLivenessTargetExecutable()
     return _wcsicmp(name.c_str(), L"OAC-Liveness-Target.exe") == 0;
 }
 
-bool GetLivenessMarkerPath(std::wstring& path)
-{
-    PWSTR localAppData = nullptr;
-    const HRESULT result = SHGetKnownFolderPath(
-        FOLDERID_LocalAppData,
-        KF_FLAG_DEFAULT,
-        nullptr,
-        &localAppData);
-    if (FAILED(result) || localAppData == nullptr)
-    {
-        CoTaskMemFree(localAppData);
-        return false;
-    }
-    path.assign(localAppData);
-    CoTaskMemFree(localAppData);
-    if (path.empty()) return false;
-    path += L"\\OAC-Liveness-Target.txt";
-    return true;
-}
-
 int RunLivenessTarget()
 {
     std::wstring executable;
@@ -702,48 +681,9 @@ int RunLivenessTarget()
     }
     UniqueHandle childProcess(child.hProcess);
     UniqueHandle childThread(child.hThread);
-
-    std::wstring markerPath;
-    if (!GetLivenessMarkerPath(markerPath))
-    {
-        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
-        return 67;
-    }
-    UniqueHandle marker(CreateFileW(
-        markerPath.c_str(),
-        GENERIC_WRITE,
-        0,
-        nullptr,
-        CREATE_NEW,
-        FILE_ATTRIBUTE_NORMAL,
-        nullptr));
-    if (!marker)
-    {
-        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
-        return 68;
-    }
-
-    const std::string contents =
-        "parent_pid=" + std::to_string(GetCurrentProcessId()) + "\r\n" +
-        "child_pid=" + std::to_string(child.dwProcessId) + "\r\n";
-    DWORD written = 0;
-    const BOOL markerWritten = WriteFile(
-        marker.get(),
-        contents.data(),
-        static_cast<DWORD>(contents.size()),
-        &written,
-        nullptr);
-    marker.reset();
-    if (!markerWritten || written != static_cast<DWORD>(contents.size()))
-    {
-        (void)DeleteFileW(markerPath.c_str());
-        (void)TerminateProcess(childProcess.get(), ERROR_PROCESS_ABORTED);
-        return 69;
-    }
-
     return WaitForSingleObject(childProcess.get(), INFINITE) == WAIT_OBJECT_0
         ? 0
-        : 70;
+        : 67;
 }
 } // namespace
 
