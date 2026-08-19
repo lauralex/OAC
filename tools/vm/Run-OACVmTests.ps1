@@ -46,6 +46,17 @@ $requiredZeroTests = @(
 $baselineZeroTests = @($requiredZeroTests | Where-Object {
         $_ -notlike 'verifier-*'
     })
+$baselineSpecialTests = @(
+    'baseline-remove-repeat-expected-refusal',
+    'production-manifest-modified',
+    'production-manifest-wrong-build',
+    'production-manifest-expired',
+    'production-manifest-rollback',
+    'baseline-driver-gate-create',
+    'baseline-driver-gate-trigger',
+    'baseline-driver-gate-detection',
+    'baseline-driver-gate-stop',
+    'baseline-driver-gate-delete')
 $auxiliaryExitValues = [ordered]@{
     'baseline-bcd' = @(0)
     'baseline-sc-query' = @(0)
@@ -2097,13 +2108,7 @@ function Install-And-RunBaseline {
     if ((Read-CapturedExit 'baseline-driver-gate-delete') -ne 0) {
         $baselineExitFailures.Add('baseline-driver-gate-delete')
     }
-    $baselineFormalNames = @($baselineZeroTests) + @(
-        'baseline-remove-repeat-expected-refusal',
-        'baseline-driver-gate-create',
-        'baseline-driver-gate-trigger',
-        'baseline-driver-gate-detection',
-        'baseline-driver-gate-stop',
-        'baseline-driver-gate-delete')
+    $baselineFormalNames = @($baselineZeroTests) + @($baselineSpecialTests)
     $auxiliary = Get-AuxiliaryExitValidation $baselineFormalNames $false
     foreach ($name in $auxiliary.Missing) {
         $baselineExitFailures.Add("auxiliary-missing:$name")
@@ -2473,17 +2478,7 @@ function Collect-FinalResults {
         foreach ($dump in $dumps) { Copy-Item -LiteralPath $dump.FullName -Destination $dumpOutput -Force }
     }
 
-    $specialResults = @(
-        'baseline-remove-repeat-expected-refusal',
-        'production-manifest-modified',
-        'production-manifest-wrong-build',
-        'production-manifest-expired',
-        'production-manifest-rollback',
-        'baseline-driver-gate-create',
-        'baseline-driver-gate-trigger',
-        'baseline-driver-gate-detection',
-        'baseline-driver-gate-stop',
-        'baseline-driver-gate-delete')
+    $specialResults = @($baselineSpecialTests)
     $expectedResultNames = @($requiredZeroTests) + $specialResults
     $observedTestResultNames = @(Get-ChildItem -LiteralPath $results `
             -Filter '*.exitcode.txt' -File | ForEach-Object {
