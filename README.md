@@ -169,20 +169,16 @@ admission.
 
 ## Validation status
 
-The current signed-manifest source passes clean local Debug/Release builds, `518/518` driver-free
-tests in both configurations, repository validation, and driver PREfast. Its exact-commit
-disposable-VM and Driver Verifier campaign is still pending.
-
-Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed:
+Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `477/477` driver-free protocol and policy tests in both configurations;
+- `518/518` driver-free protocol, policy, and manifest tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
-- a networkless Windows 11 build 26100 campaign with 30 exact results, standard Driver Verifier,
-  verified job ownership, service-crash and graceful-stop process-tree containment, bounded typed
-  evidence transport and snapshots, integrated policy evaluation, independent health-loop and
-  target-scan measurements, and zero crashes or minidumps.
+- a networkless Windows 11 build 26100 campaign with 34 exact results and standard Driver Verifier.
+  It accepted two authorized signed launches, rejected modified, wrong-build, expired, and rollback
+  manifests, verified job ownership and target-tree containment, exercised bounded evidence and
+  scheduling paths, and finished with zero crashes or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

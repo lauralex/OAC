@@ -1,8 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-08 accepted at commit
-`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign; WP-09
-signed-manifest source is complete and runtime acceptance is pending
+**Status:** WP-01 through WP-09 accepted at commit
+`535730c6828f723c2e42a4721db885fab94505aa` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -150,7 +149,7 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; acceptance commit
-`5c476c246462c968d98185c6db159fdaf6a0238d` passed the driver-backed target-live, cleanup,
+`535730c6828f723c2e42a4721db885fab94505aa` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 
@@ -175,7 +174,7 @@ named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Complete signed-manifest VM acceptance, then add signed policy selection and backend leases.
+1. Add authenticated signed-policy selection, then backend leases and evidence upload.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

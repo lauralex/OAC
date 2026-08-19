@@ -3,10 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including job/liveness, typed evidence,
-bounded service scheduling, and integrated policy evaluation. The current signed-manifest protocol
-revision has passed host builds and driver-free tests; its runtime acceptance is pending.
+acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest authorization,
+job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -254,9 +253,9 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-08 suite passed
-at acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` on Windows 11 Pro build
-26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
+sessions cannot invoke production launch operations. The complete WP-01 through WP-09 suite passed
+at acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` on Windows 11 Pro build
+26100. Each of four driver-backed protocol executions passed `130/130`, including the transport
 cases, under the baseline and standard Driver Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
@@ -267,11 +266,10 @@ expiry, monotonic updates, rollback, same-sequence equivocation, and corrupt hig
 Policy tests cover typed drift,
 malformed signer states, incomplete provenance, deterministic results, and display-text
 independence.
-The prior production-boundary test verified job ownership, service-crash and graceful-stop target-tree
-termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
-policy selection and authenticated backend sessions remain separate work packages. The updated
-boundary source adds accepted signed launch plus modified, wrong-build, expired, and rollback
-rejections; its exact-commit runtime result is pending.
+The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
+termination, recovery, monotonic session-loss reporting, two accepted signed launches, and
+modified, wrong-build, expired, and rollback manifest rejection in the same named campaign. Signed
+policy selection and authenticated backend sessions remain separate work packages.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 297 ms maximum
+thread-resume metrics. It accepted 27 completed slices, six completed sweeps, a 391 ms maximum
 health-loop delay, and no failed or cancelled slice.

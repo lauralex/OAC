@@ -1,8 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-08 controls accepted at commit
-`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign; WP-09
-signed-manifest controls are implemented in source and await runtime acceptance
+**Status:** WP-01 through WP-09 controls accepted at commit
+`535730c6828f723c2e42a4721db885fab94505aa` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -37,7 +36,7 @@ trust boundaries, adversaries, and failure behavior.
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Local policy | The service applies a fixed typed rule catalog in Enforce mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests passed; the policy-enabled service path completed the named VM/Verifier campaign |
-| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | Source and 518 driver-free tests are present; modified/wrong-build/expired/rollback VM acceptance is pending |
+| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; 518 driver-free tests cover the record and decision rules |
 | Signed policy and backend | No production trust boundary exists | Planned |
 
 ## Production authority
@@ -146,11 +145,11 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   RAII guard so every successful suspension has an explicit resume and cleanup fallback.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-08 statements combine source behavior with one exact platform acceptance run. The
+WP-01 through WP-09 statements combine source behavior with one exact platform acceptance run. The
 current driver-backed production, service installation, lifecycle, race, job/liveness, typed
-evidence, local-policy, snapshot, and standard Driver Verifier campaign passed on Windows 11 build
-26100 with zero crash events and minidumps. That result does not replace the broader supported-platform,
-effective-right, compatibility, or production-deployment matrix.
+evidence, local-policy, signed-manifest, snapshot, and standard Driver Verifier campaign passed on
+Windows 11 build 26100 with zero crash events and minidumps. That result does not replace the broader
+supported-platform, effective-right, compatibility, or production-deployment matrix.
 
 ## Planned controls
 
