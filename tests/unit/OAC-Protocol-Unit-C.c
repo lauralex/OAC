@@ -1,4 +1,5 @@
 #include "../../shared/oac_ipc.h"
+#include "../../shared/oac_manifest.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 
@@ -14,12 +15,14 @@ _Static_assert(FIELD_OFFSET(OAC_V5_EVENT_RECORD, Text) == 176,
     "C event prefix layout changed");
 _Static_assert(sizeof(OAC_V5_EVENT_RECORD) == 560,
     "C event-record layout changed");
-_Static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2112,
+_Static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2144,
     "C arm-launch request layout changed");
 _Static_assert(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
-    CanonicalNtPath) == 64, "C arm-launch path moved");
+    ManifestSha256) == 64, "C arm-launch manifest digest moved");
 _Static_assert(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
-    CanonicalDosDevicePath) == 1088,
+    CanonicalNtPath) == 96, "C arm-launch path moved");
+_Static_assert(FIELD_OFFSET(OAC_ARM_LAUNCH_REQUEST,
+    CanonicalDosDevicePath) == 1120,
     "C arm-launch DOS-device path moved");
 _Static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72,
     "C confirm-target request layout changed");
@@ -27,6 +30,12 @@ _Static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,
     "C service launch request layout changed");
 _Static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56,
     "C service launch response layout changed");
+_Static_assert(sizeof(OAC_GAME_MANIFEST) == 512,
+    "C game-manifest layout changed");
+_Static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE,
+    "C manifest digest size drifted from the production protocol");
+_Static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96,
+    "C manifest rollback-state layout changed");
 
 int OacV5CProbe(void)
 {

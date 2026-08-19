@@ -55,19 +55,23 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
-      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Userenv.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Crypt32.lib;Userenv.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="manifest.cpp" />
     <ClCompile Include="service.cpp" />
     <ClCompile Include="target_scanner.cpp" />
+    <ClCompile Include="..\shared\oac_manifest.c" />
     <ClCompile Include="..\shared\oac_policy.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="manifest.hpp" />
     <ClInclude Include="service.hpp" />
     <ClInclude Include="target_scanner.hpp" />
     <ClInclude Include="..\shared\oac_ipc.h" />
+    <ClInclude Include="..\shared\oac_manifest.h" />
     <ClInclude Include="..\shared\oac_policy.h" />
     <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
     <ClInclude Include="..\shared\protocol\oac_v5.h" />

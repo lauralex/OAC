@@ -51,6 +51,7 @@ struct OAC_SESSION_TAG
     ULONG RevokeReason;
     OAC_PENDING_LAUNCH PendingLaunch;
     OAC_LAUNCH_ID BoundLaunchId;
+    UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
     BOOLEAN Cleaned;
     BOOLEAN ServiceExited;
     BOOLEAN SessionLossRecorded;
@@ -270,6 +271,10 @@ static VOID OacFillSnapshotLocked(
         OacExtension(Session->DeviceObject)->SessionLossSequence;
     Snapshot->LastSessionLossReason =
         OacExtension(Session->DeviceObject)->LastSessionLossReason;
+    RtlCopyMemory(
+        Snapshot->ManifestSha256,
+        Session->ManifestSha256,
+        sizeof(Snapshot->ManifestSha256));
 }
 
 static BOOLEAN OacRecordSessionLossLocked(
@@ -1005,6 +1010,7 @@ NTSTATUS OacSessionBindTarget(
 NTSTATUS OacSessionArmLaunch(
     _In_ const OAC_SESSION_LEASE* Lease,
     _In_ ULONG TimeToLiveMilliseconds,
+    _In_reads_(OAC_V5_MANIFEST_DIGEST_SIZE) const UCHAR* ManifestSha256,
     _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
     _In_ ULONG CanonicalNtPathLength,
     _In_reads_(CanonicalDosDevicePathLength)
@@ -1023,7 +1029,10 @@ NTSTATUS OacSessionArmLaunch(
 
     if (Lease == NULL || LaunchId == NULL ||
         ExpirationInterruptTime100ns == NULL ||
-        Snapshot == NULL || CanonicalNtPath == NULL ||
+        Snapshot == NULL || ManifestSha256 == NULL ||
+        OacV5BufferIsZero(
+            ManifestSha256,
+            OAC_V5_MANIFEST_DIGEST_SIZE) || CanonicalNtPath == NULL ||
         CanonicalDosDevicePath == NULL ||
         TimeToLiveMilliseconds < OAC_LAUNCH_MIN_TTL_MS ||
         TimeToLiveMilliseconds > OAC_LAUNCH_MAX_TTL_MS ||
@@ -1075,6 +1084,10 @@ NTSTATUS OacSessionArmLaunch(
     else
     {
         OacClearLaunchState(session);
+        RtlCopyMemory(
+            session->ManifestSha256,
+            ManifestSha256,
+            sizeof(session->ManifestSha256));
         session->PendingLaunch.LaunchId = generatedId;
         session->PendingLaunch.ExpirationInterruptTime100ns =
             expirationInterruptTime100ns;

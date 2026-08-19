@@ -14,6 +14,7 @@
 #include "../../shared/oac_protocol.h"
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_lease.h"
+#include "../../shared/oac_manifest.h"
 #include "../../shared/oac_policy.h"
 #include "../../shared/oac_thread_suspension.hpp"
 #include "../../shared/protocol/oac_v5.h"
@@ -32,10 +33,12 @@ static_assert(offsetof(OAC_V5_EVENT_RECORD, PolicySeverity) == 20);
 static_assert(offsetof(OAC_V5_EVENT_RECORD, Reserved) == 36);
 static_assert(std::is_standard_layout_v<OAC_ARM_LAUNCH_REQUEST>);
 static_assert(std::is_trivially_copyable_v<OAC_CONFIRM_TARGET_REQUEST>);
-static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2112);
-static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST, CanonicalNtPath) == 64);
+static_assert(sizeof(OAC_ARM_LAUNCH_REQUEST) == 2144);
+static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE);
+static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST, ManifestSha256) == 64);
+static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST, CanonicalNtPath) == 96);
 static_assert(offsetof(OAC_ARM_LAUNCH_REQUEST,
-    CanonicalDosDevicePath) == 1088);
+    CanonicalDosDevicePath) == 1120);
 static_assert(sizeof(OAC_ARM_LAUNCH_RESPONSE) == 88);
 static_assert(sizeof(OAC_CANCEL_LAUNCH_REQUEST) == 64);
 static_assert(sizeof(OAC_CANCEL_LAUNCH_RESPONSE) == 64);
@@ -62,6 +65,12 @@ static_assert(std::is_trivially_copyable_v<OAC_POLICY_DECISION>);
 static_assert(sizeof(OAC_POLICY_SIGNER_CLASSIFICATION) == 64);
 static_assert(sizeof(OAC_POLICY_RULE) == 56);
 static_assert(sizeof(OAC_POLICY_DECISION) == 16);
+static_assert(std::is_standard_layout_v<OAC_GAME_MANIFEST>);
+static_assert(std::is_trivially_copyable_v<OAC_MANIFEST_ROLLBACK_STATE>);
+static_assert(sizeof(OAC_GAME_MANIFEST) == 512);
+static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableSha256) == 120);
+static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableName) == 184);
+static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96);
 
 namespace
 {
@@ -290,6 +299,8 @@ OAC_ARM_LAUNCH_REQUEST ValidArmLaunchRequest()
         sizeof(request),
         OAC_MESSAGE_ARM_LAUNCH);
     request.TimeToLiveMilliseconds = 2000;
+    for (size_t index = 0; index != sizeof(request.ManifestSha256); ++index)
+        request.ManifestSha256[index] = static_cast<UCHAR>(index + 1);
     SetCanonicalPath(request, kValidLaunchPath);
     SetCanonicalDosDevicePath(request, kValidLaunchDosDevicePath);
     return request;
@@ -590,7 +601,9 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050004UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050005UL);
+    log.Expect("launcher-service protocol exact revision",
+        OAC_IPC_PROTOCOL_REVISION == 0x00010005u);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -872,6 +885,11 @@ void TestServiceLaunchMessages(TestLog& log)
     response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_PATH_MISMATCH;
     log.Expect("service launch rejection response", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) != 0);
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_VERIFY_MANIFEST;
+    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_MANIFEST_EXPIRED;
+    log.Expect("service launch manifest rejection response",
+        OacIpcValidateLaunchResponse(
+            &response, sizeof(response), request.Header.RequestId) != 0);
     response.TargetProcessId = 12;
     log.Expect("service launch rejection has no identity", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
@@ -879,11 +897,11 @@ void TestServiceLaunchMessages(TestLog& log)
     response.FailureStage = OAC_IPC_LAUNCH_STAGE_NONE;
     log.Expect("service launch rejection names its stage", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
-    response.FailureStage = OAC_IPC_LAUNCH_STAGE_RESUME_THREAD + 1;
+    response.FailureStage = OAC_IPC_LAUNCH_STAGE_VERIFY_MANIFEST + 1;
     log.Expect("service launch rejection stage range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
     response.FailureStage = OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS;
-    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION + 1;
+    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK + 1;
     log.Expect("service launch rejection detail range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
 }
@@ -1236,6 +1254,11 @@ void TestLaunchRequests(TestLog& log)
     arm.Reserved = 1;
     log.Expect("arm-launch reserved field", OacValidateArmLaunchRequest(
         &arm, sizeof(arm)) == OAC_V5_INVALID_RESERVED);
+    arm = ValidArmLaunchRequest();
+    std::memset(arm.ManifestSha256, 0, sizeof(arm.ManifestSha256));
+    log.Expect("arm-launch requires manifest identity",
+        OacValidateArmLaunchRequest(
+            &arm, sizeof(arm)) == OAC_V5_INVALID_VALUE);
 
     arm = ValidArmLaunchRequest();
     SetCanonicalPath(arm, L"\\dEvIcE\\HarddiskVolume3\\Games\\OAC.exe");
@@ -1585,17 +1608,33 @@ void TestResponses(TestLog& log)
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status = ValidStatusResponse();
+    status.ManifestSha256[0] = 1;
+    log.Expect("claimed status rejects manifest identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
     status.State = OAC_V5_SESSION_LAUNCH_PENDING;
     status.TargetProcessId = 200;
+    status.ManifestSha256[0] = 1;
     log.Expect("pending status rejects target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.State = OAC_V5_SESSION_LAUNCH_PENDING;
+    log.Expect("pending status requires manifest identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status.ManifestSha256[0] = 1;
+    log.Expect("pending status accepts manifest identity",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
     status = ValidStatusResponse();
     status.State = OAC_V5_SESSION_TARGET_BOUND;
     log.Expect("bound status requires target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status.TargetProcessId = 200;
+    status.ManifestSha256[0] = 1;
     log.Expect("bound status accepts target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_VALID);
@@ -1605,6 +1644,7 @@ void TestResponses(TestLog& log)
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status.TargetProcessId = 200;
+    status.ManifestSha256[0] = 1;
     log.Expect("monitoring status accepts target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_VALID);
@@ -1613,6 +1653,7 @@ void TestResponses(TestLog& log)
     status.RevokeReason = OAC_REVOKE_TARGET_CONFIRMATION_FAILED;
     status.Header.Flags = OAC_V5_RESPONSE_REVOKED;
     status.TargetProcessId = 200;
+    status.ManifestSha256[0] = 1;
     log.Expect("terminal tombstone may retain target identity",
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_VALID);
@@ -2935,6 +2976,331 @@ void TestPolicyEvaluation(TestLog& log)
         gate.PolicySeverity == OAC_V5_POLICY_CRITICAL &&
         gate.Confidence == before.Confidence);
 }
+
+OAC_GAME_MANIFEST ValidGameManifest()
+{
+    OAC_GAME_MANIFEST manifest{};
+    constexpr std::array<uint8_t, OAC_MANIFEST_MAGIC_SIZE> magic{
+        'O', 'A', 'C', 'G', 'M', 'A', 'N', 0
+    };
+    constexpr char16_t executableName[] = u"Game.exe";
+
+    std::copy(magic.begin(), magic.end(), manifest.Magic);
+    manifest.SchemaVersion = OAC_MANIFEST_SCHEMA;
+    manifest.Size = sizeof(manifest);
+    manifest.ExecutableNameLength =
+        static_cast<uint32_t>(std::size(executableName) - 1);
+    for (size_t index = 0; index != OAC_MANIFEST_ID_SIZE; ++index)
+    {
+        manifest.ManifestId[index] = static_cast<uint8_t>(index + 1);
+        manifest.GameId[index] = static_cast<uint8_t>(index + 17);
+        manifest.BuildId[index] = static_cast<uint8_t>(index + 33);
+    }
+    manifest.Sequence = 7;
+    manifest.IssuedAtUnixSeconds = 999900;
+    manifest.ExpiresAtUnixSeconds = 1086400;
+    manifest.ExecutableSize = 4096;
+    manifest.RequiredDriverProtocol = OAC_V5_VERSION;
+    manifest.RequiredServiceProtocol = OAC_IPC_PROTOCOL_REVISION;
+    manifest.RequiredLauncherProtocol = OAC_IPC_PROTOCOL_REVISION;
+    for (size_t index = 0; index != OAC_MANIFEST_HASH_SIZE; ++index)
+    {
+        manifest.ExecutableSha256[index] = static_cast<uint8_t>(index + 1);
+        manifest.SigningKeyId[index] = static_cast<uint8_t>(index + 65);
+    }
+    for (size_t index = 0; index != std::size(executableName) - 1; ++index)
+    {
+        manifest.ExecutableName[index] =
+            static_cast<uint16_t>(executableName[index]);
+    }
+    return manifest;
+}
+
+void TestGameManifest(TestLog& log)
+{
+    constexpr uint64_t now = 1000000;
+    auto manifest = ValidGameManifest();
+    const auto validate = [&manifest](uint64_t currentTime) {
+        return OacManifestValidate(
+            &manifest,
+            sizeof(manifest),
+            currentTime,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION);
+    };
+
+    log.Expect("valid canonical game manifest", validate(now) == OAC_MANIFEST_VALID);
+    log.Expect("manifest null pointer",
+        OacManifestValidate(
+            nullptr,
+            sizeof(manifest),
+            now,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION) == OAC_MANIFEST_INVALID_POINTER);
+    log.Expect("manifest exact length",
+        OacManifestValidate(
+            &manifest,
+            sizeof(manifest) - 1,
+            now,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION) == OAC_MANIFEST_INVALID_LENGTH);
+
+    auto invalid = manifest;
+    invalid.Magic[0] ^= 1;
+    log.Expect("manifest magic", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_MAGIC);
+    invalid = manifest;
+    ++invalid.SchemaVersion;
+    log.Expect("manifest schema", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_SCHEMA);
+    invalid = manifest;
+    --invalid.Size;
+    log.Expect("manifest stated size", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_SCHEMA);
+    invalid = manifest;
+    invalid.Flags = 1;
+    log.Expect("manifest flags", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_RESERVED);
+    invalid = manifest;
+    invalid.Reserved0 = 1;
+    log.Expect("manifest scalar reserved field", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_RESERVED);
+    invalid = manifest;
+    invalid.Reserved[71] = 1;
+    log.Expect("manifest reserved tail", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_RESERVED);
+
+    invalid = manifest;
+    std::fill(
+        std::begin(invalid.ManifestId),
+        std::end(invalid.ManifestId),
+        uint8_t{0});
+    log.Expect("manifest nonzero identity", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_IDENTITY);
+    invalid = manifest;
+    invalid.Sequence = 0;
+    log.Expect("manifest nonzero sequence", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_IDENTITY);
+
+    invalid = manifest;
+    invalid.IssuedAtUnixSeconds = now + OAC_MANIFEST_CLOCK_SKEW_SECONDS + 1;
+    log.Expect("manifest future issuance", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_TIME);
+    invalid = manifest;
+    invalid.ExpiresAtUnixSeconds = invalid.IssuedAtUnixSeconds;
+    log.Expect("manifest ordered lifetime", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_TIME);
+    invalid = manifest;
+    invalid.ExpiresAtUnixSeconds = invalid.IssuedAtUnixSeconds +
+        OAC_MANIFEST_MAX_VALIDITY_SECONDS + 1;
+    log.Expect("manifest bounded lifetime", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_TIME);
+    invalid = manifest;
+    invalid.ExpiresAtUnixSeconds = now;
+    log.Expect("manifest expiration", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_EXPIRED);
+
+    invalid = manifest;
+    ++invalid.RequiredDriverProtocol;
+    log.Expect("manifest driver compatibility", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INCOMPATIBLE_COMPONENT);
+    invalid = manifest;
+    ++invalid.RequiredServiceProtocol;
+    log.Expect("manifest service compatibility", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INCOMPATIBLE_COMPONENT);
+    invalid = manifest;
+    ++invalid.RequiredLauncherProtocol;
+    log.Expect("manifest launcher compatibility", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INCOMPATIBLE_COMPONENT);
+
+    invalid = manifest;
+    invalid.ExecutableName[2] = u'\\';
+    log.Expect("manifest executable leaf", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_EXECUTABLE_NAME);
+    invalid = manifest;
+    invalid.ExecutableName[invalid.ExecutableNameLength] = u'X';
+    log.Expect("manifest executable zero tail", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_EXECUTABLE_NAME);
+    invalid = manifest;
+    invalid.ExecutableName[0] = 0xD83D;
+    invalid.ExecutableName[1] = u'X';
+    log.Expect("manifest executable Unicode", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_EXECUTABLE_NAME);
+    invalid = manifest;
+    invalid.ExecutableName[invalid.ExecutableNameLength - 1] = u' ';
+    log.Expect("manifest executable trailing alias", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_EXECUTABLE_NAME);
+
+    invalid = manifest;
+    invalid.ExecutableSize = 0;
+    log.Expect("manifest nonzero executable size", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_FILE_IDENTITY);
+    invalid = manifest;
+    std::fill(
+        std::begin(invalid.SigningKeyId),
+        std::end(invalid.SigningKeyId),
+        uint8_t{0});
+    log.Expect("manifest nonzero signing key", OacManifestValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_MANIFEST_INVALID_FILE_IDENTITY);
+
+    constexpr char16_t differentCaseName[] = u"game.EXE";
+    log.Expect("manifest exact file identity",
+        OacManifestFileIdentityMatches(
+            &manifest,
+            reinterpret_cast<const uint16_t*>(differentCaseName),
+            std::size(differentCaseName) - 1,
+            manifest.ExecutableSize,
+            manifest.ExecutableSha256,
+            manifest.SigningKeyId) != 0);
+    auto wrongHash = std::array<uint8_t, OAC_MANIFEST_HASH_SIZE>{};
+    log.Expect("manifest rejects wrong executable hash",
+        OacManifestFileIdentityMatches(
+            &manifest,
+            manifest.ExecutableName,
+            manifest.ExecutableNameLength,
+            manifest.ExecutableSize,
+            wrongHash.data(),
+            manifest.SigningKeyId) == 0);
+    log.Expect("manifest rejects wrong executable name",
+        OacManifestFileIdentityMatches(
+            &manifest,
+            reinterpret_cast<const uint16_t*>(u"Other.exe"),
+            9,
+            manifest.ExecutableSize,
+            manifest.ExecutableSha256,
+            manifest.SigningKeyId) == 0);
+    log.Expect("manifest rejects wrong executable size",
+        OacManifestFileIdentityMatches(
+            &manifest,
+            manifest.ExecutableName,
+            manifest.ExecutableNameLength,
+            manifest.ExecutableSize + 1,
+            manifest.ExecutableSha256,
+            manifest.SigningKeyId) == 0);
+    auto wrongSigner = std::array<uint8_t, OAC_MANIFEST_HASH_SIZE>{};
+    std::copy(
+        std::begin(manifest.SigningKeyId),
+        std::end(manifest.SigningKeyId),
+        wrongSigner.begin());
+    wrongSigner[0] ^= 1;
+    log.Expect("manifest rejects wrong executable signer",
+        OacManifestFileIdentityMatches(
+            &manifest,
+            manifest.ExecutableName,
+            manifest.ExecutableNameLength,
+            manifest.ExecutableSize,
+            manifest.ExecutableSha256,
+            wrongSigner.data()) == 0);
+
+    std::array<uint8_t, OAC_MANIFEST_HASH_SIZE> digest{};
+    std::fill(digest.begin(), digest.end(), uint8_t{0xA5});
+    OAC_MANIFEST_ROLLBACK_STATE state{};
+    log.Expect("manifest first high-water state",
+        OacManifestEvaluateRollback(
+            &manifest,
+            digest.data(),
+            nullptr,
+            0,
+            &state) == OAC_MANIFEST_ROLLBACK_ACCEPT_NEW &&
+        OacManifestRollbackStateValid(&state) != 0 &&
+        state.Sequence == manifest.Sequence);
+    OAC_MANIFEST_ROLLBACK_STATE next{};
+    log.Expect("manifest current high-water state",
+        OacManifestEvaluateRollback(
+            &manifest,
+            digest.data(),
+            &state,
+            1,
+            &next) == OAC_MANIFEST_ROLLBACK_ACCEPT_CURRENT &&
+        std::memcmp(&next, &state, sizeof(state)) == 0);
+    invalid = manifest;
+    --invalid.Sequence;
+    log.Expect("manifest rollback rejected",
+        OacManifestEvaluateRollback(
+            &invalid,
+            digest.data(),
+            &state,
+            1,
+            &next) == OAC_MANIFEST_ROLLBACK_REJECT_OLDER);
+    auto otherDigest = digest;
+    otherDigest[0] ^= 1;
+    log.Expect("manifest sequence equivocation rejected",
+        OacManifestEvaluateRollback(
+            &manifest,
+            otherDigest.data(),
+            &state,
+            1,
+            &next) == OAC_MANIFEST_ROLLBACK_REJECT_EQUIVOCATION);
+    invalid = manifest;
+    ++invalid.Sequence;
+    invalid.BuildId[0] ^= 1;
+    log.Expect("manifest monotonic update",
+        OacManifestEvaluateRollback(
+            &invalid,
+            otherDigest.data(),
+            &state,
+            1,
+            &next) == OAC_MANIFEST_ROLLBACK_ACCEPT_NEW &&
+        next.Sequence == invalid.Sequence &&
+        std::memcmp(
+            next.ManifestSha256,
+            otherDigest.data(),
+            otherDigest.size()) == 0);
+    auto corruptState = state;
+    corruptState.Reserved[0] = 1;
+    log.Expect("manifest corrupt high-water state",
+        OacManifestEvaluateRollback(
+            &manifest,
+            digest.data(),
+            &corruptState,
+            1,
+            &next) == OAC_MANIFEST_ROLLBACK_INVALID_STATE);
+}
 } // namespace
 
 int main()
@@ -2964,5 +3330,6 @@ int main()
     TestPolicyCatalog(log);
     TestSignerClassification(log);
     TestPolicyEvaluation(log);
+    TestGameManifest(log);
     return log.ExitCode();
 }

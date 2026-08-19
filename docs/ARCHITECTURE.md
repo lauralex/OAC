@@ -1,7 +1,8 @@
 # OAC architecture
 
 **Status:** WP-01 through WP-08 accepted at commit
-`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign
+`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign; WP-09
+signed-manifest source is complete and runtime acceptance is pending
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -10,6 +11,7 @@
 ```mermaid
 flowchart TD
     L["Standard-user OAC-Launcher"] -->|"status and one launch request"| S["Restricted OACService"]
+    M["Signed game manifest"] -->|"authorize exact build"| S
     S -->|"one file-bound production session"| D["Demand-start OAC driver"]
     D --> C["Session status and retained typed alerts"]
     C --> S
@@ -35,11 +37,12 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | Component | Current responsibility | Boundary |
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, own the production driver session and target job, evaluate typed evidence, answer status, serialize one caller-token suspended launch, and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OACService` | Verify its restricted identity, signed game build, and rollback state; own the production driver session and target job; evaluate typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
 | `shared/oac_policy.*` | Fixed rule catalog, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module; not an external policy format |
+| `shared/oac_manifest.*` | Canonical manifest and rollback records, strict validation, exact build identity, and monotonic high-water decisions | C-compatible service and driver-free test module; signature verification remains in user mode |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
 | Protocol tests | Driver-free schema tests and driver-backed malformed/lifecycle/race tests | Host-safe unit or disposable VM as appropriate |
@@ -68,8 +71,9 @@ Every current driver producer emits a typed observation with policy severity set
 and required provenance against one fixed catalog, then evaluates it in the compiled Enforce mode.
 Observe and Strict modes use the same catalog and are covered by driver-free regression tests; a
 signed runtime policy selector belongs to WP-10. Actionable results enter a bounded service handoff.
-The service supports a deny-launch latch for the later manifest and signed-policy milestones; no
-current fixed-catalog rule selects it. Revoke-session terminates the service runtime so normal
+The service supports a deny-launch latch for signed-policy decisions; no current fixed-catalog rule
+selects it. Game-manifest rejection occurs directly at the launch-authorization boundary.
+Revoke-session terminates the service runtime so normal
 cleanup revokes the driver session and closes the target job. Display payload text is validated as
 transport data but never read by the policy evaluator.
 
@@ -95,14 +99,20 @@ the pipe server PID is the running `OACService` SCM process in session 0. These 
 and authorization checks, not cryptographic backend authentication.
 
 The IPC surface contains hello, status, and one absolute executable launch request. The service
-opens and resolves the executable under client impersonation, keeps the file locked against writes
-and deletion, arms a bounded kernel ticket for the exact volume-device and DOS-device path spellings,
+opens and resolves the executable under client impersonation and keeps the file locked against
+writes and deletion. Before arming the driver it reads the adjacent fixed-size manifest and detached
+CMS signature through non-reparse handles, validates the executable's Windows trust and exact
+signer, requires the signer certificate SHA-256 provisioned in a protected registry value, checks
+the executable leaf name, size, and SHA-256, enforces component compatibility and expiration, and
+updates protected per-game high-water state. It then arms a bounded kernel ticket for the exact
+volume-device and DOS-device path spellings plus the verified manifest digest,
 creates the process suspended under the client's primary token, confirms the exact process handle,
 validates monitoring state, assigns the process to a service-owned kill-on-close job, and resumes
 the initial thread. Child processes inherit that job. Graceful stop explicitly revokes the driver
 session before closing the job; unexpected service exit closes both driver and job handles through
-normal Windows handle teardown. There is no argument transport, policy transfer, signed manifest,
-authenticated evidence upload, backend lease, or service-session reuse after the target exits.
+normal Windows handle teardown. There is no argument transport, signed policy transfer,
+authenticated evidence upload, backend lease, manifest-key rotation, or service-session reuse after
+the target exits.
 
 ## Per-file driver session
 
@@ -156,14 +166,16 @@ ring; production driver configuration and scan dispatch remain unavailable, whil
 worker uses documented user-mode process APIs. The driver never promotes its own observations to
 policy violations. The service evaluates records received from both queues, preserves source
 confidence and provenance, and keeps the separate policy decision with any actionable local copy.
+Status also carries the verified manifest SHA-256 from launch arm through the terminal session so
+service-side authorization remains correlated with driver target state. The kernel neither opens
+files nor parses certificates or manifests.
 Overwrite gaps remain explicit; authenticated persistence and backend review do not exist yet. The
 retained-alert, event-gap, overflow, concurrent-publication, and snapshot-paging paths passed the
 named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Add stable executable identity and signed manifests, followed by signed policy selection and
-   backend leases.
+1. Complete signed-manifest VM acceptance, then add signed policy selection and backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

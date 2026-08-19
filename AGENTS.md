@@ -22,8 +22,10 @@
   WP-01 through WP-08. The campaign covered service-crash and graceful-stop target-tree
   containment, session-loss reporting, retained-alert delivery, event-gap accounting, overflow
   behavior, paged kernel-module snapshots, and the independent health loop with bounded target
-  sampling. The service applies the fixed typed policy catalog to both evidence channels. Signed
-  manifests, externally signed policy, authenticated backend leases, and authenticated upload are
+  sampling. The service applies the fixed typed policy catalog to both evidence channels. WP-09
+  source adds a canonical signed game manifest, explicit signer pin, exact build authorization,
+  expiration, rollback protection, and driver-session digest binding; its disposable-VM acceptance
+  is pending. Externally signed policy, authenticated backend leases, and authenticated upload are
   not implemented.
 
 ## Repository map
@@ -38,6 +40,7 @@
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
+| `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |

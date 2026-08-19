@@ -1062,6 +1062,78 @@ exit `$code
     }
 }
 
+function Invoke-RejectedProductionLaunch(
+    [string]$Launcher,
+    [string]$Target,
+    [string]$Name,
+    [string]$ExpectedDetail
+) {
+    $workspace = New-InteractiveTaskWorkspace $Name
+    $scriptPath = Join-Path $workspace 'task.ps1'
+    $resultPath = Join-Path $workspace 'result.txt'
+    $outputPath = Join-Path $workspace 'stdout.txt'
+    $scriptText = @"
+`$output = & '$Launcher' --launch '$Target' 2>&1
+`$code = `$LASTEXITCODE
+`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+[IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
+exit `$code
+"@
+    Write-TaskScript $scriptPath $scriptText
+    $exitCode = [int64](Invoke-InteractiveTask $Name $workspace 'Limited')
+    $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
+    $escapedDetail = [regex]::Escape($ExpectedDetail)
+    $matches = [regex]::Matches(
+        $output,
+        "(?m)^OACService rejected the launch during manifest verification \($escapedDetail\): .+\r?$" )
+    if ($exitCode -ne 5 -or $matches.Count -ne 1 -or
+        $output -match '(?m)^OACService launched target;') {
+        throw "$Name did not return the exact manifest rejection."
+    }
+    return $exitCode
+}
+
+function Set-ProductionManifestFiles(
+    [string]$ManifestSource,
+    [string]$SignatureSource,
+    [string]$ManifestDestination,
+    [string]$SignatureDestination
+) {
+    $manifestItem = Get-Item -LiteralPath $ManifestSource -Force
+    $signatureItem = Get-Item -LiteralPath $SignatureSource -Force
+    if ($manifestItem.PSIsContainer -or $manifestItem.Length -ne 512 -or
+        $signatureItem.PSIsContainer -or $signatureItem.Length -le 0 -or
+        $signatureItem.Length -gt 65536 -or
+        ($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        ($signatureItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'A production manifest fixture is unsafe.'
+    }
+    foreach ($destination in @($ManifestDestination, $SignatureDestination)) {
+        $item = Get-Item -LiteralPath $destination -Force
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "An installed production manifest file is unsafe: $destination"
+        }
+        if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+            [IO.File]::SetAttributes(
+                $destination,
+                $item.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly))
+        }
+    }
+    [IO.File]::WriteAllBytes(
+        $ManifestDestination,
+        [IO.File]::ReadAllBytes($ManifestSource))
+    [IO.File]::WriteAllBytes(
+        $SignatureDestination,
+        [IO.File]::ReadAllBytes($SignatureSource))
+    if ((Get-FileHash -LiteralPath $ManifestDestination -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $ManifestSource -Algorithm SHA256).Hash -or
+        (Get-FileHash -LiteralPath $SignatureDestination -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $SignatureSource -Algorithm SHA256).Hash) {
+        throw 'The installed production manifest fixture changed while copying.'
+    }
+}
+
 function Wait-LivenessProcesses(
     [string]$ParentExecutablePath,
     [string]$ChildExecutablePath,
@@ -1221,10 +1293,20 @@ function Test-ProductionBoundary {
     $gracefulLaunchBindingConfirmed = $false
     $gracefulLaunchJobAssigned = $false
     $gracefulLaunchThreadResumed = $false
+    $modifiedManifestRejected = $false
+    $wrongBuildManifestRejected = $false
+    $expiredManifestRejected = $false
+    $rollbackManifestRejected = $false
     $testError = $null
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     $livenessSource = $launcher
     $livenessTarget = Join-Path $installDirectory 'OAC-Liveness-Target.exe'
+    $manifestDestination = "$livenessTarget.oac-manifest"
+    $signatureDestination = "$manifestDestination.p7s"
+    $validManifestSource =
+        Join-Path $root 'package\OAC-Liveness-Target.exe.oac-manifest'
+    $validSignatureSource = "$validManifestSource.p7s"
+    $modifiedManifestSource = Join-Path $root 'OAC-Game-Manifest-Modified.bin'
     $livenessChild = Join-Path $env:SystemRoot 'System32\PING.EXE'
     $livenessAliasCreated = $false
     try {
@@ -1316,6 +1398,43 @@ exit $code
                 ([ServiceProcess.ServiceControllerStatus]::Running)
         }
 
+        $modifiedBytes = [IO.File]::ReadAllBytes($validManifestSource)
+        if ($modifiedBytes.Length -ne 512 -or
+            (Test-Path -LiteralPath $modifiedManifestSource)) {
+            throw 'The modified-manifest fixture cannot be created safely.'
+        }
+        $modifiedBytes[24] = $modifiedBytes[24] -bxor 1
+        [IO.File]::WriteAllBytes($modifiedManifestSource, $modifiedBytes)
+        Set-ProductionManifestFiles `
+            $modifiedManifestSource $validSignatureSource `
+            $manifestDestination $signatureDestination
+        [void](Invoke-RejectedProductionLaunch `
+            $launcher $livenessTarget 'production-manifest-modified' `
+            'game manifest signature is invalid')
+        $modifiedManifestRejected = $true
+
+        $wrongBuildSource = Join-Path $root 'OAC-Game-Manifest-Wrong-Build.bin'
+        Set-ProductionManifestFiles `
+            $wrongBuildSource "$wrongBuildSource.p7s" `
+            $manifestDestination $signatureDestination
+        [void](Invoke-RejectedProductionLaunch `
+            $launcher $livenessTarget 'production-manifest-wrong-build' `
+            'executable identity does not match the game manifest')
+        $wrongBuildManifestRejected = $true
+
+        $expiredSource = Join-Path $root 'OAC-Game-Manifest-Expired.bin'
+        Set-ProductionManifestFiles `
+            $expiredSource "$expiredSource.p7s" `
+            $manifestDestination $signatureDestination
+        [void](Invoke-RejectedProductionLaunch `
+            $launcher $livenessTarget 'production-manifest-expired' `
+            'game manifest is outside its validity period')
+        $expiredManifestRejected = $true
+
+        Set-ProductionManifestFiles `
+            $validManifestSource $validSignatureSource `
+            $manifestDestination $signatureDestination
+
         $crashLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch'
         $launchExits.Add($crashLaunch.ExitCode)
@@ -1381,6 +1500,18 @@ exit $code
             throw 'The recovered service did not report exactly one prior session loss.'
         }
 
+        $rollbackSource = Join-Path $root 'OAC-Game-Manifest-Rollback.bin'
+        Set-ProductionManifestFiles `
+            $rollbackSource "$rollbackSource.p7s" `
+            $manifestDestination $signatureDestination
+        [void](Invoke-RejectedProductionLaunch `
+            $launcher $livenessTarget 'production-manifest-rollback' `
+            'game manifest was superseded or changed without a new sequence')
+        $rollbackManifestRejected = $true
+        Set-ProductionManifestFiles `
+            $validManifestSource $validSignatureSource `
+            $manifestDestination $signatureDestination
+
         $gracefulLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch-graceful'
         $launchExits.Add($gracefulLaunch.ExitCode)
@@ -1425,12 +1556,30 @@ exit $code
             @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -ne 0 -or
             -not $crashProcessesTerminated -or
             -not $gracefulProcessesTerminated -or
-            -not $serviceCrashRestarted) {
+            -not $serviceCrashRestarted -or
+            -not $modifiedManifestRejected -or
+            -not $wrongBuildManifestRejected -or
+            -not $expiredManifestRejected -or
+            -not $rollbackManifestRejected) {
             throw 'The production service, launch, and liveness boundary did not pass.'
         }
     } catch {
         $testError = $_.Exception.Message
     } finally {
+        try {
+            Set-ProductionManifestFiles `
+                $validManifestSource $validSignatureSource `
+                $manifestDestination $signatureDestination
+        } catch {
+            $cleanupErrors.Add("Restore production manifest: $($_.Exception.Message)")
+        }
+        try {
+            if (Test-Path -LiteralPath $modifiedManifestSource) {
+                Remove-RegularTestFile $modifiedManifestSource
+            }
+        } catch {
+            $cleanupErrors.Add("Remove modified manifest fixture: $($_.Exception.Message)")
+        }
         try {
             Stop-TestService 'production-service-stop' 'OACService'
         } catch {
@@ -1477,6 +1626,8 @@ exit $code
         $gracefulLaunchJobAssigned -and $gracefulLaunchThreadResumed -and
         $crashProcessesTerminated -and $gracefulProcessesTerminated -and
         $serviceCrashRestarted -and
+        $modifiedManifestRejected -and $wrongBuildManifestRejected -and
+        $expiredManifestRejected -and $rollbackManifestRejected -and
         $scanWorkerResponsive -and $scanThreadResumePass -and
         $lossSequences.Count -eq 3 -and $lossSequences[0] -eq 0 -and
         $lossSequences[1] -eq 1 -and $lossSequences[2] -eq 2 -and
@@ -1504,6 +1655,10 @@ exit $code
         crash_processes_terminated = $crashProcessesTerminated
         graceful_processes_terminated = $gracefulProcessesTerminated
         service_crash_restarted = $serviceCrashRestarted
+        modified_manifest_rejected = $modifiedManifestRejected
+        wrong_build_manifest_rejected = $wrongBuildManifestRejected
+        expired_manifest_rejected = $expiredManifestRejected
+        rollback_manifest_rejected = $rollbackManifestRejected
         session_loss_sequences = @($lossSequences)
         session_loss_reasons = @($lossReasons)
         scan_state = if ($null -ne $scanStatus) { $scanStatus.ScanState } else { -1 }
@@ -1582,8 +1737,9 @@ function Test-RemovalBoundary {
         }
         if ((Get-Service -Name OACService -ErrorAction SilentlyContinue) -or
             (Get-Service -Name OAC -ErrorAction SilentlyContinue) -or
-            (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'OAC-Test'))) {
-            throw 'OAC services or installed application files remained after removal.'
+            (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'OAC-Test')) -or
+            (Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC')) {
+            throw 'OAC services, application files, or manifest state remained after removal.'
         }
         foreach ($storeName in @('Root', 'TrustedPublisher')) {
             if (@(Get-ChildItem -LiteralPath "Cert:\LocalMachine\$storeName" |
@@ -1603,7 +1759,8 @@ function Test-RemovalBoundary {
         }
         if ((Get-Service -Name OACService -ErrorAction SilentlyContinue) -or
             (Get-Service -Name OAC -ErrorAction SilentlyContinue) -or
-            (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'OAC-Test'))) {
+            (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'OAC-Test')) -or
+            (Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC')) {
             throw 'The refused removal recreated or changed the absent OAC stack.'
         }
         if (-not (Test-Path -LiteralPath $sentinel -PathType Leaf) -or
@@ -2310,6 +2467,10 @@ function Collect-FinalResults {
 
     $specialResults = @(
         'baseline-remove-repeat-expected-refusal',
+        'production-manifest-modified',
+        'production-manifest-wrong-build',
+        'production-manifest-expired',
+        'production-manifest-rollback',
         'baseline-driver-gate-create',
         'baseline-driver-gate-trigger',
         'baseline-driver-gate-detection',
@@ -2359,6 +2520,10 @@ function Collect-FinalResults {
         }
     }
     $specialExpectedValues = [ordered]@{
+        'production-manifest-modified' = @(5)
+        'production-manifest-wrong-build' = @(5)
+        'production-manifest-expired' = @(5)
+        'production-manifest-rollback' = @(5)
         'baseline-driver-gate-create' = @(0)
         'baseline-driver-gate-trigger' = @(0)
         'baseline-driver-gate-detection' = @(1)

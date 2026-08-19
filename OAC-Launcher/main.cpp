@@ -255,6 +255,8 @@ const wchar_t* LaunchStageText(uint32_t stage) noexcept
         return L"target job assignment";
     case OAC_IPC_LAUNCH_STAGE_RESUME_THREAD:
         return L"target resume";
+    case OAC_IPC_LAUNCH_STAGE_VERIFY_MANIFEST:
+        return L"manifest verification";
     default:
         return L"unknown launch stage";
     }
@@ -290,6 +292,18 @@ const wchar_t* LaunchDetailText(uint32_t detail) noexcept
         return L"driver stopped";
     case OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION:
         return L"driver session revoked";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_MISSING:
+        return L"game manifest is missing";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_INVALID:
+        return L"game manifest is malformed";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_SIGNATURE:
+        return L"game manifest signature is invalid";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_BUILD:
+        return L"executable identity does not match the game manifest";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_EXPIRED:
+        return L"game manifest is outside its validity period";
+    case OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK:
+        return L"game manifest was superseded or changed without a new sequence";
     default:
         return L"";
     }

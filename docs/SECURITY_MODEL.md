@@ -1,7 +1,8 @@
 # OAC security model
 
 **Status:** WP-01 through WP-08 controls accepted at commit
-`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign
+`5c476c246462c968d98185c6db159fdaf6a0238d` on the named Windows 11 build 26100 campaign; WP-09
+signed-manifest controls are implemented in source and await runtime acceptance
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -36,7 +37,8 @@ trust boundaries, adversaries, and failure behavior.
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Local policy | The service applies a fixed typed rule catalog in Enforce mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests passed; the policy-enabled service path completed the named VM/Verifier campaign |
-| Manifest, signed policy, backend | No production trust boundary exists | Planned |
+| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | Source and 518 driver-free tests are present; modified/wrong-build/expired/rollback VM acceptance is pending |
+| Signed policy and backend | No production trust boundary exists | Planned |
 
 ## Production authority
 
@@ -111,6 +113,11 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - The service authenticates the pipe client, opens and resolves the executable under impersonation,
   duplicates the same identity to a primary token, and keeps the selected file locked against writes
   and deletion through process creation.
+- Before arming the driver, the service validates an exact 512-byte canonical manifest and detached
+  SHA-256/RSA CMS signature, the locked executable's Windows trust and strong-RSA Authenticode
+  signer, the protected deployment signer pin, component compatibility, expiry, and exact leaf
+  name/size/SHA-256. It rejects rollback and same-sequence equivocation using protected per-game
+  high-water state, then carries the verified manifest digest in correlated driver status.
 - The production controller may create exactly one child process per session; additional children
   from that service process are denied after target binding.
 - The service owns one unnamed job with exactly `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, verifies target
@@ -129,8 +136,9 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   policy action and policy confidence are separate typed results. Display text is not an input.
 - The compiled Enforce mode can retain warnings and review requests or stop the service runtime so
   ordinary cleanup revokes the driver session and closes the target job. The service also supports
-  a deny-launch action, but no current fixed-catalog rule selects it; manifest and signed-policy
-  inputs belong to WP-09/WP-10. Observe and Strict modes share the same deterministic catalog but
+  a deny-launch action, but no current fixed-catalog rule selects it; signed-policy inputs belong to
+  WP-10. Manifest rejection is an independent pre-arm authorization decision. Observe and Strict
+  modes share the same deterministic catalog but
   are not runtime-selectable until authenticated policy work is implemented.
 - The health loop never performs target memory or thread inspection. One cancellation-aware worker
   keeps continuation state and enforces per-slice time, byte, region, and thread limits. It opens
@@ -146,8 +154,8 @@ effective-right, compatibility, or production-deployment matrix.
 
 ## Planned controls
 
-- Signed-manifest and stable executable-identity verification before a launch ticket is armed.
-- Signed game manifests, signed remote policy selection, and authenticated backend lease/upload.
+- Manifest signer rotation and revocation metadata, approved module/middleware/child-process scope,
+  signed remote policy selection, and authenticated backend lease/upload.
 
 ## Evidence and enforcement
 
@@ -159,15 +167,16 @@ text has no policy meaning in the production schema.
 
 The current catalog is compiled into the service; it is not remotely mutable. Its signer model
 records signature source, chain, revocation, timestamp, approval flags, and an exact certificate
-thumbprint as typed fields. The active service passes an explicit unavailable classification until
-WP-09/WP-10 provide authenticated executable and policy inputs, so it never infers signer trust
-from an image name or display string. Lower-priority overwrite gaps remain visible transport facts;
+thumbprint as typed fields. The fixed policy evaluator still receives an explicit unavailable
+classification until WP-10 supplies authenticated policy inputs; game-manifest authorization is a
+separate exact pre-launch check and does not infer trust from an image name or display string.
+Lower-priority overwrite gaps remain visible transport facts;
 only records actually delivered to the service can receive a local policy decision.
 
 Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
 path can fail its gate after detecting the latch; the production launch transaction closes the
 creation-time target-binding gap but does not replace Windows Code Integrity or the later signed
-manifest, policy, and authenticated backend controls.
+policy and authenticated backend controls.
 
 ## Unsupported guarantees
 

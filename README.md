@@ -9,15 +9,15 @@ control service, and reproducible disposable-VM validation.**
 
 OAC explores how to build a small, explicit trust boundary between a standard-user launcher, a
 privileged Windows service, and a kernel driver. The current production-control MVP can authenticate
-a local launcher request, create one executable under the caller's token, bind that process during
-creation, confirm the exact process handle, assign its process tree to a service-owned job, and only
-then resume its first thread.
+a local launcher request, authorize an exact signed game build, create it under the caller's token,
+bind that process during creation, confirm the exact process handle, assign its process tree to a
+service-owned job, and only then resume its first thread.
 
 > [!IMPORTANT]
 > OAC is an engineering reference, not a production-ready anti-cheat release. It does not yet include
-> authenticated backend evidence delivery, signed game manifests or policy, backend leases, a
-> supported compatibility matrix, or production driver signing. Never install the
-> disposable test package on a workstation or production system.
+> externally signed runtime policy, authenticated backend evidence delivery, backend leases,
+> manifest-key rotation, a supported compatibility matrix, or production driver signing. Never
+> install the disposable test package on a workstation or production system.
 
 ## Why this project exists
 
@@ -42,6 +42,7 @@ OAC focuses on security properties that are easy to lose in a Windows anti-cheat
 flowchart LR
     User["Standard-user application"] --> Launcher["OAC Launcher"]
     Launcher -->|"authenticated local IPC"| Service["Restricted OAC service"]
+    Manifest["Signed game manifest"] -->|"build authorization"| Service
     Service -->|"production session + launch ticket"| Driver["Demand-start OAC driver"]
     Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
     Job --> Target["Protected target tree"]
@@ -51,9 +52,10 @@ flowchart LR
 ```
 
 The launcher exposes status and one serialized executable-launch request. The service authenticates
-the local client, resolves and keeps the executable open under that identity, arms the driver,
-creates the process suspended with the caller's primary token, confirms the exact process, assigns
-it to a kill-on-close job, and resumes it. The driver enforces the session and target identity,
+the local client, resolves and keeps the executable open under that identity, verifies its adjacent
+signed manifest and persistent rollback state, then arms the driver. It creates the process
+suspended with the caller's primary token, confirms the exact process, assigns it to a kill-on-close
+job, and resumes it. The driver enforces the session and target identity,
 filters selected dangerous user-mode process and thread handles, and reports prior session loss to
 the next restricted service instance. The service applies one typed rule catalog to both evidence
 channels; the driver does not assign policy outcomes. A separate service worker incrementally
@@ -72,6 +74,8 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
   random session identifier, and monotonic generation.
 - Standard-user status and one-executable launch through identity-checked local IPC.
 - Suspended caller-token process creation with canonical-path matching and one-use ticket expiry.
+- Canonical signed game manifests with exact executable hash, Authenticode signer, component
+  compatibility, expiration, protected signer pinning, and per-game rollback prevention.
 - Creation-time kernel binding, exact-handle confirmation, job assignment, and first-thread resume.
 - Service-owned target-tree lifetime with kill-on-close containment on graceful stop or service
   failure, plus explicit idempotent driver-session revocation.
@@ -100,7 +104,8 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Stable executable identity plus signed manifests and externally signed policy selection.
+- Externally signed runtime policy selection and manifest-key rotation/revocation metadata.
+- Approved module, middleware, overlay, child-process, and runtime-class rules for real games.
 - Authenticated backend sessions, leases, and evidence acknowledgement.
 - Production signing, operational controls, privacy review, and supported-platform certification.
 
@@ -115,7 +120,7 @@ claim that a feature already exists.
 | [`OAC-Service/`](OAC-Service/) | Restricted controller, target-launch owner, and bounded scan scheduler |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated lab scanner and diagnostic reporting |
-| [`shared/`](shared/) | Production, diagnostic, launcher IPC, and typed policy contracts |
+| [`shared/`](shared/) | Production, diagnostic, launcher IPC, manifest, and typed policy contracts |
 | [`tests/unit/`](tests/unit/) | Driver-free protocol, policy, layout, validation, and transition tests |
 | [`tools/`](tools/) | Protocol integration, packaging, policy, and repository tooling |
 | [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance harness |
@@ -159,9 +164,14 @@ OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
 ```
 
 This interface demonstrates the current MVP boundary. It is not a general-purpose launcher and
-does not yet provide signed executable authorization or backend admission.
+requires an adjacent authorized game manifest and detached signature. It does not provide backend
+admission.
 
 ## Validation status
+
+The current signed-manifest source passes clean local Debug/Release builds, `518/518` driver-free
+tests in both configurations, repository validation, and driver PREfast. Its exact-commit
+disposable-VM and Driver Verifier campaign is still pending.
 
 Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed:
 

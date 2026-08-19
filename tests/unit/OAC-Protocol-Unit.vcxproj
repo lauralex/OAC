@@ -66,11 +66,13 @@
   <ItemGroup>
     <ClCompile Include="OAC-Protocol-Unit-C.c" />
     <ClCompile Include="OAC-Protocol-Unit.cpp" />
+    <ClCompile Include="..\..\shared\oac_manifest.c" />
     <ClCompile Include="..\..\shared\oac_policy.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\oac_protocol.h" />
     <ClInclude Include="..\..\shared\oac_thread_suspension.hpp" />
+    <ClInclude Include="..\..\shared\oac_manifest.h" />
     <ClInclude Include="..\..\shared\oac_policy.h" />
     <ClInclude Include="..\..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\..\shared\protocol\oac_validate.h" />

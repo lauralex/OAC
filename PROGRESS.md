@@ -7,7 +7,8 @@
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
 WP-01 through WP-08 form the accepted production-control, target-lifetime, local-evidence,
-bounded-scheduling, and local-policy MVP. Acceptance commit
+bounded-scheduling, and local-policy MVP. WP-09 signed game-manifest authorization is implemented
+in the current source and awaits its commit-bound VM/Verifier acceptance run. Acceptance commit
 `5c476c246462c968d98185c6db159fdaf6a0238d`
 passed the commit-bound disposable-VM and standard Driver Verifier campaign described below. Status
 still distinguishes source, evidence, and the remaining production-hardening work packages.
@@ -23,7 +24,7 @@ still distinguishes source, evidence, and the remaining production-hardening wor
 | WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
 | WP-07 Bounded service scheduler | Working MVP; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
 | WP-08 Rule catalog and policy engine | Working MVP; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
-| WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
+| WP-09 Signed game manifest | Source complete; runtime acceptance pending | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases are present |
 | WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
 | WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
 | WP-12 Scanner modularization | Planned | Refactor behind tests; preserve lab behavior |
@@ -84,18 +85,25 @@ The current source is organized around these implementation areas:
 - `shared/oac_policy.h` and `shared/oac_policy.c`: C-compatible stable catalog, Observe/Enforce/Strict
   decisions, five-level policy confidence, signer classification, strict typed-record matching, and
   display-text-independent evaluation.
+- `shared/oac_manifest.h` and `shared/oac_manifest.c`: fixed canonical manifest and rollback-state
+  records, hostile-input validation, exact file/signer identity, and deterministic high-water
+  decisions.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
   service-owned target job, bounded two-channel evidence polling, central policy enforcement, and a
-  backend-independent lease-state seam. The service keeps target inspection off the health loop,
+  backend-independent lease-state seam. Before arming a launch, the service validates a detached
+  signed manifest against the locked executable, an explicitly provisioned signer pin, bounded
+  compatibility and expiry, and protected per-game rollback state. It binds the verified manifest
+  digest into driver session status. The service keeps target inspection off the health loop,
   queues incremental memory/thread slices through one coalescing worker slot, and reports strict
   coverage and latency metrics to the launcher.
 - Package/install and VM harness support for the service boundary, production session lifecycle and
   race tests, and Driver Verifier acceptance.
 
 The current driver advertises production session control, launch tickets, session liveness, typed
-evidence, and paged snapshots. Production configuration/scan, signed-manifest, signed-policy, and
-backend capabilities remain unavailable.
+evidence, and paged snapshots. Production configuration/scan, signed-policy, and backend
+capabilities remain unavailable. Manifest verification remains a service responsibility; the
+driver carries the verified digest as correlated session identity rather than parsing signatures.
 
 ## Current local validation
 
@@ -103,7 +111,7 @@ backend capabilities remain unavailable.
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `477/477` in each configuration, including scheduler and typed-policy regression coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `518/518` in each configuration, including manifest schema, identity, compatibility, expiry, and rollback coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |
@@ -152,8 +160,9 @@ remains.
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-09 signed game-manifest authorization is the next implementation milestone.
+- WP-09 requires one exact-source disposable-VM/Verifier campaign covering accepted launch plus
+  modified, wrong-build, expired, and rollback rejection before it is marked accepted.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
-No milestone is described as production-ready. The control plane still lacks signed manifests,
-signed runtime policy, and authenticated backend delivery listed above.
+No milestone is described as production-ready. The control plane still lacks signed runtime
+policy, manifest-key rotation/revocation metadata, and authenticated backend delivery listed above.

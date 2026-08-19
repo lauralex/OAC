@@ -1,4 +1,5 @@
 #include "service.hpp"
+#include "manifest.hpp"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -835,6 +836,7 @@ DWORD ArmLaunch(
     const std::array<WCHAR, OAC_LAUNCH_MAX_CANONICAL_NT_PATH_CHARS>&
         dosDevicePath,
     ULONG dosDevicePathLength,
+    const std::array<unsigned char, OAC_MANIFEST_HASH_SIZE>& manifestDigest,
     OAC_ARM_LAUNCH_RESPONSE& response)
 {
     OAC_ARM_LAUNCH_REQUEST request{};
@@ -850,6 +852,10 @@ DWORD ArmLaunch(
     request.TimeToLiveMilliseconds = kLaunchTimeToLiveMs;
     request.CanonicalNtPathLength = ntPathLength;
     request.CanonicalDosDevicePathLength = dosDevicePathLength;
+    CopyMemory(
+        request.ManifestSha256,
+        manifestDigest.data(),
+        manifestDigest.size());
     CopyMemory(
         request.CanonicalNtPath,
         ntPath.data(),
@@ -1112,6 +1118,27 @@ uint32_t LaunchFailureDetailFromStatus(
     }
 }
 
+uint32_t ManifestFailureDetail(oac::ManifestFailure failure) noexcept
+{
+    switch (failure)
+    {
+    case oac::ManifestFailure::Missing:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_MISSING;
+    case oac::ManifestFailure::Invalid:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_INVALID;
+    case oac::ManifestFailure::Signature:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_SIGNATURE;
+    case oac::ManifestFailure::Build:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_BUILD;
+    case oac::ManifestFailure::Expired:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_EXPIRED;
+    case oac::ManifestFailure::Rollback:
+        return OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK;
+    default:
+        return OAC_IPC_LAUNCH_DETAIL_NONE;
+    }
+}
+
 void CaptureLaunchFailureDetail(
     HANDLE driver,
     const OAC_V5_SESSION_ID& sessionId,
@@ -1281,6 +1308,20 @@ DWORD LaunchTarget(
         client.revertFailed);
     if (error != ERROR_SUCCESS) return error;
 
+    failureStage = OAC_IPC_LAUNCH_STAGE_VERIFY_MANIFEST;
+    oac::VerifiedGameManifest verifiedManifest;
+    oac::ManifestFailure manifestFailure = oac::ManifestFailure::Invalid;
+    error = oac::AuthorizeGameManifest(
+        executable.get(),
+        finalDosPath,
+        verifiedManifest,
+        manifestFailure);
+    if (error != ERROR_SUCCESS)
+    {
+        failureDetail = ManifestFailureDetail(manifestFailure);
+        return error;
+    }
+
     failureStage = OAC_IPC_LAUNCH_STAGE_CREATE_ENVIRONMENT;
     EnvironmentBlock environment;
     if (!CreateEnvironmentBlock(environment.put(), client.primaryToken.get(), FALSE))
@@ -1296,6 +1337,7 @@ DWORD LaunchTarget(
         finalNtPathLength,
         canonicalDosDevicePath,
         canonicalDosDevicePathLength,
+        verifiedManifest.Digest,
         armed);
     if (error != ERROR_SUCCESS) return error;
     driverSessionChanged = true;
@@ -1372,7 +1414,11 @@ DWORD LaunchTarget(
     if (error != ERROR_SUCCESS ||
         status.State != OAC_V5_SESSION_MONITORING ||
         status.TargetProcessId != confirmed.TargetProcessId ||
-        status.TargetProcessId != processInformation.dwProcessId)
+        status.TargetProcessId != processInformation.dwProcessId ||
+        std::memcmp(
+            status.ManifestSha256,
+            verifiedManifest.Digest.data(),
+            verifiedManifest.Digest.size()) != 0)
     {
         CaptureLaunchFailureDetail(
             driver,
