@@ -6,8 +6,9 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-07 form the accepted production-control, target-lifetime, local-evidence, and
-bounded-scheduling MVP. Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391`
+WP-01 through WP-08 form the accepted production-control, target-lifetime, local-evidence,
+bounded-scheduling, and local-policy MVP. Acceptance commit
+`5c476c246462c968d98185c6db159fdaf6a0238d`
 passed the commit-bound disposable-VM and standard Driver Verifier campaign described below. Status
 still distinguishes source, evidence, and the remaining production-hardening work packages.
 
@@ -21,7 +22,7 @@ still distinguishes source, evidence, and the remaining production-hardening wor
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
 | WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
 | WP-07 Bounded service scheduler | Working MVP; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
-| WP-08 Rule catalog and policy engine | Working MVP; local validation | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, and display-text independence are implemented; complete VM acceptance is pending |
+| WP-08 Rule catalog and policy engine | Working MVP; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
 | WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
 | WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
@@ -118,7 +119,7 @@ static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed on Microsoft Windows
+Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
 and Secure Boot disabled. The host accepted 30 exact result records, including five protocol
 executions and thirteen client, launcher, and preflight executions. The campaign passed production
@@ -128,29 +129,31 @@ It also proved service-crash and graceful-stop termination of both target and ch
 idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to `1` to `2`
 with reasons `none`, `service exit`, and `requested shutdown`.
 
-The restricted service completed all 35 queued scan slices and seven full memory/thread sweeps with
-no coalesced, cancelled, or failed slice. It inspected 1,253 memory regions and 21 threads; the
-maximum measured health-loop delay was 297 ms, scan-slice duration 90.479 ms, and thread suspension
-33.059 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
+The restricted service completed all 26 queued scan slices and six full memory/thread sweeps with
+no coalesced, cancelled, or failed slice. It inspected 1,114 memory regions and 17 threads; the
+maximum measured health-loop delay was 297 ms, scan-slice duration 85.259 ms, and thread suspension
+8.699 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
 races, the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed.
 Final Verifier flags were clear, both OAC services were stopped, the VM was Off with zero adapters,
-and there were zero crash events and zero minidumps. The driver-free unit suite passed `428/428`;
+and there were zero crash events and zero minidumps. The driver-free unit suite passed `477/477`;
 each of four driver-backed protocol executions passed `129/129`. Driver Verifier recorded three OAC
 loads and three unloads. The validated result ZIP SHA-256 was
-`D87B84BB0B3CAF2664474CC15B1DD2889152D83C0D7999D72ADF05DB8C6CC4C7`.
+`64DB55D10284C8C07C599A821C86D866B558FDAF86E21C146EE9D91127BEADEA`.
 
-Compact evidence is retained at `C:\OAC-VM\evidence\20260819-18aac02`. The exact VM, checkpoint,
-VHD/AVHDX, package, seed, and campaign directory were deleted after validation. Under `C:\OAC-VM`,
-only the verified Windows installation ISO and two compact evidence bundles remain.
+The exact status, host-manifest, and host-log SHA-256 values are
+`CB277327E5DC8BAD1EE6BC175DFE5FF7741F0B160C21B7B106EA987B5C8EB466`,
+`8509BBA22C035B2C3D9D587D6E00B8624B7DC2D786A215910F5683D13ACECF12`, and
+`029896B7C34845C6BA27FAA730BD0FEDFAD7850D6FCD3E5579AEF8953BA478B8`.
+After recording these values, the exact VM, checkpoint, VHD/AVHDX, package, seed, evidence, and
+campaign directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO
+remains.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-08 still requires the complete disposable-VM and Driver Verifier acceptance campaign before
-  the hardened-foundation definition is met.
+- WP-09 signed game-manifest authorization is the next implementation milestone.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
-No milestone is described as production-ready or as a complete hardened foundation. The control
-plane still lacks signed manifests, signed runtime policy, and authenticated backend delivery
-listed above; the new local policy implementation is not accepted until its VM campaign passes.
+No milestone is described as production-ready. The control plane still lacks signed manifests,
+signed runtime policy, and authenticated backend delivery listed above.

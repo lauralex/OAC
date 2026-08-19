@@ -150,7 +150,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-013: Evaluate policy in the service from typed observations
 
-- **Status:** Accepted in source; complete VM acceptance pending
+- **Status:** Accepted; source implemented and VM tested
 - **Date:** 2026-08-19
 - **Decision:** Kernel producers publish typed observations with unevaluated policy state. A shared
   C-compatible catalog binds each stable rule to its event type, category, observation range, and
@@ -166,4 +166,6 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   implements the deny-launch action needed by later manifest and signed-policy work, although no
   current fixed-catalog rule selects it. Lower-priority records can still be overwritten with
   explicit gap accounting, and externally signed policy selection, durable upload, and server
-  review remain separate work packages.
+  review remain separate work packages. Commit
+  `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete Windows 11 build 26100
+  disposable-VM and standard Driver Verifier campaign with the policy-enabled service path.

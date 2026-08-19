@@ -17,12 +17,13 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed the complete
+  Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-07. The campaign covered service-crash and graceful-stop target-tree
+  WP-01 through WP-08. The campaign covered service-crash and graceful-stop target-tree
   containment, session-loss reporting, retained-alert delivery, event-gap accounting, overflow
   behavior, paged kernel-module snapshots, and the independent health loop with bounded target
-  sampling. Signed manifests or policy, authenticated backend leases, and authenticated upload are
+  sampling. The service applies the fixed typed policy catalog to both evidence channels. Signed
+  manifests, externally signed policy, authenticated backend leases, and authenticated upload are
   not implemented.
 
 ## Repository map
