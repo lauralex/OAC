@@ -112,8 +112,8 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   children inherit the same containment boundary, and a replacement service can observe prior
   session loss. The crash and graceful-stop paths passed at implementation commit
   `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Bounded scheduling,
-  centralized policy, and authenticated backend leases remain separate work packages; the local
-  lease-state helper is a policy seam, not a simulated backend.
+  signed runtime policy, and authenticated backend leases remain separate work packages; the local
+  lease-state helper is a backend seam, not a simulated backend.
 
 ## ADR-011: Separate alerts, events, and snapshots by delivery semantics
 
@@ -127,8 +127,8 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   transport milestone.
 - **Consequence:** Inventory pressure cannot silently destroy queued alerts, readers can reconcile
   exact loss, and expensive snapshot capture remains outside callbacks. The service uses one small
-  bounded alert poll/handoff path and fails closed on loss instead of introducing the later worker
-  scheduler or pretending that in-memory delivery is backend evidence. The complete local and
+  bounded evidence poll/handoff path and fails closed on retained-alert loss instead of pretending
+  that in-memory delivery is backend evidence. The complete local and
   disposable-VM/Driver Verifier acceptance passed at commit
   `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 build 26100.
 
@@ -147,3 +147,25 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   `18aac02d291d9acfcb077fda67c17799a0382391` passed the complete restricted-service and Driver
   Verifier campaign on Windows 11 build 26100: 35 slices and seven sweeps completed without failure
   or cancellation while maximum health-loop delay remained 297 ms.
+
+## ADR-013: Evaluate policy in the service from typed observations
+
+- **Status:** Accepted; source implemented and VM tested
+- **Date:** 2026-08-19
+- **Decision:** Kernel producers publish typed observations with unevaluated policy state. A shared
+  C-compatible catalog binds each stable rule to its event type, category, observation range, and
+  required provenance, then maps it through Observe, Enforce, or Strict mode to a separate action
+  and five-level policy confidence. The restricted service polls both evidence channels and applies
+  the fixed Enforce table. Display payload text and signer subject strings are not policy inputs.
+  Signer decisions use explicit source, chain, revocation, timestamp, approval, and thumbprint
+  fields; the active service uses `unavailable` until authenticated manifest/policy work supplies
+  them.
+- **Consequence:** Collection no longer assigns policy violations. Source confidence and provenance
+  survive evaluation, while actionable local copies retain their exact policy decision. The service
+  can terminate its runtime so ordinary cleanup revokes the driver session and target job. It also
+  implements the deny-launch action needed by later manifest and signed-policy work, although no
+  current fixed-catalog rule selects it. Lower-priority records can still be overwritten with
+  explicit gap accounting, and externally signed policy selection, durable upload, and server
+  review remain separate work packages. Commit
+  `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete Windows 11 build 26100
+  disposable-VM and standard Driver Verifier campaign with the policy-enabled service path.

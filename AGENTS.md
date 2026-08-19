@@ -17,12 +17,13 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed the complete
+  Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-07. The campaign covered service-crash and graceful-stop target-tree
+  WP-01 through WP-08. The campaign covered service-crash and graceful-stop target-tree
   containment, session-loss reporting, retained-alert delivery, event-gap accounting, overflow
   behavior, paged kernel-module snapshots, and the independent health loop with bounded target
-  sampling. Signed manifests or policy, authenticated backend leases, and authenticated upload are
+  sampling. The service applies the fixed typed policy catalog to both evidence channels. Signed
+  manifests, externally signed policy, authenticated backend leases, and authenticated upload are
   not implemented.
 
 ## Repository map
@@ -31,13 +32,14 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
+| `OAC-Service/` | Restricted production controller; owns the driver session, typed policy enforcement, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
+| `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
-| `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, and event-schema tests |
+| `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
 | `docs/` | Public technical references, current procedures, reviewed research, and separated maintainer records |

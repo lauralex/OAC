@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\oac_policy.h"
 #include "..\shared\protocol\oac_v5.h"
 #include "target_scanner.hpp"
 
@@ -23,11 +24,18 @@ public:
     DWORD Stop() noexcept;
 
 private:
-    static constexpr std::size_t kAlertCacheCapacity = 32;
+    struct EvaluatedEvidence
+    {
+        OAC_V5_EVENT_RECORD Record{};
+        OAC_POLICY_DECISION Decision{};
+    };
+
+    static constexpr std::size_t kPolicyRecordCapacity = 32;
 
     static DWORD WINAPI PipeThreadEntry(void* context) noexcept;
     DWORD PipeLoop() noexcept;
-    DWORD PollAlerts() noexcept;
+    DWORD PollEvidence() noexcept;
+    DWORD PollEvidenceChannel(ULONG channel) noexcept;
     void SetFatalError(DWORD error) noexcept;
 
     HANDLE stopEvent_ = nullptr;
@@ -43,15 +51,17 @@ private:
     volatile LONG stopped_ = FALSE;
     volatile LONG stopError_ = ERROR_SUCCESS;
     volatile LONG fatalError_ = ERROR_SUCCESS;
+    volatile LONG launchDenied_ = FALSE;
     ULONG driverVersion_ = 0;
     ULONGLONG driverCapabilities_ = 0;
     OAC_V5_SESSION_ID driverSessionId_{};
     ULONGLONG driverSessionGeneration_ = 0;
-    // Alerts remain in a bounded handoff until authenticated upload exists.
-    // Filling this cache is a fail-closed service error, never silent loss.
-    std::array<OAC_V5_EVENT_RECORD, kAlertCacheCapacity> alerts_{};
-    ULONG alertCount_ = 0;
+    // Actionable policy results remain in a bounded handoff until
+    // authenticated upload exists. Filling it is a fail-closed error.
+    std::array<EvaluatedEvidence, kPolicyRecordCapacity> policyRecords_{};
+    ULONG policyRecordCount_ = 0;
     ULONGLONG alertCursor_ = 0;
     ULONGLONG alertAcknowledgement_ = 0;
+    ULONGLONG eventCursor_ = 0;
     ULONGLONG serviceEvidenceSequence_ = 0;
 };

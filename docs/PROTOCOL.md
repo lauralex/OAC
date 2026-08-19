@@ -3,9 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed the Windows 11 build
+acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the Windows 11 build
 26100 disposable-VM and standard Driver Verifier campaign, including job/liveness, typed evidence,
-and bounded service scheduling.
+bounded service scheduling, and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -142,7 +142,8 @@ evidence flags. It preserves source provenance through session ID, generation, k
 timestamp, scan ID, occurrence count and range, process/thread IDs, address, and auxiliary data.
 Optional service provenance uses an ingestion timestamp and service sequence that must appear
 together, and ingestion cannot predate the source timestamp. Display text is optional payload and
-has no policy meaning.
+has no policy meaning. Driver producers always leave `PolicySeverity` unevaluated; policy labels are
+added only to the service's local copy after typed evaluation.
 
 High and critical records enter a 32-record retained alert queue. Reading does not remove them;
 the controller may acknowledge only a monotonically increasing sequence that the same session has
@@ -167,12 +168,23 @@ snapshot. Collection failure is returned as a validated `FAILED` snapshot state 
 status rather than an ambiguous transport failure. A revoked session may finish reading existing
 evidence but cannot start new snapshot work.
 
-The restricted service polls alerts every 250 ms while waiting for stop, failure, or target exit.
-It validates every response and correlation tuple, stamps each local copy with an ingestion time and
-monotonic service sequence, performs a final bounded drain on orderly stop or target transition, and
-acknowledges records on the following poll. Alert loss, a revoked response, or exhausted handoff
-capacity is a fail-closed service error. Authenticated upload and server acknowledgement remain
-WP-11 rather than being simulated locally.
+The restricted service polls the alert channel first and then the event channel every 250 ms while
+waiting for stop, failure, or target exit. It validates every response and correlation tuple,
+stamps each local copy with an ingestion time and monotonic service sequence, performs a final
+bounded drain on orderly stop or target transition, and acknowledges retained alerts on the
+following poll. Alert loss, a revoked response, or exhausted actionable-result capacity is a
+fail-closed service error. Lower-priority overwrite gaps remain explicit and do not consume alert
+capacity.
+
+`shared/oac_policy.*` binds every current rule to its exact event type, category, observation range,
+and required provenance. It maps the record through deterministic Observe, Enforce, or Strict
+tables and returns separate action, five-level policy confidence, and policy severity fields. The
+service currently selects Enforce at compile time. It preserves the observation's original
+confidence and source provenance, retains actionable results with their decision, and ends the
+service runtime for `RevokeSession`. The service implements the `DenyLaunch` action needed by later
+manifest and signed-policy inputs, but no current fixed-catalog rule selects it. Signed runtime
+policy, authenticated upload, and server acknowledgement remain WP-10/WP-11 rather than being
+simulated locally.
 
 ### Launcher/service IPC
 
@@ -219,16 +231,20 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-07 suite passed
-at acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` on Windows 11 Pro build
+sessions cannot invoke production launch operations. The complete WP-01 through WP-08 suite passed
+at acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` on Windows 11 Pro build
 26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
 cases, under the baseline and standard Driver Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
-response correlation, explicit revoke/liveness layouts, lease-state decisions, and IPC validation.
+response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
+the complete fixed policy catalog in every deployment mode. Policy tests cover typed drift,
+malformed signer states, incomplete provenance, deterministic results, and display-text
+independence.
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
 termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
-manifests, centralized policy, and authenticated backend sessions remain separate work packages.
+manifests, signed policy selection, and authenticated backend sessions remain separate work
+packages.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
 thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 297 ms maximum
 health-loop delay, and no failed or cancelled slice.

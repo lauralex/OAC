@@ -58,7 +58,7 @@ bool CurrentThreadCpuTime100ns(std::uint64_t& value) noexcept
 
 void AddSaturating(std::uint64_t& destination, std::uint64_t value) noexcept
 {
-    const std::uint64_t maximum =
+    constexpr std::uint64_t maximum =
         (std::numeric_limits<std::uint64_t>::max)();
     destination = value > maximum - destination
         ? maximum

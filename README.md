@@ -47,7 +47,7 @@ flowchart LR
     Job --> Target["Protected target tree"]
     Service -->|"bounded incremental sampling"| Target
     Driver -->|"creation-time bind"| Target
-    Driver -->|"status and typed alerts"| Service
+    Driver -->|"status and typed observations"| Service
 ```
 
 The launcher exposes status and one serialized executable-launch request. The service authenticates
@@ -55,8 +55,10 @@ the local client, resolves and keeps the executable open under that identity, ar
 creates the process suspended with the caller's primary token, confirms the exact process, assigns
 it to a kill-on-close job, and resumes it. The driver enforces the session and target identity,
 filters selected dangerous user-mode process and thread handles, and reports prior session loss to
-the next restricted service instance. A separate service worker incrementally samples target memory
-regions and threads while the health loop continues to acknowledge alerts and monitor liveness.
+the next restricted service instance. The service applies one typed rule catalog to both evidence
+channels; the driver does not assign policy outcomes. A separate service worker incrementally
+samples target memory regions and threads while the health loop continues to acknowledge alerts and
+monitor liveness.
 
 The separate `OAC-Client` scanner is a **lab-only diagnostic tool**. It is unavailable unless an
 explicit `LabMode=1` test configuration is present, and it cannot become the production controller.
@@ -77,8 +79,10 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
 - Separate bounded channels for retained high/critical alerts and lower-priority operational
   events, with explicit sequence, acknowledgement, and loss metadata.
 - Frozen, expiring kernel-module snapshots with stable identifiers and cursor-based paging.
-- A bounded service alert poll path that fails closed on alert loss, session revocation, or local
-  handoff exhaustion.
+- A centralized typed rule catalog with Observe, Enforce, and Strict modes, explicit confidence and
+  action results, signer-state classification, and display-text-independent decisions.
+- A bounded service evidence path that evaluates both channels, retains actionable policy results,
+  and fails closed on alert loss, session revocation, or local handoff exhaustion.
 - An independent service health loop and one-slot, cancellation-aware target worker with fixed
   time, region, byte, and thread budgets, continuation state, and measured suspension latency.
 - Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
@@ -96,8 +100,7 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Centralized typed policy and production decisions for collected observations.
-- Stable executable identity plus signed manifests and policy.
+- Stable executable identity plus signed manifests and externally signed policy selection.
 - Authenticated backend sessions, leases, and evidence acknowledgement.
 - Production signing, operational controls, privacy review, and supported-platform certification.
 
@@ -112,8 +115,8 @@ claim that a feature already exists.
 | [`OAC-Service/`](OAC-Service/) | Restricted controller, target-launch owner, and bounded scan scheduler |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated lab scanner and diagnostic reporting |
-| [`shared/`](shared/) | Production, diagnostic, and launcher IPC contracts |
-| [`tests/unit/`](tests/unit/) | Driver-free protocol, layout, validation, and transition tests |
+| [`shared/`](shared/) | Production, diagnostic, launcher IPC, and typed policy contracts |
+| [`tests/unit/`](tests/unit/) | Driver-free protocol, policy, layout, validation, and transition tests |
 | [`tools/`](tools/) | Protocol integration, packaging, policy, and repository tooling |
 | [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance harness |
 
@@ -160,16 +163,16 @@ does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 
-Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed:
+Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `428/428` driver-free protocol tests in both configurations;
+- `477/477` driver-free protocol and policy tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
 - a networkless Windows 11 build 26100 campaign with 30 exact results, standard Driver Verifier,
   verified job ownership, service-crash and graceful-stop process-tree containment, bounded typed
-  evidence transport and snapshots, independent health-loop and target-scan measurements, and zero
-  crashes or minidumps.
+  evidence transport and snapshots, integrated policy evaluation, independent health-loop and
+  target-scan measurements, and zero crashes or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

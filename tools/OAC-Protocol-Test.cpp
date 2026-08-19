@@ -2226,9 +2226,15 @@ ULONGLONG RunEvidenceTransportTests(
         bool foundClaim = false;
         for (ULONG index = 0; index < response->RecordCount; ++index)
         {
+            const auto& record = response->Records[index];
             foundClaim = foundClaim ||
-                response->Records[index].RuleId ==
-                    OAC_V5_RULE_SESSION_CLAIMED;
+                (record.RuleId == OAC_V5_RULE_SESSION_CLAIMED &&
+                 record.EventType == OAC_V5_EVENT_SESSION_STATE_CHANGED &&
+                 record.ObservationSeverity == OAC_V5_OBSERVATION_INFO &&
+                 record.PolicySeverity == OAC_V5_POLICY_NOT_EVALUATED &&
+                 record.Confidence == OAC_V5_CONFIDENCE_HIGH &&
+                 record.Category == OAC_V5_CATEGORY_SERVICE &&
+                 record.EvidenceFlags == OAC_V5_EVIDENCE_KERNEL_SOURCE);
         }
         if (foundClaim && response->LossLatched == 0)
             log.Pass(L"typed session event is available after claim");

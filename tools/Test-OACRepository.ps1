@@ -107,6 +107,14 @@ try {
         throw 'OAC.inf must install OAC as a device-less primitive service.'
     }
 
+    foreach ($producer in @('OAC\main.c', 'OAC\protection.c', 'OAC\session.c')) {
+        $producerText = Get-Content -LiteralPath (Join-Path $root $producer) -Raw
+        if ($producerText -match 'OAC_V5_EVENT_POLICY_VIOLATION' -or
+            $producerText -match 'OAC_V5_POLICY_(INFO|LOW|MEDIUM|HIGH|CRITICAL)') {
+            throw "$producer must emit typed observations without policy labels."
+        }
+    }
+
     $blocked = @($files | Where-Object {
             $_ -match '(?i)\.(pdb|exe|sys|cat|cer|pfx|p12|pem|key|id0|id1|id2|idb|i64|nam|til|iso|vhdx?|avhdx|dmp)$'
         })
