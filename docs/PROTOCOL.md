@@ -3,9 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including job/liveness, typed evidence,
-bounded service scheduling, and integrated policy evaluation.
+acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest authorization,
+job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -13,7 +13,7 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050004`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050005`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
@@ -29,9 +29,9 @@ read, and snapshot management are available:
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
 | `0x814` | `IOCTL_OAC_READ_EVIDENCE` | 80-byte evidence request | 136-byte prefix plus up to 16 fixed records | Reads the retained alert or overwrite-event channel; alert reads acknowledge only previously delivered records |
 | `0x815` | `IOCTL_OAC_MANAGE_SNAPSHOT` | 96-byte snapshot request | 152-byte prefix plus up to 16 fixed records | Opens, reads, or closes one frozen, expiring kernel-module snapshot |
-| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 136-byte status response | Returns correlated session state, identity, capability, counters, and the monotonic session-loss latch |
+| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 168-byte status response | Returns correlated session state, identity, capability, counters, manifest digest, and monotonic session-loss latch |
 | `0x817` | `IOCTL_OAC_V5_REVOKE_SESSION` | 56-byte revoke request | 80-byte revoke response | Idempotently revokes the caller's exact session and records requested-shutdown provenance |
-| `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2112-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket on the claimed production session |
+| `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2144-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket bound to a nonzero verified-manifest digest |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
 | `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
@@ -40,7 +40,8 @@ work. The separate diagnostic compatibility ABI retains its existing scan and CP
 
 ### Launch transaction
 
-One production session may arm one ticket with a 100 ms to 10 second lifetime and two exact Windows
+One production session may arm one ticket with a 100 ms to 10 second lifetime, one nonzero verified
+manifest SHA-256, and two exact Windows
 namespace spellings resolved from the same locked executable handle: the volume-device
 `\Device\...` path and its DOS-device `\??\C:\...` path. The driver generates a nonzero 128-bit
 launch ID and a boot-relative
@@ -63,18 +64,38 @@ remaining target lifetime; helpers must run in a separate service that holds no 
 
 Cancellation, expiry, a trusted-creator path mismatch, and failed process-handle confirmation are
 terminal revocations. Pending path data is cleared on consumption; the retained launch ID is cleared
-on confirmation; all launch data is cleared on cancellation, revocation, cleanup, service exit, and
-driver shutdown. A live session-owned target remains protected after controller cleanup until its
+on confirmation; path and launch-ID data is cleared on cancellation, revocation, cleanup, service
+exit, and driver shutdown. The manifest digest remains available in correlated status through the
+terminal session state. A live session-owned target remains protected after controller cleanup until its
 process-exit notification retires the tombstone.
 
 The service performs one serialized transaction: it authenticates the local launcher, resolves and
-keeps one executable open under that caller identity, arms the ticket, creates the process suspended
+keeps one executable open under that caller identity, verifies its signed game manifest and
+rollback state, arms the ticket with the verified manifest digest, creates the process suspended
 with the caller's primary token, confirms the exact process handle, validates the monitoring state,
 assigns the process to its kill-on-close job, and resumes the initial thread. Cancellation is issued
 only after a failed synchronous create or a pre-create stop decision; later failures terminate the
 suspended target and stop the service. The kernel callback deliberately performs no hashing,
-signature verification, filesystem I/O, or registry access. Signed-manifest identity remains a
-separate work package.
+signature verification, filesystem I/O, or registry access.
+
+### Signed game-build authorization
+
+`shared/oac_manifest.h` defines a packed 512-byte canonical record. It carries fixed identities,
+monotonic per-game sequence, bounded issuance and expiry, minimum driver/service/launcher protocol
+revisions, exact executable leaf name, size and SHA-256, and signer-certificate SHA-256. Unused bytes
+must be zero, and the detached CMS signature is not part of the canonical bytes.
+
+The service opens both sidecars without following reparse points and accepts exactly one SHA-256/RSA
+CMS signer with no countersignature or unsigned attributes. The signer certificate must be the exact
+strong-RSA Authenticode signer of the locked and Windows-trusted executable, and its DER SHA-256
+must match the signer explicitly provisioned under the protected OAC registry root. Only then does
+the service evaluate the canonical record, exact file identity, expiry and component compatibility,
+followed by the protected per-game high-water record. A lower sequence, or a different
+manifest/build at the current sequence, is denied. A new high-water record is flushed and read back
+before the driver ticket is armed.
+
+This milestone authorizes the main executable only. Approved modules, middleware, child processes,
+runtime classes, manifest-key rotation, signed policy, and backend admission remain separate work.
 
 ### Strict validation and correlation
 
@@ -188,7 +209,7 @@ simulated locally.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010004`. Hello and status retain fixed 32-byte
+The local launcher/service wire revision is `0x00010005`. Hello and status retain fixed 32-byte
 requests. Status responses are 256 bytes and include the session-loss sequence and cause plus a
 strict 184-byte scanner record. That record reports health-loop iterations and maximum delay,
 queued/completed/coalesced/cancelled/failed slices, completed sweeps, memory and thread coverage,
@@ -198,8 +219,9 @@ validated by both endpoints. A launch
 request is a fixed 1056-byte message containing one counted absolute drive path with no arguments;
 its 56-byte response correlates the request, service, client, session, target PID, confirmed binding,
 verified job assignment, and resumed-thread result. A rejection also carries an exact
-launch stage and a bounded driver-revocation detail so failures remain attributable without enabling
-filesystem logging in the restricted service. Both endpoints reject unknown
+launch stage and a bounded detail so failures remain attributable without enabling filesystem
+logging in the restricted service. Manifest verification has explicit missing, malformed,
+signature, build, expiry, and rollback details. Both endpoints reject unknown
 types or flags, wrong sizes or revisions, zero request IDs, nonzero reserved data, malformed UTF-16,
 unsafe path components, and dirty unused path units.
 
@@ -231,20 +253,23 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-08 suite passed
-at acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` on Windows 11 Pro build
-26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
+sessions cannot invoke production launch operations. The complete WP-01 through WP-09 suite passed
+at acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` on Windows 11 Pro build
+26100. Each of four driver-backed protocol executions passed `130/130`, including the transport
 cases, under the baseline and standard Driver Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
-the complete fixed policy catalog in every deployment mode. Policy tests cover typed drift,
+the complete fixed policy catalog in every deployment mode. They also cover the canonical manifest
+layout, malformed identities/names/reserved data, exact file matching, component compatibility,
+expiry, monotonic updates, rollback, same-sequence equivocation, and corrupt high-water state.
+Policy tests cover typed drift,
 malformed signer states, incomplete provenance, deterministic results, and display-text
 independence.
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
-termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
-manifests, signed policy selection, and authenticated backend sessions remain separate work
-packages.
+termination, recovery, monotonic session-loss reporting, two accepted signed launches, and
+modified, wrong-build, expired, and rollback manifest rejection in the same named campaign. Signed
+policy selection and authenticated backend sessions remain separate work packages.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 297 ms maximum
+thread-resume metrics. It accepted 27 completed slices, six completed sweeps, a 391 ms maximum
 health-loop delay, and no failed or cancelled slice.

@@ -466,6 +466,7 @@ NTSTATUS OacDeviceControl(
             status = OacSessionArmLaunch(
                 &lease,
                 request.TimeToLiveMilliseconds,
+                request.ManifestSha256,
                 request.CanonicalNtPath,
                 request.CanonicalNtPathLength,
                 request.CanonicalDosDevicePath,
@@ -865,6 +866,10 @@ NTSTATUS OacDeviceControl(
             response->SessionLossSequence = snapshot.SessionLossSequence;
             response->LastSessionLossReason =
                 snapshot.LastSessionLossReason;
+            RtlCopyMemory(
+                response->ManifestSha256,
+                snapshot.ManifestSha256,
+                sizeof(response->ManifestSha256));
             bytesWritten = sizeof(*response);
             status = STATUS_SUCCESS;
         }

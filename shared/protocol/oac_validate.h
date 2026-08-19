@@ -128,6 +128,21 @@ static __inline OAC_V5_VALIDATION OacV5ValidateReserved(
     return OAC_V5_VALID;
 }
 
+static __inline BOOLEAN OacV5BufferIsZero(
+    const VOID* Buffer,
+    ULONG Size)
+{
+    const UCHAR* bytes = (const UCHAR*)Buffer;
+    ULONG index;
+
+    if (bytes == NULL || Size == 0) return TRUE;
+    for (index = 0; index < Size; ++index)
+    {
+        if (bytes[index] != 0) return FALSE;
+    }
+    return TRUE;
+}
+
 static __inline OAC_V5_VALIDATION OacValidateCanonicalNtPath(
     const WCHAR* Path,
     ULONG PathLength)
@@ -1180,6 +1195,12 @@ static __inline OAC_V5_VALIDATION OacValidateArmLaunchRequest(
         return OAC_V5_INVALID_RANGE;
     }
     if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
+    if (OacV5BufferIsZero(
+            Request->ManifestSha256,
+            sizeof(Request->ManifestSha256)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
     result = OacValidateCanonicalNtPath(
         Request->CanonicalNtPath,
         Request->CanonicalNtPathLength);
@@ -1395,6 +1416,19 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
         ((Response->State == OAC_V5_SESSION_TARGET_BOUND ||
           Response->State == OAC_V5_SESSION_MONITORING) &&
          Response->TargetProcessId == 0))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    if ((Response->State == OAC_V5_SESSION_CLAIMED &&
+         !OacV5BufferIsZero(
+             Response->ManifestSha256,
+             sizeof(Response->ManifestSha256))) ||
+        ((Response->State == OAC_V5_SESSION_LAUNCH_PENDING ||
+          Response->State == OAC_V5_SESSION_TARGET_BOUND ||
+          Response->State == OAC_V5_SESSION_MONITORING) &&
+         OacV5BufferIsZero(
+             Response->ManifestSha256,
+             sizeof(Response->ManifestSha256))))
     {
         return OAC_V5_INVALID_VALUE;
     }

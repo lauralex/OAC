@@ -71,6 +71,10 @@ $verifierZeroTests = @(
     'verifier-client-2')
 $specialTests = [ordered]@{
     'baseline-remove-repeat-expected-refusal' = 'nonzero'
+    'production-manifest-modified' = @(5)
+    'production-manifest-wrong-build' = @(5)
+    'production-manifest-expired' = @(5)
+    'production-manifest-rollback' = @(5)
     'baseline-driver-gate-create' = @(0)
     'baseline-driver-gate-trigger' = @(0)
     'baseline-driver-gate-detection' = @(1)
@@ -690,6 +694,10 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
             'graceful_launch_binding_confirmed',
             'graceful_launch_job_assigned',
             'graceful_launch_thread_resumed',
+            'modified_manifest_rejected',
+            'wrong_build_manifest_rejected',
+            'expired_manifest_rejected',
+            'rollback_manifest_rejected',
             'crash_processes_terminated',
             'graceful_processes_terminated',
             'service_crash_restarted',

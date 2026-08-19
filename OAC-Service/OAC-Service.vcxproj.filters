@@ -14,10 +14,16 @@
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="manifest.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="service.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="target_scanner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\oac_manifest.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\oac_policy.c">
@@ -25,6 +31,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="manifest.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="service.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -32,6 +41,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_manifest.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_policy.h">

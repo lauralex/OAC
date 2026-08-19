@@ -77,8 +77,17 @@ function Invoke-SelfSignedVerification(
     [string]$FilePath,
     [string]$ExpectedThumbprint
 ) {
-    $verification = & $SignTool verify /v /pa $FilePath 2>&1
-    $verifyExit = $LASTEXITCODE
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+        # An untrusted root is expected until the package reaches the disposable
+        # VM. Windows PowerShell otherwise promotes SignTool's stderr to a
+        # terminating NativeCommandError before the result can be classified.
+        $ErrorActionPreference = 'Continue'
+        $verification = & $SignTool verify /v /pa $FilePath 2>&1
+        $verifyExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
     $verificationText = [string]::Join(
         [Environment]::NewLine,
         @($verification | ForEach-Object { $_.ToString() }))
@@ -127,6 +136,143 @@ function Remove-CurrentUserCertificate(
     }
     if (Test-Path -LiteralPath $path) {
         throw "The generated certificate remains in CurrentUser\$StoreName."
+    }
+}
+
+function Convert-HexToBytes([string]$Hex) {
+    if ($Hex -cnotmatch '^(?:[0-9A-F]{2})+$') {
+        throw 'A canonical uppercase hexadecimal byte string was required.'
+    }
+    $bytes = [byte[]]::new($Hex.Length / 2)
+    for ($index = 0; $index -lt $bytes.Length; $index++) {
+        $bytes[$index] = [Convert]::ToByte($Hex.Substring($index * 2, 2), 16)
+    }
+    return ,$bytes
+}
+
+function Get-Sha256Bytes([byte[]]$Bytes) {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ,$sha256.ComputeHash($Bytes)
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+function Import-PkcsAssembly {
+    if ($null -ne ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        return
+    }
+    try {
+        Add-Type -AssemblyName System.Security.Cryptography.Pkcs -ErrorAction Stop
+    } catch {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+    if ($null -eq ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        throw 'The platform PKCS/CMS implementation is unavailable.'
+    }
+}
+
+function New-GameManifestBytes(
+    [byte[]]$ManifestId,
+    [byte[]]$GameId,
+    [byte[]]$BuildId,
+    [uint64]$Sequence,
+    [uint64]$IssuedAtUnixSeconds,
+    [uint64]$ExpiresAtUnixSeconds,
+    [uint64]$ExecutableSize,
+    [byte[]]$ExecutableSha256,
+    [byte[]]$SigningKeyId,
+    [string]$ExecutableName
+) {
+    foreach ($identity in @($ManifestId, $GameId, $BuildId)) {
+        if ($identity.Length -ne 16) {
+            throw 'Game-manifest identities must contain exactly 16 bytes.'
+        }
+    }
+    if ($ExecutableSha256.Length -ne 32 -or $SigningKeyId.Length -ne 32) {
+        throw 'Game-manifest hashes must contain exactly 32 bytes.'
+    }
+    if ($ExecutableName.Length -lt 5 -or $ExecutableName.Length -ge 128 -or
+        [IO.Path]::GetFileName($ExecutableName) -cne $ExecutableName) {
+        throw 'The game-manifest executable name must be a bounded leaf name.'
+    }
+
+    $stream = [IO.MemoryStream]::new(512)
+    $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::Unicode, $true)
+    try {
+        $writer.Write([byte[]]@(
+            [byte][char]'O', [byte][char]'A', [byte][char]'C', [byte][char]'G',
+            [byte][char]'M', [byte][char]'A', [byte][char]'N', 0))
+        $writer.Write([uint32]1)
+        $writer.Write([uint32]512)
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]$ExecutableName.Length)
+        $writer.Write($ManifestId)
+        $writer.Write($GameId)
+        $writer.Write($BuildId)
+        $writer.Write($Sequence)
+        $writer.Write($IssuedAtUnixSeconds)
+        $writer.Write($ExpiresAtUnixSeconds)
+        $writer.Write($ExecutableSize)
+        $writer.Write([uint32]0x00050005)
+        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]0)
+        $writer.Write($ExecutableSha256)
+        $writer.Write($SigningKeyId)
+        foreach ($character in $ExecutableName.ToCharArray()) {
+            $writer.Write([uint16][char]$character)
+        }
+        for ($index = $ExecutableName.Length; $index -lt 128; $index++) {
+            $writer.Write([uint16]0)
+        }
+        $writer.Write([byte[]]::new(72))
+        $writer.Flush()
+        $bytes = $stream.ToArray()
+        if ($bytes.Length -ne 512) {
+            throw "The canonical game manifest has an unexpected size: $($bytes.Length)"
+        }
+        return ,$bytes
+    } finally {
+        $writer.Dispose()
+        $stream.Dispose()
+    }
+}
+
+function Write-SignedGameManifest(
+    [byte[]]$ManifestBytes,
+    [string]$ManifestPath,
+    [string]$SignaturePath,
+    [Security.Cryptography.X509Certificates.X509Certificate2]$SigningCertificate
+) {
+    Import-PkcsAssembly
+    $content = [Security.Cryptography.Pkcs.ContentInfo]::new($ManifestBytes)
+    $signed = [Security.Cryptography.Pkcs.SignedCms]::new($content, $true)
+    $signer = [Security.Cryptography.Pkcs.CmsSigner]::new(
+        [Security.Cryptography.Pkcs.SubjectIdentifierType]::IssuerAndSerialNumber,
+        $SigningCertificate)
+    $signer.DigestAlgorithm = [Security.Cryptography.Oid]::new(
+        '2.16.840.1.101.3.4.2.1')
+    $signer.IncludeOption =
+        [Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+    $signed.ComputeSignature($signer, $false)
+    $signature = $signed.Encode()
+    [IO.File]::WriteAllBytes($ManifestPath, $ManifestBytes)
+    [IO.File]::WriteAllBytes($SignaturePath, $signature)
+
+    $verified = [Security.Cryptography.Pkcs.SignedCms]::new(
+        [Security.Cryptography.Pkcs.ContentInfo]::new($ManifestBytes), $true)
+    $verified.Decode($signature)
+    $verified.CheckSignature($true)
+    if ($verified.SignerInfos.Count -ne 1 -or
+        $verified.SignerInfos[0].DigestAlgorithm.Value -ne
+            '2.16.840.1.101.3.4.2.1' -or
+        $verified.SignerInfos[0].CounterSignerInfos.Count -ne 0 -or
+        $verified.SignerInfos[0].UnsignedAttributes.Count -ne 0 -or
+        [Convert]::ToBase64String($verified.SignerInfos[0].Certificate.RawData) -cne
+            [Convert]::ToBase64String($SigningCertificate.RawData)) {
+        throw "Detached game-manifest signature verification failed: $ManifestPath"
     }
 }
 
@@ -302,6 +448,83 @@ try {
             $signTool $signedFile $certificateThumbprint
     }
 
+    $launcherOutput = Join-Path $package 'OAC-Launcher.exe'
+    $serviceOutput = Join-Path $package 'OAC-Service.exe'
+    $targetName = 'OAC-Liveness-Target.exe'
+    $targetManifest = Join-Path $package "$targetName.oac-manifest"
+    $targetSignature = "$targetManifest.p7s"
+    $gameId = [Guid]'9f2e4b47-b779-4a07-8149-4c647742a7de'
+    $buildId = (Get-Sha256Bytes `
+        ([Text.Encoding]::ASCII.GetBytes($sourceCommit)))[0..15]
+    $signingKeyId = Get-Sha256Bytes $certificate.RawData
+    $launcherHash = Convert-HexToBytes `
+        (Get-FileHash -LiteralPath $launcherOutput -Algorithm SHA256).Hash
+    $serviceHash = Convert-HexToBytes `
+        (Get-FileHash -LiteralPath $serviceOutput -Algorithm SHA256).Hash
+    $now = [uint64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $certificateExpiry = [uint64]([DateTimeOffset]::new(
+        $certificate.NotAfter.ToUniversalTime())).ToUnixTimeSeconds()
+    $validExpiry = [uint64][Math]::Min(
+        [double]($now + 7 * 24 * 60 * 60),
+        [double]($certificateExpiry - 3600))
+    $validManifest = New-GameManifestBytes `
+        ([Guid]::NewGuid().ToByteArray()) `
+        $gameId.ToByteArray() `
+        ([byte[]]$buildId) `
+        3 `
+        ($now - 60) `
+        $validExpiry `
+        (Get-Item -LiteralPath $launcherOutput).Length `
+        $launcherHash `
+        $signingKeyId `
+        $targetName
+    Write-SignedGameManifest `
+        $validManifest $targetManifest $targetSignature $certificate
+
+    $fixtureDefinitions = @(
+        [pscustomobject]@{
+            Name = 'Expired'
+            Sequence = [uint64]4
+            Issued = [uint64]($now - 2 * 24 * 60 * 60)
+            Expires = [uint64]($now - 24 * 60 * 60)
+            Hash = $launcherHash
+        },
+        [pscustomobject]@{
+            Name = 'Wrong-Build'
+            Sequence = [uint64]4
+            Issued = [uint64]($now - 60)
+            Expires = $validExpiry
+            Hash = $serviceHash
+        },
+        [pscustomobject]@{
+            Name = 'Rollback'
+            Sequence = [uint64]2
+            Issued = [uint64]($now - 60)
+            Expires = $validExpiry
+            Hash = $launcherHash
+        })
+    $manifestFixtures = [Collections.Generic.List[string]]::new()
+    foreach ($fixture in $fixtureDefinitions) {
+        $fixtureManifest = Join-Path $output `
+            "OAC-Game-Manifest-$($fixture.Name).bin"
+        $fixtureSignature = "$fixtureManifest.p7s"
+        $fixtureBytes = New-GameManifestBytes `
+            ([Guid]::NewGuid().ToByteArray()) `
+            $gameId.ToByteArray() `
+            ([byte[]]$buildId) `
+            $fixture.Sequence `
+            $fixture.Issued `
+            $fixture.Expires `
+            (Get-Item -LiteralPath $launcherOutput).Length `
+            $fixture.Hash `
+            $signingKeyId `
+            $targetName
+        Write-SignedGameManifest `
+            $fixtureBytes $fixtureManifest $fixtureSignature $certificate
+        $manifestFixtures.Add($fixtureManifest)
+        $manifestFixtures.Add($fixtureSignature)
+    }
+
     $finalSourceCommit = Get-CleanSourceCommit $repoRoot
     if ($finalSourceCommit -cne $sourceCommit) {
         throw 'The source commit changed while the package was being signed.'
@@ -314,7 +537,8 @@ try {
             sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
         }
     }
-    $testFiles = @($protocolTestOutput, $protocolUnitOutput) | ForEach-Object {
+    $testFiles = @($protocolTestOutput, $protocolUnitOutput) +
+        @($manifestFixtures) | ForEach-Object {
         $item = Get-Item -LiteralPath $_
         [ordered]@{
             name = $item.Name
@@ -328,7 +552,7 @@ try {
         created_utc = [DateTime]::UtcNow.ToString('o')
         source_commit = $sourceCommit
         configuration = $Configuration
-        protocol_version = '0x00050004'
+        protocol_version = '0x00050005'
         legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
         certificate_thumbprint = $certificateThumbprint

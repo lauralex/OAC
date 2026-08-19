@@ -25,6 +25,7 @@ typedef struct OAC_SESSION_SNAPSHOT_TAG
     ULONGLONG TargetProcessId;
     ULONGLONG SessionLossSequence;
     ULONG LastSessionLossReason;
+    UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
 } OAC_SESSION_SNAPSHOT, *POAC_SESSION_SNAPSHOT;
 
 typedef struct OAC_DEVICE_EXTENSION_TAG
@@ -114,6 +115,7 @@ NTSTATUS OacSessionBindTarget(
 NTSTATUS OacSessionArmLaunch(
     _In_ const OAC_SESSION_LEASE* Lease,
     _In_ ULONG TimeToLiveMilliseconds,
+    _In_reads_(OAC_V5_MANIFEST_DIGEST_SIZE) const UCHAR* ManifestSha256,
     _In_reads_(CanonicalNtPathLength) const WCHAR* CanonicalNtPath,
     _In_ ULONG CanonicalNtPathLength,
     _In_reads_(CanonicalDosDevicePathLength)

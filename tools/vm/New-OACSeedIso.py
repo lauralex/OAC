@@ -19,6 +19,12 @@ REQUIRED_FILES = {
     "Install-OACTestDriver.ps1",
     "OAC-Protocol-Test.exe",
     "OAC-Protocol-Unit.exe",
+    "OAC-Game-Manifest-Expired.bin",
+    "OAC-Game-Manifest-Expired.bin.p7s",
+    "OAC-Game-Manifest-Wrong-Build.bin",
+    "OAC-Game-Manifest-Wrong-Build.bin.p7s",
+    "OAC-Game-Manifest-Rollback.bin",
+    "OAC-Game-Manifest-Rollback.bin.p7s",
     "OAC-VM-SEED.TAG",
     "package-manifest.json",
     "package/OAC.sys",
@@ -27,6 +33,8 @@ REQUIRED_FILES = {
     "package/OAC-Client.exe",
     "package/OAC-Service.exe",
     "package/OAC-Launcher.exe",
+    "package/OAC-Liveness-Target.exe.oac-manifest",
+    "package/OAC-Liveness-Target.exe.oac-manifest.p7s",
     "certificate/OAC-Local-Test.cer",
 }
 SOURCE_COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -68,8 +76,19 @@ def validate_manifest(source: Path) -> None:
             "OAC-Client.exe",
             "OAC-Service.exe",
             "OAC-Launcher.exe",
+            "OAC-Liveness-Target.exe.oac-manifest",
+            "OAC-Liveness-Target.exe.oac-manifest.p7s",
         },
-        "": {"OAC-Protocol-Test.exe", "OAC-Protocol-Unit.exe"},
+        "": {
+            "OAC-Protocol-Test.exe",
+            "OAC-Protocol-Unit.exe",
+            "OAC-Game-Manifest-Expired.bin",
+            "OAC-Game-Manifest-Expired.bin.p7s",
+            "OAC-Game-Manifest-Wrong-Build.bin",
+            "OAC-Game-Manifest-Wrong-Build.bin.p7s",
+            "OAC-Game-Manifest-Rollback.bin",
+            "OAC-Game-Manifest-Rollback.bin.p7s",
+        },
     }
     groups = (("package", manifest.get("files")), ("", manifest.get("test_files")))
     for prefix, entries in groups:

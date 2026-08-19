@@ -526,6 +526,8 @@ OAC_ARM_LAUNCH_REQUEST ValidArmLaunch(
     request.Header.Generation = claim.Header.Generation;
     request.Header.MessageType = OAC_MESSAGE_ARM_LAUNCH;
     request.TimeToLiveMilliseconds = OAC_LAUNCH_MIN_TTL_MS;
+    for (std::size_t index = 0; index != sizeof(request.ManifestSha256); ++index)
+        request.ManifestSha256[index] = static_cast<UCHAR>(index + 1);
     request.CanonicalNtPathLength =
         static_cast<ULONG>(std::size(path) - 1);
     std::memcpy(
@@ -3211,6 +3213,22 @@ void RunV5Tests(TestLog& log)
         {ERROR_INVALID_PARAMETER});
 
     badArmLaunch = ValidArmLaunch(claimResponse);
+    std::memset(
+        badArmLaunch.ManifestSha256,
+        0,
+        sizeof(badArmLaunch.ManifestSha256));
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production launch rejects an empty manifest identity",
+        IOCTL_OAC_ARM_LAUNCH,
+        &badArmLaunch,
+        sizeof(badArmLaunch),
+        &armResponse,
+        sizeof(armResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    badArmLaunch = ValidArmLaunch(claimResponse);
     badArmLaunch.CanonicalNtPath[
         badArmLaunch.CanonicalNtPathLength + 1] = L'X';
     ExpectIoctlFailure(
@@ -3388,7 +3406,10 @@ void RunV5Tests(TestLog& log)
         statusResponse.Header.Reason == OAC_V5_REASON_NONE &&
         statusResponse.State == OAC_V5_SESSION_CLAIMED &&
         statusResponse.ServiceProcessId == GetCurrentProcessId() &&
-        statusResponse.TargetProcessId == 0)
+        statusResponse.TargetProcessId == 0 &&
+        OacV5BufferIsZero(
+            statusResponse.ManifestSha256,
+            sizeof(statusResponse.ManifestSha256)))
     {
         log.Pass(L"v5 exact status and correlation");
     }

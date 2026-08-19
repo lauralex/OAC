@@ -167,5 +167,27 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   current fixed-catalog rule selects it. Lower-priority records can still be overwritten with
   explicit gap accounting, and externally signed policy selection, durable upload, and server
   review remain separate work packages. Commit
-  `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete Windows 11 build 26100
+  `535730c6828f723c2e42a4721db885fab94505aa` passed the complete Windows 11 build 26100
   disposable-VM and standard Driver Verifier campaign with the policy-enabled service path.
+
+## ADR-014: Authorize one exact game build before launch
+
+- **Status:** Accepted and runtime tested
+- **Date:** 2026-08-19
+- **Decision:** Use one fixed 512-byte canonical binary manifest with a detached SHA-256/RSA CMS
+  signature. Require its signer to be both the exact strong-RSA Authenticode signer of the locked,
+  Windows-trusted executable and the certificate SHA-256 explicitly provisioned by protected
+  deployment state. Validate the exact executable leaf name, size, SHA-256, component compatibility,
+  and bounded validity period before arming the driver. Record a protected per-game sequence and
+  manifest/build high-water value; reject lower sequences and same-sequence equivocation. Carry the
+  verified manifest digest through driver session status. Keep all certificate, filesystem,
+  registry, and hashing work in the restricted service.
+- **Consequence:** A valid Windows signature alone cannot self-authorize a build, copied or modified
+  manifest bytes cannot authorize a launch, and service restart does not erase rollback state. The
+  current schema authorizes only the main executable. Manifest-key rotation/revocation, approved
+  modules and middleware, signed runtime policy, and backend admission remain later work. The
+  disposable-VM test package uses its ephemeral test signer only through the isolated installer's
+  exact protected pin; it is not a production signing design. Commit
+  `535730c6828f723c2e42a4721db885fab94505aa` passed accepted-launch and
+  modified/wrong-build/expired/rollback rejection cases in the complete Windows 11 build 26100
+  disposable-VM and standard Driver Verifier campaign.

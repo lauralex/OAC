@@ -24,8 +24,9 @@ campaign explicitly requires a recoverable key. The script:
 3. signs `OAC.sys`, every packaged user-mode executable, and the regenerated catalog, then verifies
    each file digest and signer while requiring the expected untrusted-root result for the newly
    self-signed certificate;
-4. packages `OAC-Client`, `OAC-Service`, `OAC-Launcher`, and both protocol tests and writes a
-   SHA-256 manifest that distinguishes protocol v5 from legacy v4; and
+4. packages `OAC-Client`, `OAC-Service`, `OAC-Launcher`, both protocol tests, the canonical signed
+   game manifest, and signed negative fixtures, then writes a SHA-256 package manifest that
+   distinguishes the production and diagnostic compatibility protocols; and
 5. leaves the host trust anchors unchanged, always removes the exact incidental CurrentUser `CA`
    cache entry, and by default deletes the exact CurrentUser `My` certificate and its private key.
    `-KeepCertificateInCurrentUserStore` retains only that `My` certificate and key when explicitly
@@ -80,6 +81,8 @@ The smoke client requires the explicit `-LegacyV4LabMode` switch. Without that s
 sets `LabMode=0`, installs the restricted, manual `OACService`, and leaves it stopped for the
 production-boundary test phase. The service object is assigned to SYSTEM and its exact DACL grants
 interactive users and administrators only query-status and start rights. The installer reads
+and protects the exact manifest-signer SHA-256 plus per-game rollback state under
+`HKLM\SOFTWARE\OAC`; only SYSTEM and the restricted service SID can write that state. It also reads
 `HKLM\SYSTEM\CurrentControlSet\Services\OAC\Start` and refuses to load the driver unless the value
 is exactly `3` (`SERVICE_DEMAND_START`). From the same LocalSystem shell, verify both services
 independently with:
@@ -101,15 +104,17 @@ after verifying the complete file set and rejecting PFX/P12/key material. Run
 installation ISO to create a
 networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
 boundary including crash and graceful-stop standard-user launches with job-owned child processes,
-protocol lifecycle/race, baseline scanner, and standard Driver Verifier phases,
+signed-manifest acceptance and modified/wrong-build/expired/rollback rejection, protocol
+lifecycle/race, baseline scanner, and standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
 because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
-campaign passed at acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` on Windows 11 Pro
-build 26100: 30 exact results, verified job ownership and process-tree termination, bounded scheduler
-latency and coverage, typed-evidence and local-policy integration, snapshot coverage, standard Driver
-Verifier, zero crash events/minidumps, and final containment were accepted. The validated result ZIP SHA-256 was
-`64DB55D10284C8C07C599A821C86D866B558FDAF86E21C146EE9D91127BEADEA`.
+campaign passed at acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` on Windows 11 Pro
+build 26100: 34 exact results, signed-manifest positive and negative cases, verified job ownership
+and process-tree termination, bounded scheduler latency and coverage, typed-evidence and local-policy
+integration, snapshot coverage, standard Driver Verifier, zero crash events/minidumps, and final
+containment were accepted. The validated result ZIP SHA-256 was
+`FC7ADD186A62614573AFD4F9045C4828DAE27E7EA372C305339C7AFA82570CAF`.
 This is evidence for that exact test configuration, not authorization to use test signing outside
 a disposable VM.
 

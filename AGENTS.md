@@ -17,14 +17,14 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `5c476c246462c968d98185c6db159fdaf6a0238d` passed the complete
+  Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-08. The campaign covered service-crash and graceful-stop target-tree
-  containment, session-loss reporting, retained-alert delivery, event-gap accounting, overflow
-  behavior, paged kernel-module snapshots, and the independent health loop with bounded target
-  sampling. The service applies the fixed typed policy catalog to both evidence channels. Signed
-  manifests, externally signed policy, authenticated backend leases, and authenticated upload are
-  not implemented.
+  WP-01 through WP-09. The campaign covered signed-manifest authorization and rejection, target-tree
+  containment after service crash and graceful stop, session-loss reporting, retained-alert
+  delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots, and the
+  independent health loop with bounded target sampling. The service applies the fixed typed policy
+  catalog to both evidence channels. Externally signed policy, manifest-key rotation, authenticated
+  backend leases, and authenticated upload are not implemented.
 
 ## Repository map
 
@@ -38,6 +38,7 @@
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
+| `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
