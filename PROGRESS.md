@@ -13,7 +13,7 @@ still distinguishes source, evidence, and the remaining production-hardening wor
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
-| WP-00 Baseline, docs, tests | Tested foundation | Baseline recorded; Debug/Release builds and units, repository validation, packaging, and the current VM campaign passed; PR #11 hosted checks passed |
+| WP-00 Baseline, docs, tests | Tested foundation | Baseline recorded; Debug/Release builds and units, repository validation, packaging, and the current VM campaign passed; PR #13 hosted checks passed |
 | WP-01 Production protocol foundations | Tested foundation | Production ABI, explicit message types, validators, stable IDs, event schema, pure units, driver dispatch, and driver-backed protocol execution passed on the named campaign |
 | WP-02 Service and device identity | VM-tested foundation | Restricted service, identity-checked launcher IPC, production device ACL, exact install/remove, standard-user status, and direct-open denials passed on the named campaign |
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
@@ -142,7 +142,7 @@ only the verified Windows installation ISO and two compact evidence bundles rema
 
 ## Current pending gates
 
-- Hosted Debug/Release build, unit, and repository-validation checks passed on PR #11 and remain
+- Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
 - WP-08 must add centralized typed policy before the hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.

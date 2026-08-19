@@ -17,10 +17,10 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
-| `Release|x64` solution build | Workflow matrix configured | Local and PR #11 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `428/428`; PR #11 hosted the earlier `314/314` WP-05 suite |
-| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #11 |
+| `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
+| `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local and PR #13 hosted Debug/Release runs passed `428/428` |
+| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
 | Clang-Tidy | Required for scanner changes | Current Release service and diagnostic scanner projects passed with warnings treated as errors |
