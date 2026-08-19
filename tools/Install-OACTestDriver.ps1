@@ -931,7 +931,16 @@ function Assert-ManifestStateAcl(
     [string]$Path,
     [switch]$Inherited
 ) {
-    $acl = Get-Acl -LiteralPath $Path
+    $key = Get-Item -LiteralPath $Path
+    try {
+        $sections =
+            [Security.AccessControl.AccessControlSections]::Access -bor
+            [Security.AccessControl.AccessControlSections]::Owner -bor
+            [Security.AccessControl.AccessControlSections]::Group
+        $acl = $key.GetAccessControl($sections)
+    } finally {
+        $key.Close()
+    }
     $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     $group = $acl.GetGroup([Security.Principal.SecurityIdentifier]).Value
     $rules = @($acl.GetAccessRules(
