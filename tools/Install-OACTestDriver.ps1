@@ -164,16 +164,30 @@ if ($certificateObject.Thumbprint -ne [string]$manifest.certificate_thumbprint -
 }
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
-    $manifestSignerSha256 = $sha256.ComputeHash($certificateObject.RawData)
+$manifestSignerSha256 = $sha256.ComputeHash($certificateObject.RawData)
 } finally {
     $sha256.Dispose()
+}
+
+function Import-PkcsAssembly {
+    if ($null -ne ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        return
+    }
+    try {
+        Add-Type -AssemblyName System.Security.Cryptography.Pkcs -ErrorAction Stop
+    } catch {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+    if ($null -eq ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        throw 'The platform PKCS/CMS implementation is unavailable.'
+    }
 }
 
 function Assert-DetachedManifestSignature(
     [string]$ManifestPath,
     [string]$SignaturePath
 ) {
-    Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+    Import-PkcsAssembly
     $manifestBytes = [IO.File]::ReadAllBytes($ManifestPath)
     if ($manifestBytes.Length -ne 512) {
         throw "Game manifest has an invalid size: $ManifestPath"

@@ -159,6 +159,20 @@ function Get-Sha256Bytes([byte[]]$Bytes) {
     }
 }
 
+function Import-PkcsAssembly {
+    if ($null -ne ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        return
+    }
+    try {
+        Add-Type -AssemblyName System.Security.Cryptography.Pkcs -ErrorAction Stop
+    } catch {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+    if ($null -eq ('System.Security.Cryptography.Pkcs.SignedCms' -as [type])) {
+        throw 'The platform PKCS/CMS implementation is unavailable.'
+    }
+}
+
 function New-GameManifestBytes(
     [byte[]]$ManifestId,
     [byte[]]$GameId,
@@ -232,7 +246,7 @@ function Write-SignedGameManifest(
     [string]$SignaturePath,
     [Security.Cryptography.X509Certificates.X509Certificate2]$SigningCertificate
 ) {
-    Add-Type -AssemblyName System.Security.Cryptography.Pkcs
+    Import-PkcsAssembly
     $content = [Security.Cryptography.Pkcs.ContentInfo]::new($ManifestBytes)
     $signed = [Security.Cryptography.Pkcs.SignedCms]::new($content, $true)
     $signer = [Security.Cryptography.Pkcs.CmsSigner]::new(
