@@ -956,7 +956,11 @@ function Invoke-ProductionStatus([string]$Launcher, [string]$Name) {
     $scriptText = @"
 `$output = & '$Launcher' --status 2>&1
 `$code = `$LASTEXITCODE
-`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+`$outputLines = @(`$output | ForEach-Object { `$_.ToString() })
+[IO.File]::WriteAllLines(
+    '$outputPath',
+    [string[]]`$outputLines,
+    [Text.UTF8Encoding]::new(`$false))
 [IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
 exit `$code
 "@
@@ -1075,7 +1079,11 @@ function Invoke-RejectedProductionLaunch(
     $scriptText = @"
 `$output = & '$Launcher' --launch '$Target' 2>&1
 `$code = `$LASTEXITCODE
-`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+`$outputLines = @(`$output | ForEach-Object { `$_.ToString() })
+[IO.File]::WriteAllLines(
+    '$outputPath',
+    [string[]]`$outputLines,
+    [Text.UTF8Encoding]::new(`$false))
 [IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
 exit `$code
 "@
