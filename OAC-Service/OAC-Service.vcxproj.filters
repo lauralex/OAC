@@ -20,6 +20,9 @@
     <ClCompile Include="target_scanner.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\oac_policy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="service.hpp">
@@ -29,6 +32,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_policy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_thread_suspension.hpp">

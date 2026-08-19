@@ -35,10 +35,11 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | Component | Current responsibility | Boundary |
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, own the production driver session and target job, poll and validate alerts, answer status, serialize one caller-token suspended launch, and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OACService` | Verify its restricted identity, own the production driver session and target job, evaluate typed evidence, answer status, serialize one caller-token suspended launch, and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
+| `shared/oac_policy.*` | Fixed rule catalog, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module; not an external policy format |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
 | Protocol tests | Driver-free schema tests and driver-backed malformed/lifecycle/race tests | Host-safe unit or disposable VM as appropriate |
@@ -57,9 +58,20 @@ At startup, the service fails closed unless its primary token is session 0, rest
 the exact reviewed service SID in both enabled groups and restricted SIDs. It opens the driver,
 negotiates the exact production revision and evidence bounds, claims a production session,
 validates a correlated status response, then keeps that driver handle for its lifetime. While
-waiting for stop, failure, or target exit, it polls retained alerts on a bounded interval and fails
-closed on loss, revocation, malformed correlation, or local handoff exhaustion. An orderly stop or
-target transition performs one final bounded alert drain before the session is revoked.
+waiting for stop, failure, or target exit, it polls retained alerts and lower-priority events on a
+bounded interval. It fails closed on retained-alert loss, revocation, malformed correlation, or
+local actionable-result exhaustion. An orderly stop or target transition performs one final bounded
+evidence drain before the session is revoked.
+
+Every current driver producer emits a typed observation with policy severity set to
+`NOT_EVALUATED`. The service validates the stable rule ID, event type, category, observation range,
+and required provenance against one fixed catalog, then evaluates it in the compiled Enforce mode.
+Observe and Strict modes use the same catalog and are covered by driver-free regression tests; a
+signed runtime policy selector belongs to WP-10. Actionable results enter a bounded service handoff.
+The service supports a deny-launch latch for the later manifest and signed-policy milestones; no
+current fixed-catalog rule selects it. Revoke-session terminates the service runtime so normal
+cleanup revokes the driver session and closes the target job. Display payload text is validated as
+transport data but never read by the policy evaluator.
 
 After a target is confirmed, job-owned, and resumed, the service starts one worker with a single
 coalescing work slot. The health loop continues independently at a 250 ms cadence and queues scan
@@ -71,7 +83,8 @@ authenticated target-owner identity, immediately reverts to the restricted servi
 captures bounded context metadata, and resumes through a shared RAII guard. Stop, target exit, and
 service failure cancel the worker before target authority handles are released. Status reports
 coverage, CPU and wall time, queue outcomes, health latency, peak working storage, and the longest
-observed thread suspension. These are collection and health metrics; WP-08 owns policy decisions.
+observed thread suspension. These remain collection and health metrics; the central policy catalog
+consumes typed driver observations rather than scanner display strings.
 
 The local message-mode pipe rejects remote clients and does not grant clients pipe-instance
 creation. Before returning status or accepting a launch, the service impersonates at impersonation
@@ -140,14 +153,17 @@ records into a retained acknowledgement queue and lower-priority records into an
 overwrite queue with explicit gaps. One frozen, expiring kernel-module snapshot is read by stable
 identifier and cursor. Existing display-oriented findings continue through the separate diagnostic
 ring; production driver configuration and scan dispatch remain unavailable, while the service
-worker uses documented user-mode process APIs. The retained-alert,
-event-gap, overflow, concurrent-publication, and snapshot-paging paths passed the named baseline and
-Driver Verifier campaign.
+worker uses documented user-mode process APIs. The driver never promotes its own observations to
+policy violations. The service evaluates records received from both queues, preserves source
+confidence and provenance, and keeps the separate policy decision with any actionable local copy.
+Overwrite gaps remain explicit; authenticated persistence and backend review do not exist yet. The
+retained-alert, event-gap, overflow, concurrent-publication, and snapshot-paging paths passed the
+named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
-   and backend leases.
+1. Add stable executable identity and signed manifests, followed by signed policy selection and
+   backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

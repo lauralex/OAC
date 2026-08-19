@@ -19,7 +19,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local and PR #13 hosted Debug/Release runs passed `428/428` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `477/477`; PR #13 previously passed `428/428` |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -163,12 +163,13 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `18aac02` |
 | WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Local `428/428`, Debug/Release, PREfast, driver-backed `129/129`, and VM/Verifier acceptance passed at `18aac02` |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy, restricted-service metrics, and Driver Verifier passed at `18aac02` |
-| WP-08 policy | Stable rule decisions, corroboration, display-text independence | Planned |
+| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Source implemented; Debug/Release `477/477`, static analysis, and repository checks pass locally; VM acceptance pending |
 | WP-09/10 signatures | Wrong key/scope/build, expiry, rollback, canonical serialization | Planned |
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
-WP-02 through WP-07 acceptance is recorded only for the exact commit and environment above. Later
-work packages remain planned.
+WP-02 through WP-07 acceptance is recorded only for the exact commit and environment above. WP-08
+has source and local evidence but is not yet VM-accepted; WP-09 and later work packages remain
+planned.
 
 ## Exact host commands
 

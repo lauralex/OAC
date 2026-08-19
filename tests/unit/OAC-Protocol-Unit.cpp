@@ -14,6 +14,7 @@
 #include "../../shared/oac_protocol.h"
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_lease.h"
+#include "../../shared/oac_policy.h"
 #include "../../shared/oac_thread_suspension.hpp"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
@@ -56,6 +57,11 @@ static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
 static_assert(offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureStage) == 48);
 static_assert(offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureDetail) == 52);
+static_assert(std::is_standard_layout_v<OAC_POLICY_SIGNER_CLASSIFICATION>);
+static_assert(std::is_trivially_copyable_v<OAC_POLICY_DECISION>);
+static_assert(sizeof(OAC_POLICY_SIGNER_CLASSIFICATION) == 64);
+static_assert(sizeof(OAC_POLICY_RULE) == 56);
+static_assert(sizeof(OAC_POLICY_DECISION) == 16);
 
 namespace
 {
@@ -2488,6 +2494,447 @@ void TestEventRecords(TestLog& log)
     log.Expect("UTF-16 payload rejects dirty tail", OacV5ValidateEventRecord(
         &record, sizeof(record)) == OAC_V5_INVALID_RESERVED);
 }
+
+OAC_V5_EVENT_RECORD PolicyObservation(
+    OAC_V5_RULE_ID ruleId,
+    OAC_V5_CATEGORY category,
+    OAC_V5_OBSERVATION_SEVERITY severity,
+    ULONGLONG evidenceFlags)
+{
+    auto record = ValidEventRecord();
+    record.RuleId = ruleId;
+    record.Category = category;
+    record.ObservationSeverity = severity;
+    record.EvidenceFlags = evidenceFlags;
+    return record;
+}
+
+OAC_POLICY_SIGNER_CLASSIFICATION SignedClassification(uint32_t flags)
+{
+    OAC_POLICY_SIGNER_CLASSIFICATION signer{};
+    signer.SignatureSource = OAC_POLICY_SIGNATURE_EMBEDDED;
+    signer.ChainState = OAC_POLICY_CHAIN_VALID;
+    signer.RevocationState = OAC_POLICY_REVOCATION_GOOD;
+    signer.TimestampState = OAC_POLICY_TIMESTAMP_VALID;
+    signer.Flags = flags;
+    signer.ThumbprintLength = 20;
+    for (uint32_t index = 0; index < signer.ThumbprintLength; ++index)
+        signer.Thumbprint[index] = static_cast<uint8_t>(index + 1);
+    return signer;
+}
+
+void TestPolicyCatalog(TestLog& log)
+{
+    size_t count = 0;
+    const OAC_POLICY_RULE* rules = OacPolicyRuleCatalog(&count);
+    log.Expect("policy catalog is available", rules != nullptr);
+    log.Expect("policy catalog has exact rule count",
+        count == OAC_POLICY_RULE_COUNT);
+    log.Expect("policy catalog requires count output",
+        OacPolicyRuleCatalog(nullptr) == nullptr);
+
+    bool valid = rules != nullptr && count == OAC_POLICY_RULE_COUNT;
+    for (size_t index = 0; valid && index < count; ++index)
+    {
+        const auto& rule = rules[index];
+        valid = OacV5RuleIdValid(rule.RuleId) != FALSE &&
+            OacV5EventTypeValid(rule.EventType) != FALSE &&
+            OacV5CategoryValid(rule.Category) != FALSE &&
+            OacV5ObservationSeverityValid(
+                rule.MinimumObservationSeverity) != FALSE &&
+            OacV5ObservationSeverityValid(
+                rule.MaximumObservationSeverity) != FALSE &&
+            rule.MinimumObservationSeverity <=
+                rule.MaximumObservationSeverity &&
+            OacPolicyConfidenceValid(rule.Confidence) != 0 &&
+            OacPolicyActionValid(rule.ObserveAction) != 0 &&
+            OacPolicyActionValid(rule.EnforceAction) != 0 &&
+            OacPolicyActionValid(rule.StrictAction) != 0 &&
+            (rule.RequiredEvidenceFlags & ~OAC_V5_EVIDENCE_FLAGS) == 0 &&
+            (rule.Flags & ~OAC_POLICY_RULE_FLAGS) == 0 &&
+            rule.Reserved == 0 &&
+            (index == 0 || rules[index - 1].RuleId < rule.RuleId);
+    }
+    log.Expect("policy catalog is sorted and typed", valid);
+
+    bool allModesEvaluate = valid;
+    constexpr OAC_POLICY_MODE modes[] = {
+        OAC_POLICY_MODE_OBSERVE,
+        OAC_POLICY_MODE_ENFORCE,
+        OAC_POLICY_MODE_STRICT
+    };
+    for (size_t index = 0; allModesEvaluate && index < count; ++index)
+    {
+        auto observation = PolicyObservation(
+            rules[index].RuleId,
+            rules[index].Category,
+            rules[index].MinimumObservationSeverity,
+            rules[index].RequiredEvidenceFlags);
+        observation.EventType = rules[index].EventType;
+        for (const auto mode : modes)
+        {
+            OAC_POLICY_DECISION decision{};
+            if (!OacPolicyEvaluate(mode, &observation, nullptr, &decision) ||
+                decision.RuleId != rules[index].RuleId ||
+                !OacPolicyActionValid(decision.Action) ||
+                !OacPolicyConfidenceValid(decision.Confidence) ||
+                !OacV5PolicySeverityValid(decision.PolicySeverity))
+            {
+                allModesEvaluate = false;
+                break;
+            }
+        }
+    }
+    log.Expect("every policy rule evaluates in every deployment mode",
+        allModesEvaluate);
+    log.Expect("policy catalog stable first rule",
+        rules != nullptr && rules[0].RuleId == OAC_V5_RULE_SESSION_CLAIMED);
+    log.Expect("policy catalog stable last rule",
+        rules != nullptr &&
+        rules[count - 1].RuleId == OAC_V5_RULE_VIRTUALIZATION);
+
+    log.Expect("policy deployment modes",
+        OacPolicyModeValid(OAC_POLICY_MODE_OBSERVE) != 0 &&
+        OacPolicyModeValid(OAC_POLICY_MODE_ENFORCE) != 0 &&
+        OacPolicyModeValid(OAC_POLICY_MODE_STRICT) != 0 &&
+        OacPolicyModeValid(0) == 0 &&
+        OacPolicyModeValid(OAC_POLICY_MODE_STRICT + 1) == 0);
+    log.Expect("policy action range",
+        OacPolicyActionValid(OAC_POLICY_ACTION_NO_ACTION) != 0 &&
+        OacPolicyActionValid(OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW) != 0 &&
+        OacPolicyActionValid(OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW + 1) == 0);
+    log.Expect("policy confidence range",
+        OacPolicyConfidenceValid(OAC_POLICY_CONFIDENCE_INFORMATIONAL) != 0 &&
+        OacPolicyConfidenceValid(
+            OAC_POLICY_CONFIDENCE_CONCLUSIVE_FOR_LOCAL_POLICY) != 0 &&
+        OacPolicyConfidenceValid(
+            OAC_POLICY_CONFIDENCE_CONCLUSIVE_FOR_LOCAL_POLICY + 1) == 0);
+}
+
+void TestSignerClassification(TestLog& log)
+{
+    OAC_POLICY_SIGNER_CLASSIFICATION signer{};
+    log.Expect("unavailable signer classification",
+        OacPolicySignerClassificationValid(&signer) != 0);
+    log.Expect("null signer classification",
+        OacPolicySignerClassificationValid(nullptr) == 0);
+
+    signer.SignatureSource = OAC_POLICY_SIGNATURE_UNSIGNED;
+    signer.ChainState = OAC_POLICY_CHAIN_NOT_CHECKED;
+    signer.RevocationState = OAC_POLICY_REVOCATION_NOT_CHECKED;
+    signer.TimestampState = OAC_POLICY_TIMESTAMP_MISSING;
+    log.Expect("unsigned signer classification",
+        OacPolicySignerClassificationValid(&signer) != 0);
+
+    signer = SignedClassification(OAC_POLICY_SIGNER_APPROVED_FILE);
+    log.Expect("approved exact signer classification",
+        OacPolicySignerClassificationValid(&signer) != 0);
+    auto catalogSigner = signer;
+    catalogSigner.SignatureSource = OAC_POLICY_SIGNATURE_CATALOG;
+    catalogSigner.ThumbprintLength = 32;
+    for (uint32_t index = 20; index < catalogSigner.ThumbprintLength; ++index)
+        catalogSigner.Thumbprint[index] = static_cast<uint8_t>(index + 1);
+    log.Expect("catalog signer classification",
+        OacPolicySignerClassificationValid(&catalogSigner) != 0);
+    auto invalid = signer;
+    invalid.ThumbprintLength = 0;
+    log.Expect("signed classification requires identity",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    std::fill(
+        std::begin(invalid.Thumbprint),
+        std::end(invalid.Thumbprint),
+        uint8_t{0});
+    log.Expect("signed classification rejects an empty identity",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.Thumbprint[20] = 1;
+    log.Expect("signer classification rejects dirty identity tail",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.Flags |= 0x80000000u;
+    log.Expect("signer classification rejects unknown flags",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.ChainState = OAC_POLICY_CHAIN_INVALID;
+    log.Expect("approved signer requires a valid chain",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.RevocationState = OAC_POLICY_REVOCATION_REVOKED;
+    log.Expect("revoked signer cannot remain approved",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.Reserved[1] = 1;
+    log.Expect("signer classification reserved fields",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+    invalid = signer;
+    invalid.SignatureSource = OAC_POLICY_SIGNATURE_CATALOG + 1;
+    log.Expect("signer classification source range",
+        OacPolicySignerClassificationValid(&invalid) == 0);
+}
+
+void TestPolicyEvaluation(TestLog& log)
+{
+    constexpr ULONGLONG callbackEvidence = OAC_V5_EVIDENCE_KERNEL_SOURCE |
+        OAC_V5_EVIDENCE_CALLBACK_SOURCE;
+    auto gate = PolicyObservation(
+        OAC_V5_RULE_DRIVER_GATE_TRIP,
+        OAC_V5_CATEGORY_DRIVER,
+        OAC_V5_OBSERVATION_CRITICAL,
+        callbackEvidence);
+    gate.Confidence = OAC_V5_CONFIDENCE_LOW;
+    OAC_POLICY_DECISION decision{};
+    log.Expect("observe mode records a gate trip",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_OBSERVE, &gate, nullptr, &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_RECORD &&
+        decision.Confidence ==
+            OAC_POLICY_CONFIDENCE_CONCLUSIVE_FOR_LOCAL_POLICY &&
+        decision.PolicySeverity == OAC_V5_POLICY_INFO);
+    log.Expect("enforce mode revokes a gate trip",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &gate, nullptr, &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION &&
+        decision.PolicySeverity == OAC_V5_POLICY_CRITICAL);
+    log.Expect("strict mode revokes a gate trip",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_STRICT, &gate, nullptr, &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
+
+    auto evaluated = gate;
+    log.Expect("policy decision enriches observation",
+        OacPolicyApplyDecision(&evaluated, &decision) != 0 &&
+        evaluated.EventType == OAC_V5_EVENT_POLICY_VIOLATION &&
+        evaluated.PolicySeverity == OAC_V5_POLICY_CRITICAL &&
+        evaluated.Confidence == gate.Confidence);
+
+    gate.PayloadType = OAC_V5_PAYLOAD_UTF16;
+    gate.Text[0] = L'A';
+    gate.Text[1] = L'\0';
+    gate.PayloadLength = 2 * sizeof(WCHAR);
+    auto renamed = gate;
+    renamed.Text[0] = L'B';
+    OAC_POLICY_DECISION first{};
+    OAC_POLICY_DECISION second{};
+    log.Expect("display text has no policy meaning",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &gate, nullptr, &first) != 0 &&
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &renamed, nullptr, &second) != 0 &&
+        std::memcmp(&first, &second, sizeof(first)) == 0);
+
+    constexpr OAC_POLICY_DECISION sentinel{
+        0x11223344u,
+        0x55667788u,
+        0x99AABBCCu,
+        0xDDEEFF00u
+    };
+    auto invalidObservation = gate;
+    invalidObservation.RuleId = OAC_V5_RULE_POLICY_BASE + 1;
+    decision = sentinel;
+    log.Expect("unknown catalog rule is rejected",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+    invalidObservation = gate;
+    invalidObservation.EventType = OAC_V5_EVENT_SESSION_STATE_CHANGED;
+    decision = sentinel;
+    log.Expect("policy rejects event type drift",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+    invalidObservation = gate;
+    invalidObservation.Category = OAC_V5_CATEGORY_MODULE;
+    decision = sentinel;
+    log.Expect("policy rejects category drift",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+    invalidObservation = gate;
+    invalidObservation.ObservationSeverity = OAC_V5_OBSERVATION_HIGH;
+    decision = sentinel;
+    log.Expect("policy rejects observation severity drift",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+    invalidObservation = gate;
+    invalidObservation.EvidenceFlags = OAC_V5_EVIDENCE_KERNEL_SOURCE;
+    decision = sentinel;
+    log.Expect("policy requires typed provenance",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+    invalidObservation = gate;
+    invalidObservation.PolicySeverity = OAC_V5_POLICY_HIGH;
+    decision = sentinel;
+    log.Expect("collector cannot pre-label policy",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &invalidObservation,
+            nullptr,
+            &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+
+    auto signer = SignedClassification(OAC_POLICY_SIGNER_APPROVED_FILE);
+    decision = sentinel;
+    log.Expect("unrelated rules reject signer metadata",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &gate, &signer, &decision) == 0 &&
+        std::memcmp(&decision, &sentinel, sizeof(decision)) == 0);
+
+    auto kernelImage = PolicyObservation(
+        OAC_V5_RULE_KERNEL_IMAGE_LOADED,
+        OAC_V5_CATEGORY_DRIVER,
+        OAC_V5_OBSERVATION_MEDIUM,
+        callbackEvidence);
+    log.Expect("unknown signer requires corroboration",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_CORROBORATE &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_MODERATE);
+    log.Expect("strict driver-load policy revokes",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_STRICT,
+            &kernelImage,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
+
+    OAC_POLICY_SIGNER_CLASSIFICATION unsignedSigner{};
+    unsignedSigner.SignatureSource = OAC_POLICY_SIGNATURE_UNSIGNED;
+    unsignedSigner.ChainState = OAC_POLICY_CHAIN_NOT_CHECKED;
+    unsignedSigner.RevocationState = OAC_POLICY_REVOCATION_NOT_CHECKED;
+    unsignedSigner.TimestampState = OAC_POLICY_TIMESTAMP_MISSING;
+    log.Expect("unsigned driver requests server review",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            &unsignedSigner,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_STRONG);
+
+    log.Expect("approved exact driver is recorded",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            &signer,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_RECORD &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_STRONG);
+    signer = SignedClassification(OAC_POLICY_SIGNER_APPROVED_PUBLISHER);
+    log.Expect("approved publisher is recorded",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            &signer,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_RECORD &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_MODERATE);
+    signer.RevocationState = OAC_POLICY_REVOCATION_UNAVAILABLE;
+    log.Expect("unavailable revocation requires corroboration",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            &signer,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_CORROBORATE);
+    signer = SignedClassification(0);
+    signer.TimestampState = OAC_POLICY_TIMESTAMP_INVALID;
+    log.Expect("invalid timestamp requests review",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &kernelImage,
+            &signer,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+
+    auto cpu = PolicyObservation(
+        OAC_V5_RULE_CPU_STATE,
+        OAC_V5_CATEGORY_INTEGRITY,
+        OAC_V5_OBSERVATION_MEDIUM,
+        OAC_V5_EVIDENCE_KERNEL_SOURCE);
+    log.Expect("CPU state is corroborated in enforce mode",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &cpu, nullptr, &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_CORROBORATE &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_WEAK);
+    cpu.EvidenceFlags |= OAC_V5_EVIDENCE_INCOMPLETE;
+    log.Expect("incomplete evidence requests review",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE, &cpu, nullptr, &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW &&
+        decision.Confidence == OAC_POLICY_CONFIDENCE_STRONG);
+
+    auto sessionLoss = PolicyObservation(
+        OAC_V5_RULE_SESSION_LOST,
+        OAC_V5_CATEGORY_SERVICE,
+        OAC_V5_OBSERVATION_CRITICAL,
+        OAC_V5_EVIDENCE_KERNEL_SOURCE);
+    sessionLoss.EventType = OAC_V5_EVENT_REVOCATION;
+    log.Expect("session loss is a conclusive revoke",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &sessionLoss,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION &&
+        OacPolicyApplyDecision(&sessionLoss, &decision) != 0 &&
+        sessionLoss.EventType == OAC_V5_EVENT_REVOCATION &&
+        sessionLoss.PolicySeverity == OAC_V5_POLICY_CRITICAL);
+
+    auto before = gate;
+    OAC_POLICY_DECISION mismatched = decision;
+    mismatched.RuleId = OAC_V5_RULE_SESSION_LOST;
+    log.Expect("policy application preserves mismatched record",
+        OacPolicyApplyDecision(&gate, &mismatched) == 0 &&
+        std::memcmp(&gate, &before, sizeof(gate)) == 0);
+
+    mismatched = first;
+    mismatched.PolicySeverity = OAC_V5_POLICY_LOW;
+    before = gate;
+    log.Expect("policy application rejects inconsistent action severity",
+        OacPolicyApplyDecision(&gate, &mismatched) == 0 &&
+        std::memcmp(&gate, &before, sizeof(gate)) == 0);
+    mismatched = first;
+    mismatched.Confidence =
+        OAC_POLICY_CONFIDENCE_CONCLUSIVE_FOR_LOCAL_POLICY + 1;
+    before = gate;
+    log.Expect("policy application rejects invalid confidence",
+        OacPolicyApplyDecision(&gate, &mismatched) == 0 &&
+        std::memcmp(&gate, &before, sizeof(gate)) == 0);
+
+    OAC_POLICY_DECISION denyLaunch{
+        gate.RuleId,
+        OAC_POLICY_ACTION_DENY_LAUNCH,
+        OAC_POLICY_CONFIDENCE_STRONG,
+        OAC_V5_POLICY_CRITICAL
+    };
+    before = gate;
+    log.Expect("deny-launch action produces a policy violation",
+        OacPolicyApplyDecision(&gate, &denyLaunch) != 0 &&
+        gate.EventType == OAC_V5_EVENT_POLICY_VIOLATION &&
+        gate.PolicySeverity == OAC_V5_POLICY_CRITICAL &&
+        gate.Confidence == before.Confidence);
+}
 } // namespace
 
 int main()
@@ -2514,5 +2961,8 @@ int main()
     TestSnapshotTransport(log);
     TestLabEvidenceContract(log);
     TestEventRecords(log);
+    TestPolicyCatalog(log);
+    TestSignerClassification(log);
+    TestPolicyEvaluation(log);
     return log.ExitCode();
 }

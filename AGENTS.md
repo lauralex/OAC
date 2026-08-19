@@ -31,13 +31,14 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
+| `OAC-Service/` | Restricted production controller; owns the driver session, typed policy enforcement, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
+| `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
-| `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, and event-schema tests |
+| `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
 | `docs/` | Public technical references, current procedures, reviewed research, and separated maintainer records |

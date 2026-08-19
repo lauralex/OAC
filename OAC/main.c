@@ -642,7 +642,7 @@ NTSTATUS OacDeviceControl(
                 OAC_V5_RULE_SESSION_REVOKED,
                 OAC_V5_EVENT_REVOCATION,
                 OAC_V5_OBSERVATION_INFO,
-                OAC_V5_POLICY_INFO,
+                OAC_V5_POLICY_NOT_EVALUATED,
                 OAC_V5_CONFIDENCE_HIGH,
                 OAC_V5_CATEGORY_SERVICE,
                 PsGetCurrentProcessId(),

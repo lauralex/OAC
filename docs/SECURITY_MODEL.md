@@ -35,7 +35,8 @@ trust boundaries, adversaries, and failure behavior.
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
-| Policy, manifest, backend | No production trust boundary exists | Planned |
+| Local policy | The service applies a fixed typed rule catalog in Enforce mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests pass locally; complete VM acceptance is pending |
+| Manifest, signed policy, backend | No production trust boundary exists | Planned |
 
 ## Production authority
 
@@ -122,6 +123,15 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   kernel provenance, adds local ingestion ordering, and drains once more before orderly shutdown.
 - Lower-priority event overwrite cannot consume alert capacity, and frozen snapshot work is paged,
   identity-bound, expiring, and unavailable for new work after revocation.
+- Driver producers emit observations with unevaluated policy state. The service polls both evidence
+  channels and evaluates stable rule ID, event type, category, severity range, and required
+  provenance through one fixed catalog. Source confidence and provenance remain unchanged; the
+  policy action and policy confidence are separate typed results. Display text is not an input.
+- The compiled Enforce mode can retain warnings and review requests or stop the service runtime so
+  ordinary cleanup revokes the driver session and closes the target job. The service also supports
+  a deny-launch action, but no current fixed-catalog rule selects it; manifest and signed-policy
+  inputs belong to WP-09/WP-10. Observe and Strict modes share the same deterministic catalog but
+  are not runtime-selectable until authenticated policy work is implemented.
 - The health loop never performs target memory or thread inspection. One cancellation-aware worker
   keeps continuation state and enforces per-slice time, byte, region, and thread limits. It opens
   threads under the authenticated target-owner identity, reverts immediately, and uses one shared
@@ -137,8 +147,7 @@ effective-right, compatibility, or production-deployment matrix.
 ## Planned controls
 
 - Signed-manifest and stable executable-identity verification before a launch ticket is armed.
-- Central typed policy, signed game manifests, signed remote policy, and authenticated backend
-  lease/upload.
+- Signed game manifests, signed remote policy selection, and authenticated backend lease/upload.
 
 ## Evidence and enforcement
 
@@ -147,6 +156,13 @@ single weak heuristic such as an overlay style, virtualization indicator, or glo
 not proof of cheating. Evidence loss, incomplete scanning, unavailable security state, or an
 unsupported platform must remain explicit rather than silently becoming a clean result. Display
 text has no policy meaning in the production schema.
+
+The current catalog is compiled into the service; it is not remotely mutable. Its signer model
+records signature source, chain, revocation, timestamp, approval flags, and an exact certificate
+thumbprint as typed fields. The active service passes an explicit unavailable classification until
+WP-09/WP-10 provide authenticated executable and policy inputs, so it never infers signer trust
+from an image name or display string. Lower-priority overwrite gaps remain visible transport facts;
+only records actually delivered to the service can receive a local policy decision.
 
 Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
 path can fail its gate after detecting the latch; the production launch transaction closes the

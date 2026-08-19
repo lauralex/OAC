@@ -64,8 +64,17 @@ client can enforce a chosen finding threshold, but a finding remains evidence ra
 automatic claim that a process is malicious.
 
 Production evidence records preserve the kernel session, generation, sequence, timestamp, rule,
-severity, confidence, category, and fixed provenance fields. The service currently keeps a bounded
-in-memory alert handoff; authenticated persistence and server acknowledgement are later work.
+severity, confidence, category, and fixed provenance fields. Kernel producers leave policy state
+unevaluated. The service polls both evidence channels and applies a fixed typed catalog with
+Observe, Enforce, and Strict decision tables; Enforce is the current compiled mode. Policy action
+and five-level policy confidence remain separate from the source observation, and display text is
+never an evaluator input.
+
+The catalog also defines a typed signer classification for signature source, chain, revocation,
+timestamp, approval state, and certificate thumbprint. Runtime signer verification and signed
+policy selection are not implemented yet, so current service decisions use the explicit
+`unavailable` signer state. Actionable results use a bounded in-memory handoff; authenticated
+persistence, signed updates, and server acknowledgement remain later work.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or

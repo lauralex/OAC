@@ -21,7 +21,7 @@ still distinguishes source, evidence, and the remaining production-hardening wor
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
 | WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
 | WP-07 Bounded service scheduler | Working MVP; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
-| WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
+| WP-08 Rule catalog and policy engine | Working MVP; local validation | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, and display-text independence are implemented; complete VM acceptance is pending |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
 | WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
 | WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
@@ -65,7 +65,7 @@ These results do not validate the current production protocol, service, or sessi
 
 ## Current foundation source
 
-The working tree adds or changes these implementation areas:
+The current source is organized around these implementation areas:
 
 - `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h`: C-compatible production ABI, explicit
   message identities, layout assertions, strict request/response/event validation, and transition
@@ -80,14 +80,17 @@ The working tree adds or changes these implementation areas:
 - `OAC/evidence.c`, `OAC/protection.c`, and `OAC/scanner.c`: callback-safe typed publication,
   independent retained-alert and overwrite-event queues, explicit loss accounting, and frozen
   paged kernel-module snapshots.
+- `shared/oac_policy.h` and `shared/oac_policy.c`: C-compatible stable catalog, Observe/Enforce/Strict
+  decisions, five-level policy confidence, signer classification, strict typed-record matching, and
+  display-text-independent evaluation.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
-  service-owned target job, bounded alert polling/handoff, and a backend-independent lease-state
-  policy seam. The service now keeps target inspection off the health loop, queues incremental
-  memory/thread slices through one coalescing worker slot, and reports strict coverage and latency
-  metrics to the launcher.
-- Package/install and VM harness changes for the service boundary, production session lifecycle/race test, and
-  Driver Verifier rerun.
+  service-owned target job, bounded two-channel evidence polling, central policy enforcement, and a
+  backend-independent lease-state seam. The service keeps target inspection off the health loop,
+  queues incremental memory/thread slices through one coalescing worker slot, and reports strict
+  coverage and latency metrics to the launcher.
+- Package/install and VM harness support for the service boundary, production session lifecycle and
+  race tests, and Driver Verifier acceptance.
 
 The current driver advertises production session control, launch tickets, session liveness, typed
 evidence, and paged snapshots. Production configuration/scan, signed-manifest, signed-policy, and
@@ -99,7 +102,7 @@ backend capabilities remain unavailable.
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `428/428` in each configuration, including scheduler budgets, metrics, and thread-resume cleanup |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `477/477` in each configuration, including scheduler and typed-policy regression coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |
@@ -144,9 +147,10 @@ only the verified Windows installation ISO and two compact evidence bundles rema
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-08 must add centralized typed policy before the hardened-foundation definition is met.
+- WP-08 still requires the complete disposable-VM and Driver Verifier acceptance campaign before
+  the hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready or as a complete hardened foundation. The control
-plane still lacks centralized policy, signed manifests, and authenticated backend delivery listed
-above.
+plane still lacks signed manifests, signed runtime policy, and authenticated backend delivery
+listed above; the new local policy implementation is not accepted until its VM campaign passes.

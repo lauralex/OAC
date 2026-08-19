@@ -570,13 +570,9 @@ static VOID OacImageNotify(
                             ? OAC_V5_RULE_DRIVER_DENY_MATCH
                             : OAC_V5_RULE_KERNEL_IMAGE_LOADED))
                     : OAC_V5_RULE_PROCESS_IMAGE_LOADED,
-                (gateArmed || deniedDriver)
-                    ? OAC_V5_EVENT_POLICY_VIOLATION
-                    : OAC_V5_EVENT_OBSERVATION,
+                OAC_V5_EVENT_OBSERVATION,
                 (OAC_V5_OBSERVATION_SEVERITY)severity,
-                (gateArmed || deniedDriver)
-                    ? OAC_V5_POLICY_CRITICAL
-                    : OAC_V5_POLICY_NOT_EVALUATED,
+                OAC_V5_POLICY_NOT_EVALUATED,
                 (gateArmed || deniedDriver)
                     ? OAC_V5_CONFIDENCE_HIGH
                     : OAC_V5_CONFIDENCE_MEDIUM,

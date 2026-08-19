@@ -43,6 +43,7 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
       <ExceptionHandling>Sync</ExceptionHandling>
       <PreprocessorDefinitions>UNICODE;_UNICODE;NOMINMAX;WIN32_LEAN_AND_MEAN;_WIN32_WINNT=0x0A00;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ControlFlowGuard>Guard</ControlFlowGuard>
@@ -61,11 +62,13 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="service.cpp" />
     <ClCompile Include="target_scanner.cpp" />
+    <ClCompile Include="..\shared\oac_policy.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="service.hpp" />
     <ClInclude Include="target_scanner.hpp" />
     <ClInclude Include="..\shared\oac_ipc.h" />
+    <ClInclude Include="..\shared\oac_policy.h" />
     <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
     <ClInclude Include="..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\shared\protocol\oac_validate.h" />

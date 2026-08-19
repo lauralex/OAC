@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\oac_policy.h"
 #include "..\shared\protocol\oac_v5.h"
 #include "..\shared\protocol\oac_validate.h"
 
@@ -20,7 +21,7 @@ namespace
 {
 constexpr wchar_t kDevicePath[] = L"\\\\.\\OAC";
 constexpr DWORD kPipeIoTimeoutMs = 5000;
-constexpr DWORD kAlertPollIntervalMs = 250;
+constexpr DWORD kEvidencePollIntervalMs = 250;
 constexpr ULONG kLaunchTimeToLiveMs = 10000;
 constexpr wchar_t kPipeSddl[] =
     L"O:SYG:SYD:P"
@@ -29,7 +30,7 @@ constexpr wchar_t kPipeSddl[] =
     L"(A;;GA;;;" OAC_SERVICE_SID L")"
     L"(A;;0x0012019B;;;IU)";
 
-using AlertReadStorage = std::array<std::byte,
+using EvidenceReadStorage = std::array<std::byte,
     FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE, Records) +
     OAC_EVIDENCE_MAX_RECORDS_PER_PAGE * sizeof(OAC_V5_EVENT_RECORD)>;
 
@@ -1017,14 +1018,15 @@ DWORD ReadDriverStatus(
     return ERROR_SUCCESS;
 }
 
-DWORD ReadAlertBatch(
+DWORD ReadEvidenceBatch(
     HANDLE driver,
     const OAC_V5_SESSION_ID& sessionId,
     ULONGLONG generation,
+    ULONG channel,
     ULONGLONG afterSequence,
     ULONGLONG acknowledgeThrough,
     OAC_EVIDENCE_READ_RESPONSE*& response,
-    AlertReadStorage& storage)
+    EvidenceReadStorage& storage)
 {
     OAC_EVIDENCE_READ_REQUEST request{};
     if (!InitializeDriverRequest(
@@ -1036,7 +1038,7 @@ DWORD ReadAlertBatch(
     {
         return ERROR_GEN_FAILURE;
     }
-    request.Channel = OAC_EVIDENCE_CHANNEL_ALERT;
+    request.Channel = channel;
     request.MaximumRecords = OAC_EVIDENCE_MAX_RECORDS_PER_PAGE;
     request.AfterSequence = afterSequence;
     request.AcknowledgeThrough = acknowledgeThrough;
@@ -1061,7 +1063,7 @@ DWORD ReadAlertBatch(
             response) != OAC_V5_VALID ||
         response->Header.Status != 0 ||
         response->Header.Reason != OAC_V5_REASON_NONE ||
-        response->Channel != OAC_EVIDENCE_CHANNEL_ALERT)
+        response->Channel != channel)
     {
         return ERROR_INVALID_DATA;
     }
@@ -1489,7 +1491,7 @@ DWORD OpenAndClaimDriver(
         negotiated.MaximumEventCount !=
             OAC_EVIDENCE_MAX_RECORDS_PER_PAGE ||
         negotiated.MaximumOutputSize <
-            static_cast<ULONG>(sizeof(AlertReadStorage)) ||
+            static_cast<ULONG>(sizeof(EvidenceReadStorage)) ||
         (negotiated.Capabilities & requiredCapabilities) !=
             requiredCapabilities ||
         (negotiated.ProtocolFlags & requiredProtocol) != requiredProtocol)
@@ -1640,27 +1642,40 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
     }
 }
 
-DWORD ServiceHost::PollAlerts() noexcept
+DWORD ServiceHost::PollEvidenceChannel(ULONG channel) noexcept
 {
-    alignas(OAC_EVIDENCE_READ_RESPONSE) AlertReadStorage storage{};
+    if (channel != OAC_EVIDENCE_CHANNEL_ALERT &&
+        channel != OAC_EVIDENCE_CHANNEL_EVENT)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    alignas(OAC_EVIDENCE_READ_RESPONSE) EvidenceReadStorage storage{};
     OAC_EVIDENCE_READ_RESPONSE* response = nullptr;
-    const DWORD error = ReadAlertBatch(
+    ULONGLONG& cursor = channel == OAC_EVIDENCE_CHANNEL_ALERT
+        ? alertCursor_
+        : eventCursor_;
+    const ULONGLONG acknowledgement =
+        channel == OAC_EVIDENCE_CHANNEL_ALERT
+            ? alertAcknowledgement_
+            : 0;
+    const DWORD error = ReadEvidenceBatch(
         driver_,
         driverSessionId_,
         driverSessionGeneration_,
-        alertCursor_,
-        alertAcknowledgement_,
+        channel,
+        cursor,
+        acknowledgement,
         response,
         storage);
     if (error != ERROR_SUCCESS) return error;
-    if (response->LossLatched != 0 ||
+    if ((channel == OAC_EVIDENCE_CHANNEL_ALERT &&
+         response->LossLatched != 0) ||
         (response->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0)
     {
         return ERROR_INVALID_DATA;
     }
-    if (response->RecordCount > alerts_.size() - alertCount_)
-        return ERROR_BUFFER_OVERFLOW;
     const ULONGLONG ingestionTime = CurrentSystemTime100ns();
+    DWORD enforcementError = ERROR_SUCCESS;
     for (ULONG index = 0; index < response->RecordCount; ++index)
     {
         if (serviceEvidenceSequence_ == ~0ULL)
@@ -1670,14 +1685,51 @@ DWORD ServiceHost::PollAlerts() noexcept
             ? ingestionTime
             : record.Timestamp100ns;
         record.ServiceSequence = ++serviceEvidenceSequence_;
-        if (OacV5ValidateEventRecord(&record, sizeof(record)) != OAC_V5_VALID)
+        OAC_POLICY_DECISION decision{};
+        if (!OacPolicyEvaluate(
+                OAC_POLICY_DEFAULT_MODE,
+                &record,
+                nullptr,
+                &decision) ||
+            !OacPolicyApplyDecision(&record, &decision) ||
+            OacV5ValidateEventRecord(&record, sizeof(record)) != OAC_V5_VALID)
+        {
             return ERROR_INVALID_DATA;
-        alerts_[alertCount_++] = record;
-        alertCursor_ = response->Records[index].Sequence;
+        }
+        const bool retain = channel == OAC_EVIDENCE_CHANNEL_ALERT ||
+            decision.Action == OAC_POLICY_ACTION_WARN ||
+            decision.Action == OAC_POLICY_ACTION_DENY_LAUNCH ||
+            decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION ||
+            decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW;
+        if (retain)
+        {
+            if (policyRecordCount_ == policyRecords_.size())
+                return ERROR_BUFFER_OVERFLOW;
+            policyRecords_[policyRecordCount_++] = {record, decision};
+        }
+        cursor = response->Records[index].Sequence;
+        if (decision.Action == OAC_POLICY_ACTION_DENY_LAUNCH)
+        {
+            InterlockedExchange(&launchDenied_, TRUE);
+        }
+        else if (decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION)
+        {
+            enforcementError = ERROR_ACCESS_DISABLED_BY_POLICY;
+        }
     }
-    if (response->RecordCount != 0)
+    if (response->RecordCount != 0 &&
+        channel == OAC_EVIDENCE_CHANNEL_ALERT)
+    {
         alertAcknowledgement_ = alertCursor_;
-    return ERROR_SUCCESS;
+    }
+    return enforcementError;
+}
+
+DWORD ServiceHost::PollEvidence() noexcept
+{
+    DWORD error = PollEvidenceChannel(OAC_EVIDENCE_CHANNEL_ALERT);
+    if (error != ERROR_SUCCESS) return error;
+    return PollEvidenceChannel(OAC_EVIDENCE_CHANNEL_EVENT);
 }
 
 DWORD ServiceHost::Wait() noexcept
@@ -1694,12 +1746,12 @@ DWORD ServiceHost::Wait() noexcept
         lastHealthTime = now;
         targetScanner_.RecordHealthIteration(
             elapsed * oac::kHundredNanosecondsPerMillisecond);
-        return PollAlerts();
+        return PollEvidence();
     };
     for (;;)
     {
         wait = WaitForMultipleObjects(
-            3, waits, FALSE, kAlertPollIntervalMs);
+            3, waits, FALSE, kEvidencePollIntervalMs);
         if (wait != WAIT_TIMEOUT) break;
         const DWORD error = pollHealth();
         if (error != ERROR_SUCCESS) return error;
@@ -1744,7 +1796,7 @@ DWORD ServiceHost::Wait() noexcept
     for (;;)
     {
         wait = WaitForMultipleObjects(
-            4, targetWaits, FALSE, kAlertPollIntervalMs);
+            4, targetWaits, FALSE, kEvidencePollIntervalMs);
         if (wait != WAIT_TIMEOUT) break;
         error = pollHealth();
         if (error != ERROR_SUCCESS) return error;
@@ -1913,7 +1965,14 @@ DWORD ServiceHost::PipeLoop() noexcept
                 response.FailureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
                 HANDLE launchedProcess = nullptr;
                 HANDLE launchedUserToken = nullptr;
-                if (authorization == ERROR_SUCCESS)
+                if (authorization == ERROR_SUCCESS &&
+                    InterlockedCompareExchange(
+                        &launchDenied_, FALSE, FALSE) != FALSE)
+                {
+                    response.Win32Error = ERROR_ACCESS_DISABLED_BY_POLICY;
+                    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_POLICY;
+                }
+                else if (authorization == ERROR_SUCCESS)
                 {
                     bool driverSessionChanged = false;
                     DWORD targetProcessId = 0;
