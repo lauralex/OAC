@@ -22,5 +22,6 @@
     <ClInclude Include="scanner.hpp"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_protocol.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_thread_suspension.hpp"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

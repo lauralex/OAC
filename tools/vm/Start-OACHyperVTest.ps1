@@ -53,6 +53,7 @@ $baselineZeroTests = @(
     'baseline-launch',
     'baseline-client',
     'production-launcher-1',
+    'production-launcher-scan',
     'production-launcher-2',
     'production-launcher-3',
     'production-launch',
@@ -644,8 +645,8 @@ function Assert-IntegerValue(
 function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
     Assert-Boolean $Summary 'pass' $Context
     $launcherExits = @(Get-RequiredValue $Summary 'launcher_exits' $Context)
-    if ($launcherExits.Count -ne 3) {
-        throw "$Context does not contain three successful status results."
+    if ($launcherExits.Count -ne 4) {
+        throw "$Context does not contain four successful status results."
     }
     $launchExits = @(Get-RequiredValue $Summary 'launch_exits' $Context)
     if ($launchExits.Count -ne 2) {
@@ -712,6 +713,63 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
         throw "$Context crash loss reason is not file cleanup or service exit."
     }
     Assert-IntegerValue $lossReasons[2] 1 "$Context session_loss_reasons[2]"
+
+    foreach ($name in @(
+            'scan_slices_cancelled',
+            'scan_slices_failed')) {
+        Assert-IntegerValue (Get-RequiredValue $Summary $name $Context) 0 `
+            "$Context $name"
+    }
+    foreach ($name in @(
+            'scan_state',
+            'scan_slices_queued',
+            'scan_slices_completed',
+            'scan_sweeps_completed',
+            'scan_memory_regions',
+            'scan_threads',
+            'health_iterations',
+            'maximum_health_delay_us',
+            'maximum_scan_slice_us',
+            'maximum_thread_suspension_us')) {
+        $value = Get-RequiredValue $Summary $name $Context
+        if (($value -isnot [int] -and $value -isnot [long]) -or
+            [int64]$value -le 0) {
+            throw "$Context does not contain a positive $name."
+        }
+    }
+    foreach ($name in @(
+            'scan_slices_coalesced',
+            'scan_memory_bytes',
+            'scan_threads_skipped')) {
+        $value = Get-RequiredValue $Summary $name $Context
+        if (($value -isnot [int] -and $value -isnot [long]) -or
+            [int64]$value -lt 0) {
+            throw "$Context does not contain a nonnegative $name."
+        }
+    }
+    $scanState = [int64](Get-RequiredValue $Summary 'scan_state' $Context)
+    if ($scanState -notin @(1, 2)) {
+        throw "$Context scan_state is not ready or running."
+    }
+    $queued = [int64](Get-RequiredValue $Summary 'scan_slices_queued' $Context)
+    $completed = [int64](Get-RequiredValue `
+            $Summary 'scan_slices_completed' $Context)
+    $sweeps = [int64](Get-RequiredValue `
+            $Summary 'scan_sweeps_completed' $Context)
+    if ($queued -lt 2 -or $completed -gt $queued -or $sweeps -gt $completed) {
+        throw "$Context scanner slice counts are inconsistent."
+    }
+    if ([int64](Get-RequiredValue `
+            $Summary 'maximum_health_delay_us' $Context) -gt 500000 -or
+        [int64](Get-RequiredValue `
+            $Summary 'maximum_scan_slice_us' $Context) -gt 100000 -or
+        [int64](Get-RequiredValue `
+            $Summary 'maximum_thread_suspension_us' $Context) -gt 50000) {
+        throw "$Context exceeded a health, scan, or suspension budget."
+    }
+    foreach ($name in @('scan_worker_responsive', 'scan_thread_resume_pass')) {
+        Assert-Boolean $Summary $name $Context
+    }
 }
 
 function Assert-DriverGateSummary([object]$Summary, [string]$Context) {
@@ -1706,7 +1764,7 @@ function Assert-FinalStatus([object]$Status) {
         'protocol_test_count' 'final status') 5 `
         'final status protocol_test_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
-        'client_scan_count' 'final status') 12 `
+        'client_scan_count' 'final status') 13 `
         'final status client_scan_count'
     Assert-IntegerValue (Get-RequiredValue $Status `
         'minidump_count' 'final status') 0 `

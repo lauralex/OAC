@@ -70,6 +70,7 @@
     <ClInclude Include="scanner.hpp" />
     <ClInclude Include="..\shared\oac_driver_policy.h" />
     <ClInclude Include="..\shared\oac_protocol.h" />
+    <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

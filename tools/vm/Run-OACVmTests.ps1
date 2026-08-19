@@ -25,6 +25,7 @@ $requiredZeroTests = @(
     'baseline-launch',
     'baseline-client',
     'production-launcher-1',
+    'production-launcher-scan',
     'production-launcher-2',
     'production-launcher-3',
     'production-launch',
@@ -961,7 +962,18 @@ exit `$code
     $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
     $matches = [regex]::Matches(
         $output,
-        '(?m)^OACService status; service-pid=([1-9][0-9]*); client-session=([0-9]+); driver-protocol=0x[0-9a-f]+; capabilities=0x[0-9a-f]+; flags=0x[0-9a-f]+; session-loss-sequence=([0-9]+); last-session-loss=([0-9]+)\r?$')
+        ('(?m)^OACService status; service-pid=([1-9][0-9]*); ' +
+        'client-session=([0-9]+); driver-protocol=0x[0-9a-f]+; ' +
+        'capabilities=0x[0-9a-f]+; flags=0x[0-9a-f]+; ' +
+        'session-loss-sequence=([0-9]+); last-session-loss=([0-9]+); ' +
+        'scan-state=([0-9]+); scan-queued=([0-9]+); ' +
+        'scan-completed=([0-9]+); scan-coalesced=([0-9]+); ' +
+        'scan-cancelled=([0-9]+); scan-failed=([0-9]+); ' +
+        'scan-sweeps=([0-9]+); scan-regions=([0-9]+); ' +
+        'scan-bytes=([0-9]+); scan-threads=([0-9]+); ' +
+        'scan-skipped=([0-9]+); health-iterations=([0-9]+); ' +
+        'health-max-us=([0-9]+); scan-max-us=([0-9]+); ' +
+        'suspend-max-us=([0-9]+)\r?$'))
     if ($exitCode -ne 0 -or $matches.Count -ne 1) {
         throw "$Name did not return one valid service status."
     }
@@ -970,6 +982,7 @@ exit `$code
     [int64]$clientSessionId = -1
     [int64]$lossSequence = -1
     [int64]$lossReason = -1
+    $scanValues = [Collections.Generic.List[uint64]]::new()
     if (-not [int64]::TryParse($matches[0].Groups[1].Value, [ref]$serviceProcessId) -or
         -not [int64]::TryParse($matches[0].Groups[2].Value, [ref]$clientSessionId) -or
         -not [int64]::TryParse($matches[0].Groups[3].Value, [ref]$lossSequence) -or
@@ -978,11 +991,35 @@ exit `$code
         $lossSequence -lt 0 -or $lossReason -lt 0) {
         throw "$Name returned malformed numeric status fields."
     }
+    foreach ($groupIndex in 5..19) {
+        [uint64]$scanValue = 0
+        if (-not [uint64]::TryParse(
+                $matches[0].Groups[$groupIndex].Value,
+                [ref]$scanValue)) {
+            throw "$Name returned a malformed scanner metric."
+        }
+        $scanValues.Add($scanValue)
+    }
     return [pscustomobject]@{
         ExitCode = $exitCode
         ServiceProcessId = $serviceProcessId
         LossSequence = $lossSequence
         LossReason = $lossReason
+        ScanState = $scanValues[0]
+        ScanQueued = $scanValues[1]
+        ScanCompleted = $scanValues[2]
+        ScanCoalesced = $scanValues[3]
+        ScanCancelled = $scanValues[4]
+        ScanFailed = $scanValues[5]
+        ScanSweeps = $scanValues[6]
+        ScanRegions = $scanValues[7]
+        ScanBytes = $scanValues[8]
+        ScanThreads = $scanValues[9]
+        ScanSkipped = $scanValues[10]
+        HealthIterations = $scanValues[11]
+        HealthMaximumMicroseconds = $scanValues[12]
+        ScanMaximumMicroseconds = $scanValues[13]
+        SuspensionMaximumMicroseconds = $scanValues[14]
     }
 }
 
@@ -1172,6 +1209,9 @@ function Test-ProductionBoundary {
     $crashProcessesTerminated = $false
     $gracefulProcessesTerminated = $false
     $serviceCrashRestarted = $false
+    $scanWorkerResponsive = $false
+    $scanThreadResumePass = $false
+    $scanStatus = $null
     $launchBindingConfirmed = $false
     $launchJobAssigned = $false
     $launchThreadResumed = $false
@@ -1283,6 +1323,27 @@ exit $code
         $launchBindingConfirmed = $true
         $launchJobAssigned = $true
         $launchThreadResumed = $true
+
+        Start-Sleep -Seconds 2
+        $scanStatus = Invoke-ProductionStatus $launcher 'production-launcher-scan'
+        $launcherExits.Add($scanStatus.ExitCode)
+        if ($scanStatus.ServiceProcessId -ne $initialStatus.ServiceProcessId -or
+            $scanStatus.LossSequence -ne 0 -or $scanStatus.LossReason -ne 0 -or
+            $scanStatus.ScanState -notin @(1, 2) -or
+            $scanStatus.ScanQueued -lt 2 -or $scanStatus.ScanCompleted -lt 1 -or
+            $scanStatus.ScanCompleted -gt $scanStatus.ScanQueued -or
+            $scanStatus.ScanCancelled -ne 0 -or $scanStatus.ScanFailed -ne 0 -or
+            $scanStatus.ScanSweeps -lt 1 -or $scanStatus.ScanRegions -lt 1 -or
+            $scanStatus.ScanThreads -lt 1 -or
+            $scanStatus.HealthIterations -lt 1 -or
+            $scanStatus.HealthMaximumMicroseconds -gt 500000 -or
+            $scanStatus.ScanMaximumMicroseconds -gt 100000 -or
+            $scanStatus.SuspensionMaximumMicroseconds -le 0 -or
+            $scanStatus.SuspensionMaximumMicroseconds -gt 50000) {
+            throw 'The bounded scan worker did not meet its health, coverage, or suspension budget.'
+        }
+        $scanWorkerResponsive = $true
+        $scanThreadResumePass = $true
 
         $runningServices = @(Get-CimInstance Win32_Service -Filter "Name='OACService'")
         if ($runningServices.Count -ne 1 -or
@@ -1400,7 +1461,7 @@ exit $code
         $cleanupErrors -join '; '
     }
     $passed = $null -eq $testError -and $null -eq $cleanupError -and
-        $launcherExits.Count -eq 3 -and $launchExits.Count -eq 2 -and
+        $launcherExits.Count -eq 4 -and $launchExits.Count -eq 2 -and
         @($launcherExits | Where-Object { $_ -ne 0 }).Count -eq 0 -and
         @($launchExits | Where-Object { $_ -ne 0 }).Count -eq 0 -and
         @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -eq 0 -and
@@ -1411,6 +1472,7 @@ exit $code
         $gracefulLaunchJobAssigned -and $gracefulLaunchThreadResumed -and
         $crashProcessesTerminated -and $gracefulProcessesTerminated -and
         $serviceCrashRestarted -and
+        $scanWorkerResponsive -and $scanThreadResumePass -and
         $lossSequences.Count -eq 3 -and $lossSequences[0] -eq 0 -and
         $lossSequences[1] -eq 1 -and $lossSequences[2] -eq 2 -and
         $lossReasons.Count -eq 3 -and $lossReasons[0] -eq 0 -and
@@ -1439,6 +1501,23 @@ exit $code
         service_crash_restarted = $serviceCrashRestarted
         session_loss_sequences = @($lossSequences)
         session_loss_reasons = @($lossReasons)
+        scan_state = if ($null -ne $scanStatus) { $scanStatus.ScanState } else { -1 }
+        scan_slices_queued = if ($null -ne $scanStatus) { $scanStatus.ScanQueued } else { -1 }
+        scan_slices_completed = if ($null -ne $scanStatus) { $scanStatus.ScanCompleted } else { -1 }
+        scan_slices_coalesced = if ($null -ne $scanStatus) { $scanStatus.ScanCoalesced } else { -1 }
+        scan_slices_cancelled = if ($null -ne $scanStatus) { $scanStatus.ScanCancelled } else { -1 }
+        scan_slices_failed = if ($null -ne $scanStatus) { $scanStatus.ScanFailed } else { -1 }
+        scan_sweeps_completed = if ($null -ne $scanStatus) { $scanStatus.ScanSweeps } else { -1 }
+        scan_memory_regions = if ($null -ne $scanStatus) { $scanStatus.ScanRegions } else { -1 }
+        scan_memory_bytes = if ($null -ne $scanStatus) { $scanStatus.ScanBytes } else { -1 }
+        scan_threads = if ($null -ne $scanStatus) { $scanStatus.ScanThreads } else { -1 }
+        scan_threads_skipped = if ($null -ne $scanStatus) { $scanStatus.ScanSkipped } else { -1 }
+        health_iterations = if ($null -ne $scanStatus) { $scanStatus.HealthIterations } else { -1 }
+        maximum_health_delay_us = if ($null -ne $scanStatus) { $scanStatus.HealthMaximumMicroseconds } else { -1 }
+        maximum_scan_slice_us = if ($null -ne $scanStatus) { $scanStatus.ScanMaximumMicroseconds } else { -1 }
+        maximum_thread_suspension_us = if ($null -ne $scanStatus) { $scanStatus.SuspensionMaximumMicroseconds } else { -1 }
+        scan_worker_responsive = $scanWorkerResponsive
+        scan_thread_resume_pass = $scanThreadResumePass
         test_error = $testError
         cleanup_error = $cleanupError
         lab_mode_restored = $null -eq $cleanupError
@@ -1448,7 +1527,7 @@ exit $code
     if (-not $passed) {
         throw "Production boundary failed; test='$testError' cleanup='$cleanupError'."
     }
-    Write-RunLog 'Production boundary passed: direct opens were denied, both launches were job-owned, crash and graceful stop terminated each process tree, and session loss was reported exactly once per service lifetime.'
+    Write-RunLog 'Production boundary passed: the bounded scan worker preserved health latency and resumed sampled threads; direct opens were denied; both launches were job-owned; crash and graceful stop terminated each process tree; and session loss was reported exactly once per service lifetime.'
 }
 
 function Assert-KernelFindingProvenance([string]$ReportPath) {

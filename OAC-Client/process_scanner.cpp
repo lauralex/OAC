@@ -1,4 +1,5 @@
 #include "scanner.hpp"
+#include "..\shared\oac_thread_suspension.hpp"
 
 #include <TlHelp32.h>
 #include <DbgHelp.h>
@@ -955,18 +956,6 @@ void ScanDebuggerAndInstrumentation(HANDLE process, DWORD processId,
     }
 }
 
-class SuspendGuard
-{
-public:
-    explicit SuspendGuard(HANDLE thread) : thread_(thread), suspended_(SuspendThread(thread) != MAXDWORD) {}
-    ~SuspendGuard() { if (suspended_) (void)ResumeThread(thread_); }
-    bool suspended() const noexcept { return suspended_; }
-
-private:
-    HANDLE thread_;
-    bool suspended_;
-};
-
 void ScanThreads(HANDLE process, DWORD processId, const std::vector<ModuleRecord>& modules,
     bool applyHardening, Reporter& reporter)
 {
@@ -1014,48 +1003,62 @@ void ScanThreads(HANDLE process, DWORD processId, const std::vector<ModuleRecord
                     processId, entry.th32ThreadID,
                     reinterpret_cast<uintptr_t>(startAddress));
 
-            SuspendGuard suspended(thread.get());
-            if (suspended.suspended())
+            DWORD resumeError = ERROR_SUCCESS;
+            bool resumeFailedForLiveThread = false;
             {
-                CONTEXT context{};
-                context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
-                if (GetThreadContext(thread.get(), &context))
+                oac::ScopedThreadSuspension suspension(thread.get());
+                if (suspension.Active())
                 {
-                    const DWORD64 dr6Status = context.Dr6 & kDr6StatusMask;
-                    if ((context.Dr7 & 0xFFULL) != 0 || dr6Status != 0)
+                    CONTEXT context{};
+                    context.ContextFlags = CONTEXT_FULL | CONTEXT_DEBUG_REGISTERS;
+                    if (GetThreadContext(thread.get(), &context))
                     {
-                        std::wostringstream message;
-                        message << L"Thread debug registers: DR6-status=0x" << std::hex << dr6Status
-                                << L" DR7=0x" << context.Dr7;
-                        reporter.Add((context.Dr7 & 0xFFULL) != 0
-                                ? FindingSeverity::High : FindingSeverity::Low,
-                            L"process/debugger", message.str(), processId, entry.th32ThreadID);
-                    }
-
-                    STACKFRAME64 frame{};
-                    frame.AddrPC.Offset = context.Rip;
-                    frame.AddrPC.Mode = AddrModeFlat;
-                    frame.AddrFrame.Offset = context.Rbp;
-                    frame.AddrFrame.Mode = AddrModeFlat;
-                    frame.AddrStack.Offset = context.Rsp;
-                    frame.AddrStack.Mode = AddrModeFlat;
-                    for (unsigned depth = 0; depth < 64; ++depth)
-                    {
-                        const DWORD64 address = depth == 0 ? context.Rip : frame.AddrPC.Offset;
-                        if (address != 0 && !AddressInModules(static_cast<uintptr_t>(address), modules))
+                        const DWORD64 dr6Status = context.Dr6 & kDr6StatusMask;
+                        if ((context.Dr7 & 0xFFULL) != 0 || dr6Status != 0)
                         {
-                            MEMORY_BASIC_INFORMATION memory{};
-                            if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(address),
-                                    &memory, sizeof(memory)) != 0 && IsExecutable(memory.Protect))
-                                reporter.Add(FindingSeverity::High, L"process/stack",
-                                    L"Stack frame executes outside every known module",
-                                    processId, entry.th32ThreadID, address);
+                            std::wostringstream message;
+                            message << L"Thread debug registers: DR6-status=0x" << std::hex << dr6Status
+                                    << L" DR7=0x" << context.Dr7;
+                            reporter.Add((context.Dr7 & 0xFFULL) != 0
+                                    ? FindingSeverity::High : FindingSeverity::Low,
+                                L"process/debugger", message.str(), processId, entry.th32ThreadID);
                         }
-                        if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread.get(), &frame,
-                                &context, nullptr, SymFunctionTableAccess64, SymGetModuleBase64,
-                                nullptr) || frame.AddrPC.Offset == 0) break;
+
+                        STACKFRAME64 frame{};
+                        frame.AddrPC.Offset = context.Rip;
+                        frame.AddrPC.Mode = AddrModeFlat;
+                        frame.AddrFrame.Offset = context.Rbp;
+                        frame.AddrFrame.Mode = AddrModeFlat;
+                        frame.AddrStack.Offset = context.Rsp;
+                        frame.AddrStack.Mode = AddrModeFlat;
+                        for (unsigned depth = 0; depth < 64; ++depth)
+                        {
+                            const DWORD64 address = depth == 0 ? context.Rip : frame.AddrPC.Offset;
+                            if (address != 0 && !AddressInModules(static_cast<uintptr_t>(address), modules))
+                            {
+                                MEMORY_BASIC_INFORMATION memory{};
+                                if (VirtualQueryEx(process, reinterpret_cast<LPCVOID>(address),
+                                        &memory, sizeof(memory)) != 0 && IsExecutable(memory.Protect))
+                                    reporter.Add(FindingSeverity::High, L"process/stack",
+                                        L"Stack frame executes outside every known module",
+                                        processId, entry.th32ThreadID, address);
+                            }
+                            if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process, thread.get(), &frame,
+                                    &context, nullptr, SymFunctionTableAccess64, SymGetModuleBase64,
+                                    nullptr) || frame.AddrPC.Offset == 0) break;
+                        }
                     }
+                    resumeError = suspension.Resume();
+                    resumeFailedForLiveThread = resumeError != ERROR_SUCCESS &&
+                        WaitForSingleObject(thread.get(), 0) != WAIT_OBJECT_0;
                 }
+            }
+            if (resumeFailedForLiveThread)
+            {
+                reporter.Add(FindingSeverity::Critical, L"process/thread",
+                    L"Could not resume a sampled target thread; error=" +
+                        std::to_wstring(resumeError),
+                    processId, entry.th32ThreadID);
             }
 
             if (applyHardening && setThread != nullptr)

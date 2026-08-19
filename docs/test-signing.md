@@ -105,11 +105,11 @@ protocol lifecycle/race, baseline scanner, and standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
 because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
-campaign passed at acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 Pro
-build 26100: 29 exact results, verified job ownership and process-tree termination, typed-evidence
-overflow and snapshot coverage, standard Driver Verifier, zero crash events/minidumps, and final
-containment were accepted. The validated result ZIP SHA-256 was
-`E2FA489A7F97730FC6A625F3E65D8EE2858D103AF2F8610DFDFAA7330557714F`.
+campaign passed at acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` on Windows 11 Pro
+build 26100: 30 exact results, verified job ownership and process-tree termination, bounded scheduler
+latency and coverage, typed-evidence overflow and snapshot coverage, standard Driver Verifier, zero
+crash events/minidumps, and final containment were accepted. The validated result ZIP SHA-256 was
+`D87B84BB0B3CAF2664474CC15B1DD2889152D83C0D7999D72ADF05DB8C6CC4C7`.
 This is evidence for that exact test configuration, not authorization to use test signing outside
 a disposable VM.
 

@@ -45,6 +45,7 @@ flowchart LR
     Service -->|"production session + launch ticket"| Driver["Demand-start OAC driver"]
     Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
     Job --> Target["Protected target tree"]
+    Service -->|"bounded incremental sampling"| Target
     Driver -->|"creation-time bind"| Target
     Driver -->|"status and typed alerts"| Service
 ```
@@ -54,7 +55,8 @@ the local client, resolves and keeps the executable open under that identity, ar
 creates the process suspended with the caller's primary token, confirms the exact process, assigns
 it to a kill-on-close job, and resumes it. The driver enforces the session and target identity,
 filters selected dangerous user-mode process and thread handles, and reports prior session loss to
-the next restricted service instance.
+the next restricted service instance. A separate service worker incrementally samples target memory
+regions and threads while the health loop continues to acknowledge alerts and monitor liveness.
 
 The separate `OAC-Client` scanner is a **lab-only diagnostic tool**. It is unavailable unless an
 explicit `LabMode=1` test configuration is present, and it cannot become the production controller.
@@ -77,6 +79,8 @@ explicit `LabMode=1` test configuration is present, and it cannot become the pro
 - Frozen, expiring kernel-module snapshots with stable identifiers and cursor-based paging.
 - A bounded service alert poll path that fails closed on alert loss, session revocation, or local
   handoff exhaustion.
+- An independent service health loop and one-slot, cancellation-aware target worker with fixed
+  time, region, byte, and thread budgets, continuation state, and measured suspension latency.
 - Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
 - Demand-start driver and service installation with strict package, service-policy, and cleanup
   verification in the disposable test workflow.
@@ -92,7 +96,7 @@ See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix a
 
 ### Still planned
 
-- Bounded service scheduling and centralized typed policy.
+- Centralized typed policy and production decisions for collected observations.
 - Stable executable identity plus signed manifests and policy.
 - Authenticated backend sessions, leases, and evidence acknowledgement.
 - Production signing, operational controls, privacy review, and supported-platform certification.
@@ -105,7 +109,7 @@ claim that a feature already exists.
 | Path | Responsibility |
 |---|---|
 | [`OAC/`](OAC/) | C17 WDM driver, session lifetime, callbacks, bounded scans, and telemetry |
-| [`OAC-Service/`](OAC-Service/) | Restricted production controller and target-launch owner |
+| [`OAC-Service/`](OAC-Service/) | Restricted controller, target-launch owner, and bounded scan scheduler |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated lab scanner and diagnostic reporting |
 | [`shared/`](shared/) | Production, diagnostic, and launcher IPC contracts |
@@ -156,15 +160,16 @@ does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 
-Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed:
+Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `406/406` driver-free protocol tests in both configurations;
+- `428/428` driver-free protocol tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
-- a networkless Windows 11 build 26100 campaign with 29 exact results, standard Driver Verifier,
+- a networkless Windows 11 build 26100 campaign with 30 exact results, standard Driver Verifier,
   verified job ownership, service-crash and graceful-stop process-tree containment, bounded typed
-  evidence transport and snapshots, and zero crashes or minidumps.
+  evidence transport and snapshots, independent health-loop and target-scan measurements, and zero
+  crashes or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

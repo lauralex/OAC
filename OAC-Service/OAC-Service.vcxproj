@@ -60,10 +60,13 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="service.cpp" />
+    <ClCompile Include="target_scanner.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="service.hpp" />
+    <ClInclude Include="target_scanner.hpp" />
     <ClInclude Include="..\shared\oac_ipc.h" />
+    <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
     <ClInclude Include="..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\shared\protocol\oac_validate.h" />
   </ItemGroup>
