@@ -77,8 +77,17 @@ function Invoke-SelfSignedVerification(
     [string]$FilePath,
     [string]$ExpectedThumbprint
 ) {
-    $verification = & $SignTool verify /v /pa $FilePath 2>&1
-    $verifyExit = $LASTEXITCODE
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+        # An untrusted root is expected until the package reaches the disposable
+        # VM. Windows PowerShell otherwise promotes SignTool's stderr to a
+        # terminating NativeCommandError before the result can be classified.
+        $ErrorActionPreference = 'Continue'
+        $verification = & $SignTool verify /v /pa $FilePath 2>&1
+        $verifyExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
     $verificationText = [string]::Join(
         [Environment]::NewLine,
         @($verification | ForEach-Object { $_.ToString() }))
