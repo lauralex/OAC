@@ -14,9 +14,11 @@
 #include "../../shared/oac_protocol.h"
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_lease.h"
+#include "../../shared/oac_thread_suspension.hpp"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 #include "../../shared/protocol/oac_test.h"
+#include "../../OAC-Service/target_scanner.hpp"
 
 extern "C" int OacV5CProbe(void);
 
@@ -46,7 +48,9 @@ static_assert(sizeof(OAC_SNAPSHOT_RECORD) == 560);
 static_assert(sizeof(OAC_SNAPSHOT_REQUEST) == 96);
 static_assert(offsetof(OAC_SNAPSHOT_RESPONSE, Records) == 152);
 static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
-static_assert(sizeof(OAC_IPC_RESPONSE) == 72);
+static_assert(sizeof(OAC_IPC_SCAN_METRICS) == 184);
+static_assert(offsetof(OAC_IPC_SCAN_METRICS, State) == 168);
+static_assert(sizeof(OAC_IPC_RESPONSE) == 256);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
 static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
@@ -876,6 +880,147 @@ void TestServiceLaunchMessages(TestLog& log)
     response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_OTHER_REVOCATION + 1;
     log.Expect("service launch rejection detail range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
+}
+
+void TestServiceScanMetrics(TestLog& log)
+{
+    OAC_IPC_SCAN_METRICS metrics{};
+    log.Expect("zero scanner metrics", OacIpcScanMetricsAreZero(&metrics) != 0);
+    log.Expect("unavailable scanner metrics", OacIpcScanMetricsValid(&metrics) != 0);
+
+    metrics.HealthIterations = 2;
+    metrics.MaximumHealthDelay100ns = 250 *
+        oac::kHundredNanosecondsPerMillisecond;
+    log.Expect("health metrics before target", OacIpcScanMetricsValid(&metrics) != 0);
+    log.Expect("health metrics are not empty", OacIpcScanMetricsAreZero(&metrics) == 0);
+
+    metrics.State = OAC_IPC_SCAN_READY;
+    metrics.SlicesQueued = 1;
+    metrics.SlicesCompleted = 1;
+    metrics.MemoryRegionsInspected = 8;
+    metrics.ThreadsInspected = 1;
+    metrics.MaximumSliceDuration100ns = 15000;
+    metrics.MaximumThreadSuspension100ns = 1000;
+    metrics.LastStartTime100ns = 100;
+    metrics.LastEndTime100ns = 200;
+    metrics.LastCpuTime100ns = 50;
+    metrics.LastItemsInspected = 9;
+    metrics.PeakWorkingBufferBytes = oac::kMemorySampleBytes;
+    metrics.LastOutcome = OAC_IPC_SCAN_OUTCOME_PARTIAL;
+    log.Expect("valid partial scanner metrics", OacIpcScanMetricsValid(&metrics) != 0);
+
+    auto invalid = metrics;
+    invalid.SlicesCompleted = 2;
+    log.Expect("scanner completion cannot exceed queue", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.SlicesCancelled = 1;
+    log.Expect("scanner terminal counts cannot overlap", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.SweepsCompleted = 2;
+    log.Expect("scanner sweep requires completed slice", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.LastEndTime100ns = 99;
+    log.Expect("scanner timestamps are ordered", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.LastError = ERROR_TIMEOUT;
+    log.Expect("successful scanner result has no error", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.State = OAC_IPC_SCAN_FAILED;
+    log.Expect("failed scanner state names failure", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid.LastOutcome = OAC_IPC_SCAN_OUTCOME_FAILED;
+    invalid.LastError = ERROR_TIMEOUT;
+    log.Expect("valid failed scanner metrics", OacIpcScanMetricsValid(&invalid) != 0);
+    invalid = metrics;
+    invalid.State = OAC_IPC_SCAN_UNAVAILABLE;
+    log.Expect("unavailable scanner has no work", OacIpcScanMetricsValid(&invalid) == 0);
+    invalid = metrics;
+    invalid.Reserved = 1;
+    log.Expect("scanner metrics reserved field", OacIpcScanMetricsValid(&invalid) == 0);
+
+    oac::ScanSliceBudget budget{};
+    budget.deadline100ns = 1000;
+    budget.byteLimit = 64;
+    budget.regionLimit = 2;
+    budget.threadLimit = 1;
+    oac::ScanSliceProgress progress{};
+    log.Expect("scan budget initially permits work",
+        oac::CanInspectMemory(budget, progress, 999) &&
+        oac::CanInspectThread(budget, progress, 999));
+    progress.bytesRead = budget.byteLimit;
+    log.Expect("scan byte budget is bounded",
+        !oac::CanInspectMemory(budget, progress, 999));
+    progress = {};
+    progress.regionAttempts = budget.regionLimit;
+    log.Expect("scan region budget is bounded",
+        !oac::CanInspectMemory(budget, progress, 999));
+    progress = {};
+    progress.threadsInspected = budget.threadLimit;
+    log.Expect("scan thread budget is bounded",
+        !oac::CanInspectThread(budget, progress, 999));
+    progress = {};
+    log.Expect("scan deadline is bounded",
+        !oac::CanInspectMemory(budget, progress, budget.deadline100ns) &&
+        !oac::CanInspectThread(budget, progress, budget.deadline100ns));
+}
+
+struct SuspensionTargetContext
+{
+    HANDLE readyEvent = nullptr;
+    HANDLE releaseEvent = nullptr;
+};
+
+DWORD WINAPI SuspensionTarget(void* rawContext)
+{
+    const auto* context = static_cast<const SuspensionTargetContext*>(rawContext);
+    if (!SetEvent(context->readyEvent)) return 1;
+    return WaitForSingleObject(context->releaseEvent, 5000) == WAIT_OBJECT_0
+        ? 0
+        : 2;
+}
+
+void TestThreadSuspension(TestLog& log)
+{
+    const auto runCase = [&log](bool explicitResume, const char* name)
+    {
+        SuspensionTargetContext context{};
+        context.readyEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        context.releaseEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        HANDLE thread = nullptr;
+        bool passed = context.readyEvent != nullptr && context.releaseEvent != nullptr;
+        if (passed)
+        {
+            thread = CreateThread(nullptr, 0, SuspensionTarget, &context, 0, nullptr);
+            passed = thread != nullptr &&
+                WaitForSingleObject(context.readyEvent, 5000) == WAIT_OBJECT_0;
+        }
+        if (passed)
+        {
+            {
+                oac::ScopedThreadSuspension suspension(thread);
+                passed = suspension.Active();
+                if (passed && explicitResume)
+                    passed = suspension.Resume() == ERROR_SUCCESS;
+            }
+            (void)SetEvent(context.releaseEvent);
+            passed = passed &&
+                WaitForSingleObject(thread, 5000) == WAIT_OBJECT_0;
+        }
+        if (thread != nullptr)
+        {
+            (void)SetEvent(context.releaseEvent);
+            (void)WaitForSingleObject(thread, 5000);
+            CloseHandle(thread);
+        }
+        if (context.releaseEvent != nullptr) CloseHandle(context.releaseEvent);
+        if (context.readyEvent != nullptr) CloseHandle(context.readyEvent);
+        log.Expect(name, passed);
+    };
+
+    runCase(true, "sampled thread resumes explicitly");
+    runCase(false, "sampled thread resumes during scope cleanup");
+    oac::ScopedThreadSuspension invalid(nullptr);
+    log.Expect("invalid thread cannot be suspended",
+        !invalid.Active() && invalid.Error() == ERROR_INVALID_HANDLE);
 }
 
 void TestRanges(TestLog& log)
@@ -2352,6 +2497,8 @@ int main()
     TestBasicHelpers(log);
     TestServiceFailures(log);
     TestServiceLaunchMessages(log);
+    TestServiceScanMetrics(log);
+    TestThreadSuspension(log);
     TestRanges(log);
     TestNegotiateRequest(log);
     TestClaimAndStatusRequests(log);

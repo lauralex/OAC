@@ -1,7 +1,8 @@
 # OAC architecture
 
 **Status:** WP-01 through WP-06 accepted at commit
-`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign
+`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign;
+the WP-07 scheduler is implemented in source and awaiting its commit-bound runtime campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -18,6 +19,7 @@ flowchart TD
     D -->|"creation-time path and creator match"| T
     S -->|"assign before resume"| J["Kill-on-close job"]
     J -->|"owns target tree"| T
+    S -->|"bounded incremental sampling"| T
 
     X["Elevated OAC-Client"] -->|"diagnostic protocol; LabMode=1 only"| D
     X -->|"system, target, policy, and HWID scans"| W["Documented Windows user-mode APIs"]
@@ -34,7 +36,7 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | Component | Current responsibility | Boundary |
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, own the production driver session and target job, poll and validate alerts, answer status, and serialize one caller-token suspended launch | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OACService` | Verify its restricted identity, own the production driver session and target job, poll and validate alerts, answer status, serialize one caller-token suspended launch, and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
@@ -59,6 +61,17 @@ validates a correlated status response, then keeps that driver handle for its li
 waiting for stop, failure, or target exit, it polls retained alerts on a bounded interval and fails
 closed on loss, revocation, malformed correlation, or local handoff exhaustion. An orderly stop or
 target transition performs one final bounded alert drain before the session is revoked.
+
+After a target is confirmed, job-owned, and resumed, the service starts one worker with a single
+coalescing work slot. The health loop continues independently at a 250 ms cadence and queues scan
+slices without waiting for them. Each slice carries a 20 ms deadline, a 64-region and 64 KiB memory
+budget, and a one-thread round-robin budget. Memory traversal retains a continuation cursor and
+samples executable non-image regions. Thread sampling opens the target thread under the already
+authenticated target-owner identity, immediately reverts to the restricted service identity,
+captures bounded context metadata, and resumes through a shared RAII guard. Stop, target exit, and
+service failure cancel the worker before target authority handles are released. Status reports
+coverage, CPU and wall time, queue outcomes, health latency, peak working storage, and the longest
+observed thread suspension. These are collection and health metrics; WP-08 owns policy decisions.
 
 The local message-mode pipe rejects remote clients and does not grant clients pipe-instance
 creation. Before returning status or accepting a launch, the service impersonates at impersonation
@@ -126,13 +139,14 @@ session-liveness, typed-evidence, and paged-snapshot support. The driver routes 
 records into a retained acknowledgement queue and lower-priority records into an independent
 overwrite queue with explicit gaps. One frozen, expiring kernel-module snapshot is read by stable
 identifier and cursor. Existing display-oriented findings continue through the separate diagnostic
-ring; production configuration and scan dispatch remain unavailable. The retained-alert,
+ring; production driver configuration and scan dispatch remain unavailable, while the service
+worker uses documented user-mode process APIs. The retained-alert,
 event-gap, overflow, concurrent-publication, and snapshot-paging paths passed the named baseline and
 Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Keep health and evidence acknowledgement independent of expensive scan workers.
+1. Complete commit-bound runtime acceptance for the independent health loop and bounded scan worker.
 2. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
    and backend leases.
 

@@ -9,7 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OAC_IPC_PROTOCOL_REVISION 0x00010003u
+#define OAC_IPC_PROTOCOL_REVISION 0x00010004u
 #define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
 #define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
@@ -33,6 +33,7 @@
 #define OAC_IPC_STATUS_DRIVER_READY 0x00000001u
 #define OAC_IPC_STATUS_SESSION_CLAIMED 0x00000002u
 #define OAC_IPC_STATUS_PRIOR_SESSION_LOSS 0x00000004u
+#define OAC_IPC_STATUS_SCANNER_ACTIVE 0x00000008u
 
 #define OAC_IPC_LAUNCH_CONFIRMED 0x00000001u
 #define OAC_IPC_LAUNCH_JOB_ASSIGNED 0x00000002u
@@ -149,6 +150,58 @@ typedef struct OAC_IPC_REQUEST_TAG
     uint64_t Reserved;
 } OAC_IPC_REQUEST;
 
+typedef enum OAC_IPC_SCAN_STATE_TAG
+{
+    OAC_IPC_SCAN_UNAVAILABLE = 0,
+    OAC_IPC_SCAN_READY = 1,
+    OAC_IPC_SCAN_RUNNING = 2,
+    OAC_IPC_SCAN_STOPPED = 3,
+    OAC_IPC_SCAN_FAILED = 4
+} OAC_IPC_SCAN_STATE;
+
+typedef enum OAC_IPC_SCAN_OUTCOME_TAG
+{
+    OAC_IPC_SCAN_OUTCOME_NONE = 0,
+    OAC_IPC_SCAN_OUTCOME_PARTIAL = 1,
+    OAC_IPC_SCAN_OUTCOME_SWEEP_COMPLETED = 2,
+    OAC_IPC_SCAN_OUTCOME_CANCELLED = 3,
+    OAC_IPC_SCAN_OUTCOME_FAILED = 4
+} OAC_IPC_SCAN_OUTCOME;
+
+/*
+ * Scanner metrics are cumulative for one service process. Times and durations
+ * use 100-nanosecond units. A slice is one bounded worker invocation; a sweep
+ * is one complete pass over the target's current memory map and thread set.
+ */
+typedef struct OAC_IPC_SCAN_METRICS_TAG
+{
+    uint64_t HealthIterations;
+    uint64_t MaximumHealthDelay100ns;
+    uint64_t SlicesQueued;
+    uint64_t SlicesCompleted;
+    uint64_t SlicesCoalesced;
+    uint64_t SlicesCancelled;
+    uint64_t SlicesFailed;
+    uint64_t SweepsCompleted;
+    uint64_t MemoryRegionsInspected;
+    uint64_t MemoryBytesRead;
+    uint64_t ThreadsInspected;
+    uint64_t ThreadsSkipped;
+    uint64_t MaximumSliceDuration100ns;
+    uint64_t MaximumThreadSuspension100ns;
+    uint64_t LastStartTime100ns;
+    uint64_t LastEndTime100ns;
+    uint64_t LastCpuTime100ns;
+    uint64_t LastBytesRead;
+    uint64_t LastItemsInspected;
+    uint64_t LastItemsSkipped;
+    uint64_t PeakWorkingBufferBytes;
+    uint32_t State;
+    uint32_t LastOutcome;
+    uint32_t LastError;
+    uint32_t Reserved;
+} OAC_IPC_SCAN_METRICS;
+
 typedef struct OAC_IPC_RESPONSE_TAG
 {
     OAC_IPC_HEADER Header;
@@ -162,6 +215,7 @@ typedef struct OAC_IPC_RESPONSE_TAG
     uint64_t SessionLossSequence;
     uint32_t LastSessionLossReason;
     uint32_t Reserved;
+    OAC_IPC_SCAN_METRICS Scanner;
 } OAC_IPC_RESPONSE;
 
 typedef struct OAC_IPC_LAUNCH_REQUEST_TAG
@@ -197,6 +251,82 @@ static inline int OacIpcHeaderMatches(
         header->Flags == 0 && header->RequestId != 0;
 }
 
+static inline int OacIpcScanMetricsAreZero(
+    const OAC_IPC_SCAN_METRICS* metrics)
+{
+    const uint8_t* bytes;
+    size_t index;
+
+    if (metrics == 0) return 0;
+    bytes = (const uint8_t*)metrics;
+    for (index = 0; index < sizeof(*metrics); ++index)
+    {
+        if (bytes[index] != 0) return 0;
+    }
+    return 1;
+}
+
+static inline int OacIpcScanMetricsValid(
+    const OAC_IPC_SCAN_METRICS* metrics)
+{
+    if (metrics == 0 || metrics->State > OAC_IPC_SCAN_FAILED ||
+        metrics->LastOutcome > OAC_IPC_SCAN_OUTCOME_FAILED ||
+        metrics->Reserved != 0 ||
+        metrics->SlicesCompleted > metrics->SlicesQueued ||
+        metrics->SlicesCancelled >
+            metrics->SlicesQueued - metrics->SlicesCompleted ||
+        metrics->SlicesFailed >
+            metrics->SlicesQueued - metrics->SlicesCompleted -
+                metrics->SlicesCancelled ||
+        metrics->SweepsCompleted > metrics->SlicesCompleted)
+    {
+        return 0;
+    }
+
+    if (metrics->LastOutcome == OAC_IPC_SCAN_OUTCOME_NONE)
+    {
+        if (metrics->LastStartTime100ns != 0 ||
+            metrics->LastEndTime100ns != 0 ||
+            metrics->LastCpuTime100ns != 0 ||
+            metrics->LastBytesRead != 0 ||
+            metrics->LastItemsInspected != 0 ||
+            metrics->LastItemsSkipped != 0 || metrics->LastError != 0)
+        {
+            return 0;
+        }
+    }
+    else
+    {
+        if (metrics->LastStartTime100ns == 0 ||
+            metrics->LastEndTime100ns < metrics->LastStartTime100ns)
+        {
+            return 0;
+        }
+        if ((metrics->LastOutcome == OAC_IPC_SCAN_OUTCOME_PARTIAL ||
+             metrics->LastOutcome == OAC_IPC_SCAN_OUTCOME_SWEEP_COMPLETED) !=
+            (metrics->LastError == 0))
+        {
+            return 0;
+        }
+    }
+
+    if (metrics->State == OAC_IPC_SCAN_UNAVAILABLE &&
+        (metrics->SlicesQueued != 0 || metrics->SlicesCompleted != 0 ||
+         metrics->SlicesCoalesced != 0 || metrics->SlicesCancelled != 0 ||
+         metrics->SlicesFailed != 0 || metrics->SweepsCompleted != 0 ||
+         metrics->LastOutcome != OAC_IPC_SCAN_OUTCOME_NONE))
+    {
+        return 0;
+    }
+    if (metrics->State == OAC_IPC_SCAN_FAILED &&
+        (metrics->LastOutcome != OAC_IPC_SCAN_OUTCOME_FAILED ||
+         metrics->LastError == 0))
+    {
+        return 0;
+    }
+    return 1;
+}
+
 static inline int OacIpcExecutablePathValid(
     const uint16_t* path,
     uint32_t length)
@@ -226,7 +356,8 @@ static inline int OacIpcExecutablePathValid(
         }
         if (value >= 0xD800u && value <= 0xDBFFu)
         {
-            if (++index >= length || path[index] < 0xDC00u ||
+            ++index;
+            if (index >= length || path[index] < 0xDC00u ||
                 path[index] > 0xDFFFu)
             {
                 return 0;
@@ -330,41 +461,58 @@ static inline int OacIpcValidateLaunchResponse(
     _Static_assert((Expression), Message)
 #endif
 
+#if defined(__clang__)
+#define OAC_IPC_OFFSETOF(Type, Field) __builtin_offsetof(Type, Field)
+#else
+#define OAC_IPC_OFFSETOF(Type, Field) offsetof(Type, Field)
+#endif
+
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_HEADER) == 24,
     "OAC_IPC_HEADER layout changed");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_REQUEST) == 32,
     "OAC_IPC_REQUEST layout changed");
-OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 72,
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_SCAN_METRICS) == 184,
+    "OAC_IPC_SCAN_METRICS layout changed");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_SCAN_METRICS, State) == 168,
+    "OAC_IPC_SCAN_METRICS state moved");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_SCAN_METRICS, LastError) == 176,
+    "OAC_IPC_SCAN_METRICS error moved");
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 256,
     "OAC_IPC_RESPONSE layout changed");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_RESPONSE, SessionLossSequence) == 56,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, SessionLossSequence) == 56,
     "OAC_IPC_RESPONSE liveness sequence moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_RESPONSE, LastSessionLossReason) == 64,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, LastSessionLossReason) == 64,
     "OAC_IPC_RESPONSE liveness reason moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_RESPONSE, Reserved) == 68,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Reserved) == 68,
     "OAC_IPC_RESPONSE reserved field moved");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Scanner) == 72,
+    "OAC_IPC_RESPONSE scanner metrics moved");
 OAC_IPC_STATIC_ASSERT(sizeof(uint16_t) == 2,
     "OAC IPC paths require 16-bit code units");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,
     "OAC_IPC_LAUNCH_REQUEST layout changed");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePathLength) == 24,
+    OAC_IPC_OFFSETOF(OAC_IPC_LAUNCH_REQUEST, ExecutablePathLength) == 24,
     "OAC_IPC_LAUNCH_REQUEST length moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32,
+    OAC_IPC_OFFSETOF(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32,
     "OAC_IPC_LAUNCH_REQUEST path moved");
 OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56,
     "OAC_IPC_LAUNCH_RESPONSE layout changed");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_RESPONSE, TargetProcessId) == 44,
+    OAC_IPC_OFFSETOF(OAC_IPC_LAUNCH_RESPONSE, TargetProcessId) == 44,
     "OAC_IPC_LAUNCH_RESPONSE target identity moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureStage) == 48,
+    OAC_IPC_OFFSETOF(OAC_IPC_LAUNCH_RESPONSE, FailureStage) == 48,
     "OAC_IPC_LAUNCH_RESPONSE failure stage moved");
 OAC_IPC_STATIC_ASSERT(
-    offsetof(OAC_IPC_LAUNCH_RESPONSE, FailureDetail) == 52,
+    OAC_IPC_OFFSETOF(OAC_IPC_LAUNCH_RESPONSE, FailureDetail) == 52,
     "OAC_IPC_LAUNCH_RESPONSE failure detail moved");
 OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_STAGE_MASK) == 0 &&
@@ -375,3 +523,4 @@ OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_TARGET_JOB <= 0xFu,
     "service failure stage exceeds its field");
 
 #undef OAC_IPC_STATIC_ASSERT
+#undef OAC_IPC_OFFSETOF

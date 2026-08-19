@@ -18,6 +18,7 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Retained alerts | High and critical typed records remain in a dedicated queue until the controlling service acknowledges an exact delivered sequence. Full-queue loss preserves existing data, records severity counts, and revokes production authority. |
 | Operational events | Info, low, and medium records use an independent bounded queue with explicit sequence gaps and drop counts, so inventory pressure cannot overwrite retained alerts. |
 | Paged snapshots | One frozen kernel-module inventory is bound to the current session, random snapshot identity, scan identity, cursor generation, and 30-second expiration. |
+| Bounded target sampling | An independent service health loop queues incremental memory-region and thread-context slices into one coalescing worker slot. Fixed time, byte, region, and thread budgets plus cancellation and resume guards are reported through status metrics. |
 | Handle protection | Signed object callbacks filter selected dangerous user-mode process and thread rights for the bound target. |
 | Cleanup and retirement | Per-file cleanup revokes authority and completes rundown. A cleaned session that still references a live target remains as an unusable tombstone until target exit. |
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
@@ -28,8 +29,9 @@ remain planned work.
 
 ## Lab scanner matrix
 
-The following capabilities belong to `OAC-Client` and require explicit `LabMode=1`. The production
-service does not expose these scans.
+The following broad diagnostic capabilities belong to `OAC-Client` and require explicit
+`LabMode=1`. The production service does not expose this diagnostic interface; its smaller target
+worker currently reports bounded coverage and performance metrics rather than policy findings.
 
 | Capability | Implementation |
 |---|---|

@@ -469,7 +469,8 @@ int SendRequest(ULONG requestType)
         : OAC_IPC_TYPE_STATUS_RESPONSE;
     constexpr ULONG knownStatusFlags = OAC_IPC_STATUS_DRIVER_READY |
         OAC_IPC_STATUS_SESSION_CLAIMED |
-        OAC_IPC_STATUS_PRIOR_SESSION_LOSS;
+        OAC_IPC_STATUS_PRIOR_SESSION_LOSS |
+        OAC_IPC_STATUS_SCANNER_ACTIVE;
     if (!OacIpcHeaderMatches(
             &response.Header,
             returned,
@@ -489,7 +490,8 @@ int SendRequest(ULONG requestType)
             response.DriverProtocolVersion != 0 ||
             response.DriverCapabilities != 0 ||
             response.SessionLossSequence != 0 ||
-            response.LastSessionLossReason != 0 || response.Reserved != 0)
+            response.LastSessionLossReason != 0 || response.Reserved != 0 ||
+            !OacIpcScanMetricsAreZero(&response.Scanner))
         {
             std::wcerr << L"OACService returned an invalid rejection.\n";
             return 4;
@@ -511,7 +513,11 @@ int SendRequest(ULONG requestType)
         ((response.SessionLossSequence == 0) !=
          (response.LastSessionLossReason == OAC_V5_REVOKE_NONE)) ||
         ((response.SessionLossSequence != 0) !=
-         ((response.StatusFlags & OAC_IPC_STATUS_PRIOR_SESSION_LOSS) != 0)))
+         ((response.StatusFlags & OAC_IPC_STATUS_PRIOR_SESSION_LOSS) != 0)) ||
+        !OacIpcScanMetricsValid(&response.Scanner) ||
+        (((response.StatusFlags & OAC_IPC_STATUS_SCANNER_ACTIVE) != 0) !=
+         (response.Scanner.State == OAC_IPC_SCAN_READY ||
+          response.Scanner.State == OAC_IPC_SCAN_RUNNING)))
     {
         std::wcerr << L"OACService returned inconsistent client identity.\n";
         return 4;
@@ -526,6 +532,24 @@ int SendRequest(ULONG requestType)
                << L"; flags=0x" << response.StatusFlags << std::dec
                << L"; session-loss-sequence=" << response.SessionLossSequence
                << L"; last-session-loss=" << response.LastSessionLossReason
+               << L"; scan-state=" << response.Scanner.State
+               << L"; scan-queued=" << response.Scanner.SlicesQueued
+               << L"; scan-completed=" << response.Scanner.SlicesCompleted
+               << L"; scan-coalesced=" << response.Scanner.SlicesCoalesced
+               << L"; scan-cancelled=" << response.Scanner.SlicesCancelled
+               << L"; scan-failed=" << response.Scanner.SlicesFailed
+               << L"; scan-sweeps=" << response.Scanner.SweepsCompleted
+               << L"; scan-regions=" << response.Scanner.MemoryRegionsInspected
+               << L"; scan-bytes=" << response.Scanner.MemoryBytesRead
+               << L"; scan-threads=" << response.Scanner.ThreadsInspected
+               << L"; scan-skipped=" << response.Scanner.ThreadsSkipped
+               << L"; health-iterations=" << response.Scanner.HealthIterations
+               << L"; health-max-us="
+               << response.Scanner.MaximumHealthDelay100ns / 10
+               << L"; scan-max-us="
+               << response.Scanner.MaximumSliceDuration100ns / 10
+               << L"; suspend-max-us="
+               << response.Scanner.MaximumThreadSuspension100ns / 10
                << L'\n';
     return 0;
 }

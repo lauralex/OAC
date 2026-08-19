@@ -7,6 +7,9 @@ acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the Windows 
 26100 disposable-VM and standard Driver Verifier campaign, including job/liveness and typed
 evidence transport.
 
+The launcher/service status extension for bounded scheduling is implemented in source; its
+commit-bound service and VM acceptance is pending.
+
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
 ABI. All wire headers are C-compatible and have compile-time size and offset assertions.
@@ -176,8 +179,13 @@ WP-11 rather than being simulated locally.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010003`. Hello and status retain fixed 32-byte
-requests; status responses are 72 bytes and include the session-loss sequence and cause. A launch
+The local launcher/service wire revision is `0x00010004`. Hello and status retain fixed 32-byte
+requests. Status responses are 256 bytes and include the session-loss sequence and cause plus a
+strict 184-byte scanner record. That record reports health-loop iterations and maximum delay,
+queued/completed/coalesced/cancelled/failed slices, completed sweeps, memory and thread coverage,
+last-slice timing and resource use, maximum scan and thread-suspension duration, and the current
+worker state/outcome/error. Counts, state, timestamps, reserved fields, and success/error pairs are
+validated by both endpoints. A launch
 request is a fixed 1056-byte message containing one counted absolute drive path with no arguments;
 its 56-byte response correlates the request, service, client, session, target PID, confirmed binding,
 verified job assignment, and resumed-thread result. A rejection also carries an exact
@@ -223,5 +231,6 @@ Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/
 response correlation, explicit revoke/liveness layouts, lease-state decisions, and IPC validation.
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
 termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
-manifests and policy, bounded scheduling, and authenticated backend sessions remain separate work
-packages.
+manifests, centralized policy, and authenticated backend sessions remain separate work packages.
+The current harness additionally requires bounded scheduler coverage, health latency, slice
+duration, and thread-resume metrics; that new runtime evidence is pending the WP-07 campaign.

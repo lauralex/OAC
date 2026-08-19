@@ -22,7 +22,8 @@
   WP-01 through WP-06. The campaign covered service-crash and graceful-stop target-tree
   containment, session-loss reporting, retained-alert delivery, event-gap accounting, overflow
   behavior, and paged kernel-module snapshots. Signed manifests or policy, authenticated backend
-  leases, and authenticated upload are not implemented.
+  leases, and authenticated upload are not implemented. The current source adds the WP-07
+  independent health loop and bounded target-scan worker; its commit-bound VM acceptance is pending.
 
 ## Repository map
 
@@ -30,11 +31,11 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session, target job, and one serialized suspended-launch transaction |
+| `OAC-Service/` | Restricted production controller; owns the driver session, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
-| `shared/oac_ipc.h` | Fixed launcher-to-service status and launch IPC ABI |
+| `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, and event-schema tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |

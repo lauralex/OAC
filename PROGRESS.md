@@ -1,6 +1,6 @@
 # OAC hardening progress
 
-**Status date:** 2026-08-18
+**Status date:** 2026-08-19
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -9,7 +9,8 @@
 WP-01 through WP-06 form the accepted production-control, target-lifetime, and local-evidence MVP.
 Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the commit-bound
 disposable-VM and standard Driver Verifier campaign described below. Status still distinguishes
-source, evidence, and the remaining production-hardening work packages.
+source, evidence, and the remaining production-hardening work packages. WP-07 is implemented in
+source and local tests; its commit-bound service and VM acceptance is pending.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -20,7 +21,7 @@ source, evidence, and the remaining production-hardening work packages.
 | WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
 | WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
-| WP-07 Bounded service scheduler | Planned | No independent health loop or bounded worker scheduler exists |
+| WP-07 Bounded service scheduler | Implemented; acceptance pending | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard are present; run the commit-bound service/VM campaign |
 | WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
 | WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
@@ -83,7 +84,9 @@ The working tree adds or changes these implementation areas:
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
   service-owned target job, bounded alert polling/handoff, and a backend-independent lease-state
-  policy seam.
+  policy seam. The service now keeps target inspection off the health loop, queues incremental
+  memory/thread slices through one coalescing worker slot, and reports strict coverage and latency
+  metrics to the launcher.
 - Package/install and VM harness changes for the service boundary, production session lifecycle/race test, and
   Driver Verifier rerun.
 
@@ -97,18 +100,19 @@ backend capabilities remain unavailable.
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `406/406` in each configuration after the WP-06 implementation |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `428/428` in each configuration, including scheduler budgets, metrics, and thread-resume cleanup |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
+| Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
 | `tools/Test-OACRepository.ps1` (seven PowerShell, eleven XML, five YAML, one Python) | Passed |
 | Markdown local-link resolution across the repository | Passed |
 | Parse all five `.github` YAML files with PyYAML | Passed |
 | `git diff --check` across the shared working tree | Passed |
 
-`actionlint`, Clang-Tidy, and PSScriptAnalyzer are not installed on this workstation. The current
-CI workflow does not yet provide CodeQL, SBOM generation, or secret-scanning evidence. These are
-explicit remaining CI/static-analysis gaps rather than implied passes.
+`actionlint` and PSScriptAnalyzer are not installed on this workstation. The current CI workflow
+does not yet provide CodeQL or SBOM-generation evidence. These are explicit remaining CI and
+static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
@@ -139,10 +143,10 @@ record remain.
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #11 and remain
   required for each merge.
-- WP-07 and WP-08 must still add bounded scheduling and centralized typed policy before the
-  hardened-foundation definition is met.
+- WP-07 still requires its commit-bound runtime acceptance; WP-08 must add centralized typed policy
+  before the hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready or as a complete hardened foundation. The control
-plane still lacks bounded scan scheduling, centralized policy, signed manifests, and authenticated
-backend delivery listed above.
+plane still lacks centralized policy, signed manifests, and authenticated backend delivery listed
+above; the bounded scheduler remains evidence-pending until its named campaign passes.

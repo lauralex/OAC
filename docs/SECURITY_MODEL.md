@@ -1,7 +1,8 @@
 # OAC security model
 
 **Status:** WP-01 through WP-06 controls accepted at commit
-`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign
+`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign;
+the WP-07 scheduler is implemented in source and awaiting runtime acceptance
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -30,6 +31,7 @@ trust boundaries, adversaries, and failure behavior.
 | Protected target | The service resolves one executable under the authenticated caller identity, creates it suspended with that token, and uses a bounded one-use ticket to bind and confirm the exact process before resume | Creation-time binding, exact-handle confirmation, and resume passed on the named campaign |
 | Target-tree lifetime | The service assigns the suspended target to an unnamed kill-on-close job before resume; graceful stop explicitly revokes the driver session and service failure closes both authority handles | The named VM campaign verified parent/child termination after service crash and graceful stop, plus SCM recovery |
 | Session liveness | Status carries a monotonic device-lifetime loss sequence and first observed revoke cause | The named campaign observed exact sequence `0,1,2` with `none`, `service exit`, then `requested shutdown` |
+| Service scheduler | Alert and liveness work remains on the health loop; one coalescing worker incrementally samples target memory regions and threads under fixed budgets | Driver-free budget, metric, and resume tests plus Clang-Tidy pass; restricted-service runtime and latency evidence is pending |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
@@ -121,6 +123,10 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   kernel provenance, adds local ingestion ordering, and drains once more before orderly shutdown.
 - Lower-priority event overwrite cannot consume alert capacity, and frozen snapshot work is paged,
   identity-bound, expiring, and unavailable for new work after revocation.
+- The health loop never performs target memory or thread inspection. One cancellation-aware worker
+  keeps continuation state and enforces per-slice time, byte, region, and thread limits. It opens
+  threads under the authenticated target-owner identity, reverts immediately, and uses one shared
+  RAII guard so every successful suspension has an explicit resume and cleanup fallback.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
 WP-01 through WP-06 statements combine source behavior with one exact platform acceptance run. The
@@ -132,7 +138,6 @@ effective-right, compatibility, or production-deployment matrix.
 ## Planned controls
 
 - Signed-manifest and stable executable-identity verification before a launch ticket is armed.
-- Independent health and bounded scan workers.
 - Central typed policy, signed game manifests, signed remote policy, and authenticated backend
   lease/upload.
 

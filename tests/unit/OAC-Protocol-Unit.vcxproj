@@ -69,9 +69,11 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\shared\oac_protocol.h" />
+    <ClInclude Include="..\..\shared\oac_thread_suspension.hpp" />
     <ClInclude Include="..\..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\..\shared\protocol\oac_validate.h" />
     <ClInclude Include="..\..\shared\protocol\oac_test.h" />
+    <ClInclude Include="..\..\OAC-Service\target_scanner.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

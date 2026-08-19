@@ -1244,12 +1244,14 @@ DWORD LaunchTarget(
     const OAC_IPC_LAUNCH_REQUEST& request,
     ClientIdentity& client,
     HANDLE& targetProcess,
+    HANDLE& targetUserToken,
     DWORD& targetProcessId,
     bool& driverSessionChanged,
     uint32_t& failureStage,
     uint32_t& failureDetail)
 {
     targetProcess = nullptr;
+    targetUserToken = nullptr;
     targetProcessId = 0;
     driverSessionChanged = false;
     failureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
@@ -1387,6 +1389,21 @@ DWORD LaunchTarget(
         return error;
     }
 
+    HANDLE rawScannerToken = nullptr;
+    if (!DuplicateTokenEx(
+            client.primaryToken.get(),
+            TOKEN_QUERY | TOKEN_IMPERSONATE,
+            nullptr,
+            SecurityImpersonation,
+            TokenImpersonation,
+            &rawScannerToken))
+    {
+        error = GetLastError();
+        TerminateSuspendedProcess(process.get());
+        return error == ERROR_SUCCESS ? ERROR_CANNOT_IMPERSONATE : error;
+    }
+    UniqueHandle scannerToken(rawScannerToken);
+
     failureStage = OAC_IPC_LAUNCH_STAGE_RESUME_THREAD;
     if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0)
     {
@@ -1407,6 +1424,7 @@ DWORD LaunchTarget(
     }
 
     targetProcessId = processInformation.dwProcessId;
+    targetUserToken = scannerToken.release();
     targetProcess = process.release();
     failureStage = OAC_IPC_LAUNCH_STAGE_NONE;
     failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
@@ -1558,13 +1576,14 @@ DWORD OpenAndClaimDriver(
 ServiceHost::ServiceHost(HANDLE stopEvent) noexcept
     : stopEvent_(stopEvent),
       fatalEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
-      targetReadyEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr))
+      targetReadyEvent_(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+      targetScanner_(stopEvent)
 {
 }
 
 ServiceHost::~ServiceHost()
 {
-    Stop();
+    (void)Stop();
     if (targetReadyEvent_ != nullptr) CloseHandle(targetReadyEvent_);
     if (fatalEvent_ != nullptr) CloseHandle(fatalEvent_);
 }
@@ -1575,7 +1594,7 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
     try
     {
         if (stopEvent_ == nullptr || fatalEvent_ == nullptr ||
-            targetReadyEvent_ == nullptr)
+            targetReadyEvent_ == nullptr || !targetScanner_.Ready())
             return ERROR_NOT_ENOUGH_MEMORY;
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
@@ -1665,12 +1684,24 @@ DWORD ServiceHost::Wait() noexcept
 {
     HANDLE waits[] = {stopEvent_, fatalEvent_, targetReadyEvent_};
     DWORD wait;
+    ULONGLONG lastHealthTime = GetTickCount64();
+    const auto pollHealth = [this, &lastHealthTime]() noexcept -> DWORD
+    {
+        const ULONGLONG now = GetTickCount64();
+        const ULONGLONG elapsed = now >= lastHealthTime
+            ? now - lastHealthTime
+            : 0;
+        lastHealthTime = now;
+        targetScanner_.RecordHealthIteration(
+            elapsed * oac::kHundredNanosecondsPerMillisecond);
+        return PollAlerts();
+    };
     for (;;)
     {
         wait = WaitForMultipleObjects(
             3, waits, FALSE, kAlertPollIntervalMs);
         if (wait != WAIT_TIMEOUT) break;
-        const DWORD error = PollAlerts();
+        const DWORD error = pollHealth();
         if (error != ERROR_SUCCESS) return error;
     }
     if (wait == WAIT_OBJECT_0 + 1)
@@ -1680,7 +1711,7 @@ DWORD ServiceHost::Wait() noexcept
             ERROR_SUCCESS));
     if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
     {
-        const DWORD error = PollAlerts();
+        const DWORD error = pollHealth();
         if (error != ERROR_SUCCESS) return error;
     }
     if (wait == WAIT_OBJECT_0) return ERROR_SUCCESS;
@@ -1691,14 +1722,36 @@ DWORD ServiceHost::Wait() noexcept
     }
     if (targetProcess_ == nullptr || targetProcess_ == INVALID_HANDLE_VALUE)
         return ERROR_INVALID_HANDLE;
+    const DWORD targetProcessId = GetProcessId(targetProcess_);
+    if (targetProcessId == 0) return GetLastError();
+    DWORD error = targetScanner_.Start(
+        targetProcess_,
+        targetProcessId,
+        targetUserToken_);
+    if (error != ERROR_SUCCESS) return error;
+    error = targetScanner_.QueueSlice();
+    if (error == ERROR_OPERATION_ABORTED &&
+        WaitForSingleObject(targetProcess_, 0) == WAIT_OBJECT_0)
+        return ERROR_SUCCESS;
+    if (error != ERROR_SUCCESS) return error;
 
-    HANDLE targetWaits[] = {stopEvent_, fatalEvent_, targetProcess_};
+    HANDLE targetWaits[] = {
+        stopEvent_,
+        fatalEvent_,
+        targetProcess_,
+        targetScanner_.FailureEvent()
+    };
     for (;;)
     {
         wait = WaitForMultipleObjects(
-            3, targetWaits, FALSE, kAlertPollIntervalMs);
+            4, targetWaits, FALSE, kAlertPollIntervalMs);
         if (wait != WAIT_TIMEOUT) break;
-        const DWORD error = PollAlerts();
+        error = pollHealth();
+        if (error != ERROR_SUCCESS) return error;
+        error = targetScanner_.QueueSlice();
+        if (error == ERROR_OPERATION_ABORTED &&
+            WaitForSingleObject(targetProcess_, 0) == WAIT_OBJECT_0)
+            break;
         if (error != ERROR_SUCCESS) return error;
     }
     if (wait == WAIT_OBJECT_0 + 1)
@@ -1710,17 +1763,28 @@ DWORD ServiceHost::Wait() noexcept
     }
     if (wait == WAIT_OBJECT_0 || wait == WAIT_OBJECT_0 + 2)
     {
-        const DWORD error = PollAlerts();
+        error = pollHealth();
         return error == ERROR_SUCCESS ? ERROR_SUCCESS : error;
     }
-    const DWORD error = GetLastError();
-    return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
+    if (wait == WAIT_OBJECT_0 + 3)
+    {
+        error = targetScanner_.FailureError();
+        return error == ERROR_SUCCESS ? ERROR_GEN_FAILURE : error;
+    }
+    const DWORD waitError = GetLastError();
+    return waitError == ERROR_SUCCESS ? ERROR_GEN_FAILURE : waitError;
 }
 
-void ServiceHost::Stop() noexcept
+DWORD ServiceHost::Stop() noexcept
 {
-    if (InterlockedCompareExchange(&stopped_, TRUE, FALSE) != FALSE) return;
+    if (InterlockedCompareExchange(&stopped_, TRUE, FALSE) != FALSE)
+    {
+        return static_cast<DWORD>(InterlockedCompareExchange(
+            &stopError_, ERROR_SUCCESS, ERROR_SUCCESS));
+    }
     if (stopEvent_ != nullptr) SetEvent(stopEvent_);
+
+    DWORD cleanupError = ERROR_SUCCESS;
 
     if (pipeThread_ != nullptr)
     {
@@ -1733,6 +1797,8 @@ void ServiceHost::Stop() noexcept
         CloseHandle(firstPipe_);
         firstPipe_ = INVALID_HANDLE_VALUE;
     }
+    const DWORD scannerError = targetScanner_.Stop();
+    if (scannerError != ERROR_SUCCESS) cleanupError = scannerError;
     if (driver_ != INVALID_HANDLE_VALUE)
     {
         (void)RevokeDriverSession(
@@ -1752,11 +1818,18 @@ void ServiceHost::Stop() noexcept
         CloseHandle(targetProcess_);
         targetProcess_ = nullptr;
     }
+    if (targetUserToken_ != nullptr)
+    {
+        CloseHandle(targetUserToken_);
+        targetUserToken_ = nullptr;
+    }
     if (driver_ != INVALID_HANDLE_VALUE)
     {
         CloseHandle(driver_);
         driver_ = INVALID_HANDLE_VALUE;
     }
+    InterlockedExchange(&stopError_, static_cast<LONG>(cleanupError));
+    return cleanupError;
 }
 
 void ServiceHost::SetFatalError(DWORD error) noexcept
@@ -1839,6 +1912,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                 response.Win32Error = authorization;
                 response.FailureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
                 HANDLE launchedProcess = nullptr;
+                HANDLE launchedUserToken = nullptr;
                 if (authorization == ERROR_SUCCESS)
                 {
                     bool driverSessionChanged = false;
@@ -1855,6 +1929,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                             request,
                             client,
                             launchedProcess,
+                            launchedUserToken,
                             targetProcessId,
                             driverSessionChanged,
                             response.FailureStage,
@@ -1896,19 +1971,27 @@ DWORD ServiceHost::PipeLoop() noexcept
                 if (error == ERROR_SUCCESS &&
                     response.Win32Error == ERROR_SUCCESS)
                 {
-                    if (targetProcess_ != nullptr || launchedProcess == nullptr)
+                    if (targetProcess_ != nullptr ||
+                        targetUserToken_ != nullptr ||
+                        launchedProcess == nullptr ||
+                        launchedUserToken == nullptr)
                     {
                         error = ERROR_INVALID_STATE;
                     }
                     else
                     {
                         targetProcess_ = launchedProcess;
+                        targetUserToken_ = launchedUserToken;
                         launchedProcess = nullptr;
-                        if (!SetEvent(targetReadyEvent_))
+                        launchedUserToken = nullptr;
+                        if (error == ERROR_SUCCESS &&
+                            !SetEvent(targetReadyEvent_))
                             error = GetLastError();
                     }
                 }
                 if (launchedProcess != nullptr) CloseHandle(launchedProcess);
+                if (launchedUserToken != nullptr)
+                    CloseHandle(launchedUserToken);
             }
             else if (bytesRead == sizeof(OAC_IPC_REQUEST))
             {
@@ -1959,6 +2042,13 @@ DWORD ServiceHost::PipeLoop() noexcept
                                 driverStatus.SessionLossSequence;
                             response.LastSessionLossReason =
                                 driverStatus.LastSessionLossReason;
+                            targetScanner_.CopyMetrics(response.Scanner);
+                            if (response.Scanner.State == OAC_IPC_SCAN_READY ||
+                                response.Scanner.State == OAC_IPC_SCAN_RUNNING)
+                            {
+                                response.StatusFlags |=
+                                    OAC_IPC_STATUS_SCANNER_ACTIVE;
+                            }
                             if (driverStatus.SessionLossSequence != 0)
                             {
                                 response.StatusFlags |=

@@ -131,3 +131,17 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   scheduler or pretending that in-memory delivery is backend evidence. The complete local and
   disposable-VM/Driver Verifier acceptance passed at commit
   `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 build 26100.
+
+## ADR-012: Keep target inspection off the service health loop
+
+- **Status:** Accepted in source; runtime acceptance pending
+- **Date:** 2026-08-19
+- **Decision:** Keep alert acknowledgement and liveness monitoring on the service's 250 ms health
+  loop. Queue target inspection into one worker with a single coalescing slot, explicit cancellation,
+  continuation state, and fixed per-slice time, memory-region, byte, and thread budgets. Open target
+  threads only under the authenticated target-owner identity, immediately restore the restricted
+  service identity, and use one shared RAII suspension guard in both service and diagnostic scanners.
+- **Consequence:** Slow or repeated inspection cannot create an unbounded work backlog or directly
+  block alert acknowledgement. Status exposes strict health, queue, coverage, CPU, storage, and
+  suspension metrics. Collection remains separate from WP-08 policy decisions, and the complete
+  restricted-service/VM acceptance must pass before this work package is called tested.

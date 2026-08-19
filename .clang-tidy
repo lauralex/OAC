@@ -6,6 +6,7 @@ Checks: >
   performance-*,
   portability-*,
   -bugprone-easily-swappable-parameters,
+  -performance-enum-size,
   -performance-no-int-to-ptr,
   -clang-analyzer-optin.core.EnumCastOutOfRange
 WarningsAsErrors: '*'

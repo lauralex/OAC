@@ -7,6 +7,7 @@
 
 #include "..\shared\oac_ipc.h"
 #include "..\shared\protocol\oac_v5.h"
+#include "target_scanner.hpp"
 
 class ServiceHost final
 {
@@ -19,7 +20,7 @@ public:
 
     DWORD Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept;
     DWORD Wait() noexcept;
-    void Stop() noexcept;
+    DWORD Stop() noexcept;
 
 private:
     static constexpr std::size_t kAlertCacheCapacity = 32;
@@ -37,7 +38,10 @@ private:
     HANDLE driver_ = INVALID_HANDLE_VALUE;
     HANDLE targetJob_ = nullptr;
     HANDLE targetProcess_ = nullptr;
+    HANDLE targetUserToken_ = nullptr;
+    oac::TargetScanWorker targetScanner_;
     volatile LONG stopped_ = FALSE;
+    volatile LONG stopError_ = ERROR_SUCCESS;
     volatile LONG fatalError_ = ERROR_SUCCESS;
     ULONG driverVersion_ = 0;
     ULONGLONG driverCapabilities_ = 0;

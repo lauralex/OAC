@@ -115,7 +115,13 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
                 if (InterlockedCompareExchange(&g_StopRequested, TRUE, FALSE) == FALSE)
                     ReportStatus(SERVICE_STOP_PENDING, ERROR_SUCCESS, 0, 10000);
             }
-            host->Stop();
+            const DWORD stopResult = host->Stop();
+            if ((result == ERROR_SUCCESS || result == ERROR_OPERATION_ABORTED) &&
+                stopResult != ERROR_SUCCESS)
+            {
+                result = stopResult;
+                failureStage = OAC_SERVICE_STAGE_RUNTIME;
+            }
         }
         catch (const std::bad_alloc&)
         {

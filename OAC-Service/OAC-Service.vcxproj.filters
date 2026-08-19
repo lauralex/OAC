@@ -17,12 +17,21 @@
     <ClCompile Include="service.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="target_scanner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="service.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="target_scanner.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_thread_suspension.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\protocol\oac_v5.h">
