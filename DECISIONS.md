@@ -134,7 +134,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-012: Keep target inspection off the service health loop
 
-- **Status:** Accepted in source; runtime acceptance pending
+- **Status:** Accepted; source implemented and VM tested
 - **Date:** 2026-08-19
 - **Decision:** Keep alert acknowledgement and liveness monitoring on the service's 250 ms health
   loop. Queue target inspection into one worker with a single coalescing slot, explicit cancellation,
@@ -143,5 +143,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   service identity, and use one shared RAII suspension guard in both service and diagnostic scanners.
 - **Consequence:** Slow or repeated inspection cannot create an unbounded work backlog or directly
   block alert acknowledgement. Status exposes strict health, queue, coverage, CPU, storage, and
-  suspension metrics. Collection remains separate from WP-08 policy decisions, and the complete
-  restricted-service/VM acceptance must pass before this work package is called tested.
+  suspension metrics. Collection remains separate from WP-08 policy decisions. Commit
+  `18aac02d291d9acfcb077fda67c17799a0382391` passed the complete restricted-service and Driver
+  Verifier campaign on Windows 11 build 26100: 35 slices and seven sweeps completed without failure
+  or cancellation while maximum health-loop delay remained 297 ms.

@@ -3,12 +3,9 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including job/liveness and typed
-evidence transport.
-
-The launcher/service status extension for bounded scheduling is implemented in source; its
-commit-bound service and VM acceptance is pending.
+acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including job/liveness, typed evidence,
+and bounded service scheduling.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -222,8 +219,8 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-06 suite passed
-at acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` on Windows 11 Pro build
+sessions cannot invoke production launch operations. The complete WP-01 through WP-07 suite passed
+at acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` on Windows 11 Pro build
 26100. Each of four driver-backed protocol executions passed `129/129`, including the transport
 cases, under the baseline and standard Driver Verifier phases.
 
@@ -232,5 +229,6 @@ response correlation, explicit revoke/liveness layouts, lease-state decisions, a
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
 termination, recovery, and monotonic session-loss reporting in the same named campaign. Signed
 manifests, centralized policy, and authenticated backend sessions remain separate work packages.
-The current harness additionally requires bounded scheduler coverage, health latency, slice
-duration, and thread-resume metrics; that new runtime evidence is pending the WP-07 campaign.
+The same campaign required bounded scheduler coverage, health latency, slice duration, and
+thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 297 ms maximum
+health-loop delay, and no failed or cancelled slice.

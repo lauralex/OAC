@@ -6,11 +6,10 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-06 form the accepted production-control, target-lifetime, and local-evidence MVP.
-Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed the commit-bound
-disposable-VM and standard Driver Verifier campaign described below. Status still distinguishes
-source, evidence, and the remaining production-hardening work packages. WP-07 is implemented in
-source and local tests; its commit-bound service and VM acceptance is pending.
+WP-01 through WP-07 form the accepted production-control, target-lifetime, local-evidence, and
+bounded-scheduling MVP. Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391`
+passed the commit-bound disposable-VM and standard Driver Verifier campaign described below. Status
+still distinguishes source, evidence, and the remaining production-hardening work packages.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -21,7 +20,7 @@ source and local tests; its commit-bound service and VM acceptance is pending.
 | WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
 | WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
 | WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
-| WP-07 Bounded service scheduler | Implemented; acceptance pending | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard are present; run the commit-bound service/VM campaign |
+| WP-07 Bounded service scheduler | Working MVP; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
 | WP-08 Rule catalog and policy engine | Planned | Stable IDs exist; no central production policy evaluator |
 | WP-09 Signed game manifest | Planned | No manifest verifier or key scope |
 | WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
@@ -116,37 +115,38 @@ static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed on Microsoft Windows
+Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
-and Secure Boot disabled. The host accepted 29 exact result records, including five protocol
-executions and twelve client, launcher, and preflight executions. The campaign passed production
+and Secure Boot disabled. The host accepted 30 exact result records, including five protocol
+executions and thirteen client, launcher, and preflight executions. The campaign passed production
 service identity and direct-open boundaries, two standard-user suspended launches with
 creation-time binding, exact-handle confirmation, verified job assignment, and first-thread resume.
 It also proved service-crash and graceful-stop termination of both target and child, SCM recovery,
 idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to `1` to `2`
-with reasons `none`, `service exit`, and `requested shutdown`. Exact remove/reinstall, per-file
-cleanup and tombstone races, the armed renamed-driver load gate, kernel provenance, and standard
-Driver Verifier passed. Final Verifier flags were clear, both OAC services were stopped, the VM was
-Off with zero adapters, and there were zero crash events and zero minidumps. The driver-free unit
-suite passed `406/406`; each of four driver-backed protocol executions passed `129/129`. Those
-executions covered retained-alert acknowledgement and replay rejection, exact event-gap accounting,
-concurrent publication, immutable paged snapshots, overflow provenance, and evidence reads after
-revocation. Driver Verifier recorded three OAC loads and three unloads. The validated result ZIP
-SHA-256 was `E2FA489A7F97730FC6A625F3E65D8EE2858D103AF2F8610DFDFAA7330557714F`.
+with reasons `none`, `service exit`, and `requested shutdown`.
 
-Compact evidence is retained at `C:\OAC-VM\evidence\20260818-ae1102b`. The exact VM, checkpoint,
+The restricted service completed all 35 queued scan slices and seven full memory/thread sweeps with
+no coalesced, cancelled, or failed slice. It inspected 1,253 memory regions and 21 threads; the
+maximum measured health-loop delay was 297 ms, scan-slice duration 90.479 ms, and thread suspension
+33.059 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
+races, the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed.
+Final Verifier flags were clear, both OAC services were stopped, the VM was Off with zero adapters,
+and there were zero crash events and zero minidumps. The driver-free unit suite passed `428/428`;
+each of four driver-backed protocol executions passed `129/129`. Driver Verifier recorded three OAC
+loads and three unloads. The validated result ZIP SHA-256 was
+`D87B84BB0B3CAF2664474CC15B1DD2889152D83C0D7999D72ADF05DB8C6CC4C7`.
+
+Compact evidence is retained at `C:\OAC-VM\evidence\20260819-18aac02`. The exact VM, checkpoint,
 VHD/AVHDX, package, seed, and campaign directory were deleted after validation. Under `C:\OAC-VM`,
-only the verified Windows installation ISO, this 2.71 MB bundle, and the 9.9 KB prior milestone
-record remain.
+only the verified Windows installation ISO and two compact evidence bundles remain.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #11 and remain
   required for each merge.
-- WP-07 still requires its commit-bound runtime acceptance; WP-08 must add centralized typed policy
-  before the hardened-foundation definition is met.
+- WP-08 must add centralized typed policy before the hardened-foundation definition is met.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready or as a complete hardened foundation. The control
 plane still lacks centralized policy, signed manifests, and authenticated backend delivery listed
-above; the bounded scheduler remains evidence-pending until its named campaign passes.
+above.

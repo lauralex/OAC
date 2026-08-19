@@ -160,15 +160,16 @@ does not yet provide signed executable authorization or backend admission.
 
 ## Validation status
 
-Acceptance commit `ae1102b35be6b09f4524cea820315530130a5e9d` passed:
+Acceptance commit `18aac02d291d9acfcb077fda67c17799a0382391` passed:
 
 - clean x64 Debug and Release builds with warnings treated as errors;
-- `406/406` driver-free protocol tests in both configurations;
+- `428/428` driver-free protocol tests in both configurations;
 - driver PREfast and solution-wide Release analysis;
 - package, catalog, signature, INF, seed, and host-residue validation; and
-- a networkless Windows 11 build 26100 campaign with 29 exact results, standard Driver Verifier,
+- a networkless Windows 11 build 26100 campaign with 30 exact results, standard Driver Verifier,
   verified job ownership, service-crash and graceful-stop process-tree containment, bounded typed
-  evidence transport and snapshots, and zero crashes or minidumps.
+  evidence transport and snapshots, independent health-loop and target-scan measurements, and zero
+  crashes or minidumps.
 
 That campaign proves one exact source, build, configuration, and guest environment. It is not a
 universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing

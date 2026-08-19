@@ -1,8 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-06 accepted at commit
-`ae1102b35be6b09f4524cea820315530130a5e9d` on the named Windows 11 build 26100 campaign;
-the WP-07 scheduler is implemented in source and awaiting its commit-bound runtime campaign
+**Status:** WP-01 through WP-07 accepted at commit
+`18aac02d291d9acfcb077fda67c17799a0382391` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -64,8 +63,9 @@ target transition performs one final bounded alert drain before the session is r
 
 After a target is confirmed, job-owned, and resumed, the service starts one worker with a single
 coalescing work slot. The health loop continues independently at a 250 ms cadence and queues scan
-slices without waiting for them. Each slice carries a 20 ms deadline, a 64-region and 64 KiB memory
-budget, and a one-thread round-robin budget. Memory traversal retains a continuation cursor and
+slices without waiting for them. Each slice carries a 20 ms admission deadline, a 64-region and
+64 KiB memory budget, and a one-thread round-robin budget; one in-flight Windows operation may
+finish after the admission deadline. Memory traversal retains a continuation cursor and
 samples executable non-image regions. Thread sampling opens the target thread under the already
 authenticated target-owner identity, immediately reverts to the restricted service identity,
 captures bounded context metadata, and resumes through a shared RAII guard. Stop, target exit, and
@@ -127,7 +127,7 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; acceptance commit
-`ae1102b35be6b09f4524cea820315530130a5e9d` passed the driver-backed target-live, cleanup,
+`18aac02d291d9acfcb077fda67c17799a0382391` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 
@@ -146,8 +146,7 @@ Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Complete commit-bound runtime acceptance for the independent health loop and bounded scan worker.
-2. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
+1. Centralize typed policy, then add stable executable identity, signed manifests, signed policy,
    and backend leases.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
