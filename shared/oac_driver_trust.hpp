@@ -18,9 +18,11 @@ struct FileTrustReport
 
 struct DriverTrustReport : FileTrustReport
 {
+    std::wstring ReportedPath;
     bool DeniedFamily = false;
     bool DeniedHash = false;
     bool ReviewFamily = false;
+    bool CrashDumpAlias = false;
 };
 
 DWORD NormalizeFilePath(

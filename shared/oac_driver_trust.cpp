@@ -156,6 +156,46 @@ bool PathIsUnderWindowsDirectory(const std::wstring& path) noexcept
         path[length] == L'\\';
 }
 
+bool ResolveCrashDumpBackingPath(
+    const std::wstring& reportedPath,
+    std::wstring& backingPath)
+{
+    backingPath.clear();
+    std::array<wchar_t, MAX_PATH + 1> windows{};
+    const UINT windowsLength = GetWindowsDirectoryW(
+        windows.data(), static_cast<UINT>(windows.size()));
+    if (windowsLength == 0 || windowsLength >= windows.size()) return false;
+
+    std::filesystem::path expectedDirectory(
+        std::wstring(windows.data(), windowsLength));
+    expectedDirectory /= L"System32";
+    expectedDirectory /= L"drivers";
+    const std::filesystem::path reported(reportedPath);
+    if (_wcsicmp(
+            reported.parent_path().c_str(),
+            expectedDirectory.c_str()) != 0)
+    {
+        return false;
+    }
+
+    const std::wstring fileName = reported.filename().wstring();
+    constexpr std::wstring_view prefix = L"dump_";
+    if (!StartsWithIgnoreCase(fileName, prefix) ||
+        fileName.size() <= prefix.size())
+    {
+        return false;
+    }
+    const std::wstring backingName(fileName.substr(prefix.size()));
+    if (_wcsicmp(
+            std::filesystem::path(backingName).extension().c_str(),
+            L".sys") != 0)
+    {
+        return false;
+    }
+    backingPath = (expectedDirectory / backingName).wstring();
+    return true;
+}
+
 DWORD ResolveLockedPath(HANDLE file, std::wstring& resolved)
 {
     std::vector<wchar_t> buffer(32768);
@@ -446,9 +486,30 @@ DWORD EvaluateDriverTrust(
     try
     {
         DriverTrustReport result{};
-        FileTrustReport file{};
-        const DWORD error = EvaluateFileTrust(reportedPath, file);
+        DWORD error = NormalizeFilePath(reportedPath, result.ReportedPath);
         if (error != ERROR_SUCCESS) return error;
+
+        FileTrustReport file{};
+        error = EvaluateFileTrust(result.ReportedPath, file);
+        if (error != ERROR_SUCCESS)
+        {
+            std::wstring backingPath;
+            if ((error != ERROR_FILE_NOT_FOUND &&
+                 error != ERROR_PATH_NOT_FOUND) ||
+                !ResolveCrashDumpBackingPath(
+                    result.ReportedPath, backingPath))
+            {
+                report = std::move(result);
+                return error;
+            }
+            error = EvaluateFileTrust(backingPath, file);
+            if (error != ERROR_SUCCESS)
+            {
+                report = std::move(result);
+                return error;
+            }
+            result.CrashDumpAlias = true;
+        }
         static_cast<FileTrustReport&>(result) = std::move(file);
 
         static constexpr std::wstring_view deniedFamilies[] =

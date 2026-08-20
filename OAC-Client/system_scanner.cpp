@@ -489,7 +489,7 @@ void ScanLoadedDrivers(
         const DWORD evaluationError = oac::EvaluateDriverTrust(
             path.data(), trust);
         const std::wstring identityPath = evaluationError == ERROR_SUCCESS
-            ? trust.Path
+            ? (trust.CrashDumpAlias ? trust.ReportedPath : trust.Path)
             : std::wstring(path.data());
         std::wostringstream instance;
         instance << oac::Lowercase(identityPath) << L'@' << std::hex
@@ -498,13 +498,6 @@ void ScanLoadedDrivers(
         if (!includeInventory && !firstEvaluation) continue;
         ++newlyEvaluated;
 
-        const std::wstring reportedBaseName = oac::Lowercase(
-            std::filesystem::path(path.data()).filename().wstring());
-        const bool transientDumpDriver =
-            (evaluationError == ERROR_FILE_NOT_FOUND ||
-             (evaluationError == ERROR_SUCCESS &&
-              HRESULT_CODE(trust.TrustStatus) == ERROR_FILE_NOT_FOUND)) &&
-            reportedBaseName.starts_with(L"dump_");
         std::wostringstream message;
         message << (trust.DeniedHash ? L"Exact denied driver hash is loaded: " :
             (trust.DeniedFamily ? L"OAC deny-policy driver family is loaded: " :
@@ -516,6 +509,8 @@ void ScanLoadedDrivers(
         if (trust.AuthenticodeSha256.empty()) message << L"unavailable";
         else message << std::wstring(
             trust.AuthenticodeSha256.begin(), trust.AuthenticodeSha256.end());
+        if (trust.CrashDumpAlias)
+            message << L"; trusted-backing=" << trust.Path;
         if (evaluationError != ERROR_SUCCESS)
             message << L"; evaluation-error=" << std::dec << evaluationError;
 
@@ -525,7 +520,7 @@ void ScanLoadedDrivers(
                 ? (options.deploymentMode == DeploymentMode::Production
                     ? FindingSeverity::Critical : FindingSeverity::High)
                 : (trust.ReviewFamily ? FindingSeverity::Medium
-                    : (trust.TrustStatus == ERROR_SUCCESS || transientDumpDriver
+                    : (trust.TrustStatus == ERROR_SUCCESS
                         ? FindingSeverity::Info : FindingSeverity::Medium)));
         if (includeInventory || severity != FindingSeverity::Info)
             reporter.Add(severity, L"drivers", message.str(), 0, 0,
