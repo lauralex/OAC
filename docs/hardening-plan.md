@@ -1282,6 +1282,91 @@ Deliverables:
 
 ---
 
+## WP-15 — Production endpoint trust gate
+
+**Priority:** P0
+**Outcome:** Launch authorization depends on a complete, correlated endpoint scan and explicit
+runtime integrity policy rather than on service identity alone.
+
+Deliverables:
+
+- One-use production scan configuration with explicit completeness and correlation.
+- Frozen loaded-driver inventory evaluated by signature, hash, and denied family.
+- Driver-load gate armed before admission completes.
+- Signed-manifest runtime-module authorization.
+- Typed, bounded target memory, thread, instrumentation, handle, and lifecycle observations.
+- Explicit skipped, degraded, overflow, and backend-acknowledgement failure states.
+
+Acceptance:
+
+- Incomplete or uncorrelated scans deny admission.
+- Denied or untrusted loaded drivers deny admission.
+- Runtime images outside the signed policy produce typed evidence and the configured policy action.
+- Target observations retain provenance, remain bounded, and cannot silently overflow.
+- The exact signed package passes the full production path and standard Driver Verifier in one
+  contained disposable-VM campaign.
+
+---
+
+## WP-16 — Production backend admission
+
+**Priority:** P0
+**Outcome:** The existing transport contract is backed by authenticated remote admission and
+durable replay/evidence state.
+
+Deliverables:
+
+- Mutually authenticated production transport and credential lifecycle.
+- Durable lease, replay, evidence, and acknowledgement storage.
+- Remote policy delivery with bounded offline behavior.
+- Real game/server adapter using the existing canonical event contract.
+
+Acceptance:
+
+- Replayed, expired, revoked, or unacknowledged sessions fail according to signed policy across
+  service and backend restarts.
+
+---
+
+## WP-17 — Atomic launch and durable local recovery
+
+**Priority:** P1
+**Outcome:** The launch boundary closes remaining file-identity, process-job, and local evidence
+durability gaps.
+
+Deliverables:
+
+- Assign the target job at process creation rather than after confirmation.
+- Bind authorization and runtime-module decisions to stable file identity, not only a reopened path.
+- Durable local evidence journal with bounded recovery and acknowledgement.
+- Manifest signer rotation and revocation metadata.
+
+Acceptance:
+
+- No target thread can run outside the owned job, path replacement cannot change the authorized
+  image, and service/backend interruption cannot silently discard accepted evidence.
+
+---
+
+## WP-18 — Production/diagnostic driver separation
+
+**Priority:** P1
+**Outcome:** Broad laboratory scanning is isolated from the minimal production control surface when
+deployment evidence justifies the additional maintenance boundary.
+
+Deliverables:
+
+- Separate signed production and diagnostic packages.
+- Minimal production IOCTL and callback surface.
+- Independent installation, update, rollback, and compatibility tests.
+
+Acceptance:
+
+- Production contains no lab-only dispatch or configuration path, and both packages pass their
+  independent lifecycle and Driver Verifier campaigns.
+
+---
+
 ## 23. Test matrix
 
 ### 23.1 Authorization
@@ -1469,10 +1554,11 @@ Every document must distinguish:
 
 Only after lifecycle correctness:
 
-- Expected-export IAT validation.
-- Trusted-image section comparison.
-- Event-driven target scanning.
-- Better signer/revocation classification.
+- Production endpoint admission and explicit scan completeness.
+- Loaded-driver trust, hash, and family policy.
+- Signed runtime-module scope and event-driven target observations.
+- Expected-export IAT validation and trusted-image section comparison where they add independent
+  evidence.
 - Game-specific integrity.
 
 ### Stage 5 — Backend and production operations
@@ -1481,6 +1567,12 @@ Only after lifecycle correctness:
 - Lease/replay.
 - Behavior analytics.
 - Signing, support matrix, privacy, operations.
+
+### Stage 6 — Close deployment boundaries
+
+- Create-time job assignment and stable file identity.
+- Durable local evidence recovery and key rotation.
+- Production/diagnostic driver separation if the operational cost is justified.
 
 ---
 
@@ -1524,12 +1616,13 @@ Production readiness additionally requires:
 
 ## 29. Immediate implementation order
 
-The first Codex execution should complete or materially advance:
+The next implementation sequence is:
 
-1. `WP-00` baseline and documentation.
-2. `WP-01` protocol v5 foundations.
-3. `WP-02` service skeleton and restricted IPC/device-security plan.
-4. `WP-03` per-file-object session state.
-5. Tests for unauthorized administrative claim, cleanup, close, and session transitions.
+1. Implement `WP-16` behind the existing backend and game contracts.
+2. Close the atomic launch, stable file-identity, evidence-recovery, and key-rotation gaps in
+   `WP-17`.
+3. Evaluate `WP-18` only after the production surface and deployment model are stable enough to
+   justify a second driver package.
 
-Do not start with new cheat signatures. The security boundary comes first.
+Prefer one coherent capability change and one attributable acceptance run. Do not expand the test
+harness or add signatures without a concrete security boundary or evidence requirement.

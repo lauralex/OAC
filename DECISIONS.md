@@ -159,8 +159,8 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   the authenticated rule set and deployment mode described by ADR-015. Display payload text and
   signer subject strings are not policy inputs.
   Signer decisions use explicit source, chain, revocation, timestamp, approval, and thumbprint
-  fields; the active service uses `unavailable` until authenticated manifest/policy work supplies
-  them.
+  fields. Producers without authenticated provenance use `unavailable`; the endpoint-admission
+  path supplies current Windows trust and hash/family policy for loaded drivers and runtime images.
 - **Consequence:** Collection no longer assigns policy violations. Source confidence and provenance
   survive evaluation, while actionable local copies retain their exact policy decision. The service
   can terminate its runtime so ordinary cleanup revokes the driver session and target job. It also
@@ -174,18 +174,20 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 - **Status:** Accepted and runtime tested
 - **Date:** 2026-08-19
-- **Decision:** Use one fixed 512-byte canonical binary manifest with a detached SHA-256/RSA CMS
+- **Decision:** Use one fixed 960-byte canonical binary manifest with a detached SHA-256/RSA CMS
   signature. Require its signer to be both the exact strong-RSA Authenticode signer of the locked,
   Windows-trusted executable and the certificate SHA-256 explicitly provisioned by protected
   deployment state. Validate the exact executable leaf name, size, SHA-256, component compatibility,
   and bounded validity period before arming the driver. Record a protected per-game sequence and
   manifest/build high-water value; reject lower sequences and same-sequence equivocation. Carry the
-  verified manifest digest through driver session status. Keep all certificate, filesystem,
-  registry, and hashing work in the restricted service.
+  verified manifest digest through driver session status. Carry a bounded runtime-module hash
+  allowlist and an explicit trusted-Windows-module flag in the same signed record. Keep all
+  certificate, filesystem, registry, and hashing work in the restricted service.
 - **Consequence:** A valid Windows signature alone cannot self-authorize a build, copied or modified
   manifest bytes cannot authorize a launch, and service restart does not erase rollback state. The
-  current schema authorizes only the main executable. Manifest-key rotation/revocation, approved
-  modules and middleware, and backend admission remain later work. The
+  current schema authorizes the main executable plus explicit runtime modules. Manifest-key
+  rotation/revocation, stable mapped-file identity, and representative middleware/JIT policy remain
+  later work. The
   disposable-VM test package uses its ephemeral test signer only through the isolated installer's
   exact protected pin; it is not a production signing design. Commit
   `535730c6828f723c2e42a4721db885fab94505aa` passed accepted-launch and
@@ -196,7 +198,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 - **Status:** Accepted; source and runtime tested
 - **Date:** 2026-08-20
-- **Decision:** Use one fixed 1024-byte canonical policy record with a detached SHA-256/RSA CMS
+- **Decision:** Use one fixed 2480-byte canonical policy record with a detached SHA-256/RSA CMS
   signature and an independent protected signer pin. Bind its rule set and deployment mode to an
   exact game, build, and channel, bounded validity period, and minimum component revisions. Store a
   fixed per-game/channel record containing the current policy digest, sequence and version plus the
@@ -276,3 +278,26 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   authorized incident responders without leaking private type/path information through public
   artifacts. Production signing keys, Hardware Dev Center credentials, lab tools, PDBs, and test
   evidence remain outside the public package.
+
+## ADR-019: Require endpoint admission before launcher IPC
+
+- **Status:** Accepted; source and runtime tested
+- **Date:** 2026-08-20
+- **Decision:** After the restricted service claims one production driver session, arm the
+  driver-load gate and run one exact current-state scan before creating launcher IPC. Require
+  explicit complete process, thread, handle, module, and integrity coverage; bind the completed scan
+  identity to session status; read one frozen loaded-module snapshot; and evaluate each driver by
+  current Windows trust, generated denied hash policy, and blocked family. Queue every correlated
+  result through the existing backend acknowledgement boundary. During the target lifetime,
+  authorize image-load records against the signed manifest and emit bounded typed observations for
+  executable memory, embedded PE images, direct-syscall stubs, thread start/context/stack state,
+  debug registers, instrumentation callbacks, dangerous handles, and target thread lifecycle.
+  Treat incomplete coverage, evidence loss, or observation overflow as failure rather than a clean
+  scan. Keep certificate, file, and policy work in user mode; kernel callbacks remain observational.
+- **Consequence:** A healthy service identity alone no longer makes the endpoint launch-ready, and
+  production uses the same bounded kernel inventory primitives without exposing diagnostic display
+  strings as policy. The gate can fail after observing a load but cannot prevent the image from
+  mapping before `DriverEntry`. Current path/content/trust checks do not yet provide mapped-file
+  identity, and broad middleware/JIT compatibility requires workload tuning. Implementation commit
+  `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact signed-package, networkless Windows 11
+  build 26100, and standard Driver Verifier campaign with zero crashes or dumps.

@@ -1,5 +1,6 @@
 #include "telemetry.h"
 #include "compat.h"
+#include "scanner.h"
 
 #include <ntstrsafe.h>
 
@@ -88,6 +89,8 @@ VOID OacReportFinding(
         Format,
         args);
     va_end(args);
+
+    OacPublishEndpointFinding(&record);
 
     KeAcquireSpinLock(&g_Telemetry.Lock, &oldIrql);
     if (g_Telemetry.Records == NULL)

@@ -3,10 +3,12 @@
 **Status:** WP-01 through WP-12 accepted locally and in the disposable-VM campaign at implementation
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
 passed. WP-13's portable game-event contract and reference server detector passed local and PR #19
-hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`; production game and
-backend deployment remain external integration work. The current WP-14 source adds an exact
-unsigned candidate, source-bound build metadata, SPDX inventory, and private-symbol separation;
-production certification and signing remain external promotion gates.
+hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`. WP-14 adds the
+source-bound unsigned release boundary. WP-15's fail-closed endpoint admission, loaded-driver trust,
+runtime-module authorization, and typed target observations passed the exact signed-package,
+networkless Windows 11 build 26100, and standard Driver Verifier campaign at
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. Production game/backend deployment, certification, and
+signing remain external work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -20,6 +22,9 @@ flowchart TD
     B["Authenticated backend transport interface"] -->|"session lease"| S
     S -->|"evaluated evidence and acknowledgement"| B
     S -->|"one file-bound production session"| D["Demand-start OAC driver"]
+    D -->|"bounded current-state scan and frozen modules"| S
+    S -->|"trust, hash, family, and policy evaluation"| E["Endpoint admission"]
+    E -->|"acknowledged admission evidence"| B
     D --> C["Session status and retained typed alerts"]
     C --> S
     S -->|"caller-token suspended create"| T["Bound target process"]
@@ -27,7 +32,7 @@ flowchart TD
     D -->|"creation-time path and creator match"| T
     S -->|"assign before resume"| J["Kill-on-close job"]
     J -->|"owns target tree"| T
-    S -->|"bounded incremental sampling"| T
+    S -->|"bounded memory and thread observations"| T
 
     G["Authoritative game server"] -->|"canonical movement event"| R["Reference behavior detector"]
     Q["Replay identity and offset"] --> R
@@ -40,25 +45,30 @@ flowchart TD
     K --> X
 ```
 
-The production path establishes control-plane health and launches one authenticated caller-owned
-executable through a serialized creation-time binding transaction. The diagnostic path retains the
-earlier scanner and suspended/attach flows only for explicit disposable-VM lab use.
+The production path establishes control-plane health, completes and acknowledges one endpoint
+admission scan, and launches one authenticated caller-owned executable through a serialized
+creation-time binding transaction. The diagnostic path retains the broader scanner and
+suspended/attach flows only for explicit disposable-VM lab use.
 
 ## Components
 
 | Component | Current responsibility | Boundary |
 |---|---|---|
-| `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility; scanner internals are separated into integrity, module, and process/handle responsibilities | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, signed policy, signed game build, persistent update state, and backend lease; own the production driver session and target job; evaluate and queue typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, production endpoint scans, paged snapshots, bounded kernel work, and diagnostic compatibility; scanner internals are separated into integrity, module, and process/handle responsibilities | Unsigned by default; demand-start only |
+| `OACService` | Verify its restricted identity, signed policy, signed game build, persistent update state, backend lease, and endpoint admission; own the production driver session and target job; evaluate and queue typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target observation | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Laboratory system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
 | `shared/oac_policy.*` | Stable rule identities, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module |
 | `shared/oac_signed_policy.*` | Canonical policy record, strict validation, scope, update decisions, and persistent high-water state | C-compatible service and driver-free test module; detached signature verification remains in user mode |
 | `shared/oac_manifest.*` | Canonical manifest and rollback records, strict validation, exact build identity, and monotonic high-water decisions | C-compatible service and driver-free test module; signature verification remains in user mode |
+| `shared/oac_driver_trust.*` | Stable file and loaded-driver trust classification, hash policy, and signer/family decisions shared by the service and diagnostic client | User mode; trust verification uses documented Windows interfaces |
 | `shared/oac_backend.*` | Canonical backend-session records, strict correlation and replay validation, acknowledgement decisions, and bounded failure states | Transport-independent C contract; no network library or reusable client secret |
 | `shared/oac_game.*` | Canonical authoritative movement records, replay-safe detector state, bounded rules, and explainable risk decisions | Portable C game/server contract; no network transport, game-engine dependency, or account identifier |
 | `OAC-Service/backend.*` | Fixed-capacity service queue, lease lifecycle, driver binding digest, transport interface, and deterministic test backend | The included implementation is a protected test double; production transport remains a deployment component |
+| `OAC-Service/endpoint_preflight.*` | Correlate the production scan, require complete kernel coverage, evaluate the frozen driver inventory, and acknowledge admission evidence before IPC opens | Fail-closed startup gate; no kernel certificate parsing |
+| `OAC-Service/runtime_module.*` | Authorize observed target images against the signed manifest and current file trust | Bounded runtime policy; mapped-file identity binding and approved JIT profiles remain planned |
+| `OAC-Service/target_scanner.*` | Incrementally sample target memory and threads and emit typed, bounded observations | Documented user-mode APIs; skipped coverage and overflow remain explicit |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
 | `shared/oac_windows.hpp` | Move-only Win32/SCM/registry ownership and small text or optional-API helpers shared by user-mode components | User mode only; no protocol or policy semantics |
@@ -77,8 +87,9 @@ the Windows data they own:
 | `OAC/scanner_process.c` | Process/thread and system-handle cross-views, target-handle inspection, and physical-memory handle detection |
 | `OAC-Client/client_options.*` | Pure parsing and validation of diagnostic-client options, independently exercised by the driver-free unit suite |
 
-This is an internal responsibility split, not a new detection claim. The diagnostic ABI, finding
-categories, scan ordering, and report contract remain unchanged.
+The same bounded kernel primitives now support a narrow production admission scan. The broader
+diagnostic report remains a separate lab contract; production uses typed evidence, explicit
+completeness, and a frozen module snapshot rather than diagnostic display text.
 
 ## Game and server boundary
 
@@ -120,7 +131,11 @@ Replay, same-sequence equivocation, unauthorized rollback, and emergency revocat
 It next establishes an authenticated backend session, derives a binding digest from the session
 and both nonces, and starts its bounded lease before opening the driver. It then
 negotiates the exact production revision and evidence bounds, claims a production session,
-validates a correlated status response, then keeps that driver handle for its lifetime. While
+validates a correlated status response, configures the production scan and load gate, and runs one
+exact current-state scan. The service requires complete process, thread, handle, module, and
+integrity coverage; evaluates the frozen loaded-driver inventory by signature, hash, and blocked
+family; sends every correlated result through the backend acknowledgement boundary; and only then
+creates the launcher pipe. It keeps the driver handle for its lifetime. While
 waiting for stop, failure, or target exit, it polls retained alerts and lower-priority events on a
 bounded interval. It fails closed on retained-alert loss, backend lease loss or revocation,
 malformed correlation, evidence-queue exhaustion, or acknowledgement timeout. An orderly stop or
@@ -143,13 +158,17 @@ coalescing work slot. The health loop continues independently at a 250 ms cadenc
 slices without waiting for them. Each slice carries a 20 ms admission deadline, a 64-region and
 64 KiB memory budget, and a one-thread round-robin budget; one in-flight Windows operation may
 finish after the admission deadline. Memory traversal retains a continuation cursor and
-samples executable non-image regions. Thread sampling opens the target thread under the already
+samples executable private or mapped regions for writable-executable protection, embedded PE
+headers, and direct-syscall stubs. Thread sampling opens the target thread under the already
 authenticated target-owner identity, immediately reverts to the restricted service identity,
-captures bounded context metadata, and resumes through a shared RAII guard. Stop, target exit, and
+captures its start address, instruction pointer, stack pointer, and debug registers, and resumes
+through a shared RAII guard. The service also checks the process instrumentation callback and
+authorizes runtime image records against the signed manifest. Stop, target exit, and
 service failure cancel the worker before target authority handles are released. Status reports
 coverage, CPU and wall time, queue outcomes, health latency, peak working storage, and the longest
-observed thread suspension. These remain collection and health metrics; the central policy catalog
-consumes typed driver observations rather than scanner display strings.
+observed thread suspension. Skipped observations and queue overflow are explicit and fail closed at
+the admission or policy boundary. The central policy catalog consumes typed observations rather
+than scanner display strings.
 
 The local message-mode pipe rejects remote clients and does not grant clients pipe-instance
 creation. Before returning status or accepting a launch, the service impersonates at impersonation
@@ -164,8 +183,9 @@ opens and resolves the executable under client impersonation and keeps the file 
 writes and deletion. Before arming the driver it reads the adjacent fixed-size manifest and detached
 CMS signature through non-reparse handles, validates the executable's Windows trust and exact
 signer, requires the signer certificate SHA-256 provisioned in a protected registry value, checks
-the executable leaf name, size, and SHA-256, enforces component compatibility and expiration, and
-updates protected per-game high-water state. It then arms a bounded kernel ticket for the exact
+the executable leaf name, size, and SHA-256, validates the manifest's bounded runtime-module
+policy, enforces component compatibility and expiration, and updates protected per-game high-water
+state. It then arms a bounded kernel ticket for the exact
 volume-device and DOS-device path spellings plus the verified manifest digest,
 creates the process suspended under the client's primary token, confirms the exact process handle,
 validates monitoring state, assigns the process to a service-owned kill-on-close job, and resumes
@@ -217,14 +237,16 @@ cases under the baseline and Driver Verifier phases.
 
 ## Protocol and evidence boundary
 
-Production control dispatches negotiate, claim, status, explicit revoke, arm, cancel, confirm,
-evidence read, and snapshot management while advertising session control, launch-ticket,
-session-liveness, typed-evidence, and paged-snapshot support. The driver routes high/critical
+Production control dispatches negotiate, claim, status, explicit revoke, endpoint configuration and
+scan, arm, cancel, confirm, evidence read, and snapshot management while advertising session
+control, launch-ticket, session-liveness, typed-evidence, paged-snapshot, kernel-scan, and
+driver-gate support. The driver routes high/critical
 records into a retained acknowledgement queue and lower-priority records into an independent
 overwrite queue with explicit gaps. One frozen, expiring kernel-module snapshot is read by stable
 identifier and cursor. Existing display-oriented findings continue through the separate diagnostic
-ring; production driver configuration and scan dispatch remain unavailable, while the service
-worker uses documented user-mode process APIs. The driver never promotes its own observations to
+ring. Production configuration is one-use per claimed session; an incomplete or failed scan clears
+it, and status correlates the completed scan identity. The service worker uses documented user-mode
+process APIs. The driver never promotes its own observations to
 policy violations. The service evaluates records received from both queues, preserves source
 confidence and provenance, and keeps the separate policy decision with any actionable local copy.
 Status also carries the verified manifest SHA-256 from launch arm through the terminal session so
@@ -252,12 +274,14 @@ separate controlled environment described in [`RELEASE.md`](RELEASE.md).
 
 ## Planned sequence
 
-1. Implement production authenticated transport, durable backend and replay persistence, and a real
-   game-engine adapter behind the existing contracts.
-2. Add signed manifest-key rotation metadata and a production updater that implements the reviewed
-   release and rollback contract.
-3. Add game-specific combat, economy, input, and protocol detectors and validate them against
-   representative workloads and the supported-platform matrix.
+1. Replace the deterministic backend with authenticated transport, durable evidence/replay storage,
+   credential lifecycle, and a real game-engine adapter behind the existing contracts.
+2. Move target job assignment into process creation, bind authorization to stable file identity,
+   add durable local evidence recovery, and introduce manifest-key rotation metadata.
+3. Tune runtime-module and middleware policy against representative workloads, then add
+   game-specific combat, economy, input, and protocol detectors.
+4. Separate production control from broad diagnostic scanning only when deployment and maintenance
+   evidence justifies the additional driver boundary.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

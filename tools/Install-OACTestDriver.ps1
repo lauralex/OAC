@@ -81,7 +81,7 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or
     $manifest.purpose -ne 'OAC disposable-VM test package; never production' -or
     [string]$manifest.configuration -cnotin @('Debug', 'Release') -or
-    [string]$manifest.protocol_version -cne '0x00050006' -or
+    [string]$manifest.protocol_version -cne '0x00050007' -or
     [string]$manifest.legacy_protocol_version -cne '0x00040000' -or
     [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
     -not $manifest.certificate_thumbprint -or -not $manifest.files -or
@@ -233,11 +233,11 @@ function Assert-DetachedRecordSignature(
 }
 
 Assert-DetachedRecordSignature `
-    $gameManifestSource $gameManifestSignatureSource 512
+    $gameManifestSource $gameManifestSignatureSource 960
 foreach ($fixture in @('Expired', 'Wrong-Build', 'Rollback')) {
     $fixtureName = "OAC-Game-Manifest-$fixture.bin"
     Assert-DetachedRecordSignature `
-        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 512
+        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 960
 }
 
 function Assert-SignedPolicyShape(
@@ -249,25 +249,25 @@ function Assert-SignedPolicyShape(
     $flags = [BitConverter]::ToUInt32($bytes, 16)
     $issued = [BitConverter]::ToUInt64($bytes, 104)
     $expires = [BitConverter]::ToUInt64($bytes, 112)
-    if ($bytes.Length -ne 1024 -or $magic -cne 'OACPOLCY' -or
-        [BitConverter]::ToUInt32($bytes, 8) -ne 2 -or
-        [BitConverter]::ToUInt32($bytes, 12) -ne 1024 -or
+    if ($bytes.Length -ne 2480 -or $magic -cne 'OACPOLCY' -or
+        [BitConverter]::ToUInt32($bytes, 8) -ne 3 -or
+        [BitConverter]::ToUInt32($bytes, 12) -ne 2480 -or
         ($flags -band 0xFFFFFFFC) -ne 0 -or
         [BitConverter]::ToUInt32($bytes, 20) -notin @(1, 2, 3) -or
         [BitConverter]::ToUInt64($bytes, 88) -eq 0 -or
         [BitConverter]::ToUInt64($bytes, 96) -eq 0 -or
         $issued -eq 0 -or $expires -le $issued -or
         ($expires - $issued) -gt (31 * 24 * 60 * 60) -or
-        [BitConverter]::ToUInt32($bytes, 120) -ne 0x00050006 -or
-        [BitConverter]::ToUInt32($bytes, 124) -ne 0x00010006 -or
-        [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010006 -or
-        [BitConverter]::ToUInt32($bytes, 132) -ne 1 -or
-        [BitConverter]::ToUInt32($bytes, 136) -ne 14 -or
-        [BitConverter]::ToUInt32($bytes, 1000) -ne 20000 -or
-        [BitConverter]::ToUInt32($bytes, 1004) -ne 2000 -or
-        [BitConverter]::ToUInt32($bytes, 1008) -ne 1000 -or
-        [BitConverter]::ToUInt32($bytes, 1012) -ne 5000 -or
-        @($bytes[1016..1023] | Where-Object { $_ -ne 0 }).Count -ne 0) {
+        [BitConverter]::ToUInt32($bytes, 120) -ne 0x00050007 -or
+        [BitConverter]::ToUInt32($bytes, 124) -ne 0x00010007 -or
+        [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010007 -or
+        [BitConverter]::ToUInt32($bytes, 132) -ne 3 -or
+        [BitConverter]::ToUInt32($bytes, 136) -ne 37 -or
+        [BitConverter]::ToUInt32($bytes, 2456) -ne 20000 -or
+        [BitConverter]::ToUInt32($bytes, 2460) -ne 2000 -or
+        [BitConverter]::ToUInt32($bytes, 2464) -ne 1000 -or
+        [BitConverter]::ToUInt32($bytes, 2468) -ne 5000 -or
+        @($bytes[2472..2479] | Where-Object { $_ -ne 0 }).Count -ne 0) {
         throw "Signed-policy canonical fields are invalid: $Path"
     }
     foreach ($range in @(@(24, 39), @(40, 55), @(56, 71), @(72, 87))) {
@@ -297,9 +297,15 @@ function Assert-SignedPolicyShape(
     }
     $expectedRuleIds = @(
         0x00010001, 0x00010002, 0x00010003, 0x00010004,
-        0x00010005, 0x00010006, 0x00020001, 0x00020002,
-        0x00030001, 0x00030002, 0x00030003, 0x00040001,
-        0x00040002, 0x00080001)
+        0x00010005, 0x00010006, 0x00010007, 0x00010008,
+        0x00010009, 0x00020001, 0x00020002, 0x00020003,
+        0x00020004, 0x00020005, 0x00020006, 0x00020007,
+        0x00020008, 0x00020009, 0x00030001,
+        0x00030002, 0x00030003, 0x00030004, 0x00030005,
+        0x00030006, 0x00030007, 0x00030008, 0x00040001,
+        0x00040002, 0x00050001, 0x00050002, 0x00050003,
+        0x00050004, 0x00060001, 0x00060002, 0x00060003,
+        0x00080001, 0x00080002)
     for ($index = 0; $index -lt $expectedRuleIds.Count; $index++) {
         $offset = 216 + ($index * 56)
         if ([BitConverter]::ToUInt32($bytes, $offset) -ne
@@ -310,14 +316,14 @@ function Assert-SignedPolicyShape(
         }
     }
 }
-Assert-DetachedRecordSignature $policySource $policySignatureSource 1024
+Assert-DetachedRecordSignature $policySource $policySignatureSource 2480
 Assert-SignedPolicyShape $policySource
 foreach ($fixture in @(
         'Wrong-Scope', 'Expired', 'Rollback', 'Authorized-Rollback',
         'Emergency-Revoke')) {
     $fixtureName = "OAC-Policy-$fixture.bin"
     Assert-DetachedRecordSignature `
-        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 1024
+        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 2480
     Assert-SignedPolicyShape `
         $testFiles[$fixtureName] -AllowExpired:($fixture -eq 'Expired')
 }
@@ -326,7 +332,7 @@ $wrongSignatureRejected = $false
 try {
     Assert-DetachedRecordSignature `
         $testFiles['OAC-Policy-Wrong-Signature.bin'] `
-        $testFiles['OAC-Policy-Wrong-Signature.bin.p7s'] 1024
+        $testFiles['OAC-Policy-Wrong-Signature.bin.p7s'] 2480
 } catch {
     $wrongSignatureRejected = $true
 }

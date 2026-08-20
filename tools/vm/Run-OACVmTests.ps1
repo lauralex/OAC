@@ -920,7 +920,13 @@ function Wait-TestServiceState(
     [string]$Name,
     [ServiceProcess.ServiceControllerStatus]$State
 ) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $waitSeconds = if ($Name -ceq 'OACService' -and
+        $State -eq [ServiceProcess.ServiceControllerStatus]::Running) {
+        60
+    } else {
+        20
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds($waitSeconds)
     do {
         $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
         if ($null -ne $service -and $service.Status -eq $State) { return }
@@ -1006,7 +1012,9 @@ exit `$code
         'client-session=([0-9]+); driver-protocol=0x[0-9a-f]+; ' +
         'capabilities=0x[0-9a-f]+; flags=0x[0-9a-f]+; ' +
         'session-loss-sequence=([0-9]+); last-session-loss=([0-9]+); ' +
-        'backend-lease=([0-9]+); backend-flags=0x([0-9a-f]+); ' +
+        'endpoint-config=0x([0-9a-f]+); driver-gate-trips=([0-9]+); ' +
+        'endpoint-scan-id=([1-9][0-9]*); backend-lease=([0-9]+); ' +
+        'backend-flags=0x([0-9a-f]+); ' +
         'backend-lease-sequence=([0-9]+); backend-acknowledged=([0-9]+); ' +
         'backend-pending=([0-9]+); backend-error=([0-9]+); ' +
         'scan-state=([0-9]+); scan-queued=([0-9]+); ' +
@@ -1025,6 +1033,9 @@ exit `$code
     [int64]$clientSessionId = -1
     [int64]$lossSequence = -1
     [int64]$lossReason = -1
+    [uint64]$endpointConfiguration = 0
+    [uint64]$driverGateTrips = 0
+    [uint64]$endpointScanId = 0
     [uint64]$backendLease = 0
     [uint64]$backendFlags = 0
     [uint64]$backendLeaseSequence = 0
@@ -1036,27 +1047,39 @@ exit `$code
         -not [int64]::TryParse($matches[0].Groups[2].Value, [ref]$clientSessionId) -or
         -not [int64]::TryParse($matches[0].Groups[3].Value, [ref]$lossSequence) -or
         -not [int64]::TryParse($matches[0].Groups[4].Value, [ref]$lossReason) -or
-        -not [uint64]::TryParse($matches[0].Groups[5].Value, [ref]$backendLease) -or
         -not [uint64]::TryParse(
-            $matches[0].Groups[6].Value,
+            $matches[0].Groups[5].Value,
+            [Globalization.NumberStyles]::AllowHexSpecifier,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [ref]$endpointConfiguration) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[6].Value, [ref]$driverGateTrips) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[7].Value, [ref]$endpointScanId) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[8].Value, [ref]$backendLease) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[9].Value,
             [Globalization.NumberStyles]::AllowHexSpecifier,
             [Globalization.CultureInfo]::InvariantCulture,
             [ref]$backendFlags) -or
         -not [uint64]::TryParse(
-            $matches[0].Groups[7].Value, [ref]$backendLeaseSequence) -or
+            $matches[0].Groups[10].Value, [ref]$backendLeaseSequence) -or
         -not [uint64]::TryParse(
-            $matches[0].Groups[8].Value, [ref]$backendAcknowledged) -or
+            $matches[0].Groups[11].Value, [ref]$backendAcknowledged) -or
         -not [uint64]::TryParse(
-            $matches[0].Groups[9].Value, [ref]$backendPending) -or
+            $matches[0].Groups[12].Value, [ref]$backendPending) -or
         -not [uint64]::TryParse(
-            $matches[0].Groups[10].Value, [ref]$backendError) -or
+            $matches[0].Groups[13].Value, [ref]$backendError) -or
         $serviceProcessId -le 0 -or $clientSessionId -lt 0 -or
         $lossSequence -lt 0 -or $lossReason -lt 0 -or
+        $endpointConfiguration -ne 3 -or $driverGateTrips -ne 0 -or
+        $endpointScanId -eq 0 -or
         $backendLease -ne 1 -or $backendFlags -ne 3 -or
         $backendLeaseSequence -eq 0 -or $backendError -ne 0) {
         throw "$Name returned malformed numeric status fields."
     }
-    foreach ($groupIndex in 11..25) {
+    foreach ($groupIndex in 14..28) {
         [uint64]$scanValue = 0
         if (-not [uint64]::TryParse(
                 $matches[0].Groups[$groupIndex].Value,
@@ -1070,6 +1093,9 @@ exit `$code
         ServiceProcessId = $serviceProcessId
         LossSequence = $lossSequence
         LossReason = $lossReason
+        EndpointConfiguration = $endpointConfiguration
+        DriverGateTrips = $driverGateTrips
+        EndpointScanId = $endpointScanId
         BackendLease = $backendLease
         BackendFlags = $backendFlags
         BackendLeaseSequence = $backendLeaseSequence
@@ -1674,7 +1700,7 @@ exit $code
         }
 
         $modifiedBytes = [IO.File]::ReadAllBytes($validManifestSource)
-        if ($modifiedBytes.Length -ne 512 -or
+        if ($modifiedBytes.Length -ne 960 -or
             (Test-Path -LiteralPath $modifiedManifestSource)) {
             throw 'The modified-manifest fixture cannot be created safely.'
         }
@@ -1682,7 +1708,7 @@ exit $code
         [IO.File]::WriteAllBytes($modifiedManifestSource, $modifiedBytes)
         Set-ProductionSignedRecordFiles `
             $modifiedManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
         [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-modified' `
             'game manifest signature is invalid')
@@ -1691,7 +1717,7 @@ exit $code
         $wrongBuildSource = Join-Path $root 'OAC-Game-Manifest-Wrong-Build.bin'
         Set-ProductionSignedRecordFiles `
             $wrongBuildSource "$wrongBuildSource.p7s" `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
         [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-wrong-build' `
             'executable identity does not match the game manifest')
@@ -1700,7 +1726,7 @@ exit $code
         $expiredSource = Join-Path $root 'OAC-Game-Manifest-Expired.bin'
         Set-ProductionSignedRecordFiles `
             $expiredSource "$expiredSource.p7s" `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
         [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-expired' `
             'game manifest is outside its validity period')
@@ -1708,7 +1734,7 @@ exit $code
 
         Set-ProductionSignedRecordFiles `
             $validManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
 
         $crashLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch'
@@ -1778,14 +1804,14 @@ exit $code
         $rollbackSource = Join-Path $root 'OAC-Game-Manifest-Rollback.bin'
         Set-ProductionSignedRecordFiles `
             $rollbackSource "$rollbackSource.p7s" `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
         [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-rollback' `
             'game manifest was superseded or changed without a new sequence')
         $rollbackManifestRejected = $true
         Set-ProductionSignedRecordFiles `
             $validManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination 512
+            $manifestDestination $signatureDestination 960
 
         $gracefulLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch-graceful'
@@ -1837,7 +1863,7 @@ exit $code
             Join-Path $root 'OAC-Policy-Wrong-Signature.bin'
         Set-ProductionSignedRecordFiles `
             $wrongSignaturePolicySource "$wrongSignaturePolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         [void](Invoke-RejectedServiceStart `
             $launcher 'production-policy-wrong-signature')
         $wrongSignaturePolicyRejected = $true
@@ -1845,7 +1871,7 @@ exit $code
         $expiredPolicySource = Join-Path $root 'OAC-Policy-Expired.bin'
         Set-ProductionSignedRecordFiles `
             $expiredPolicySource "$expiredPolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         [void](Invoke-RejectedServiceStart `
             $launcher 'production-policy-expired')
         $expiredPolicyRejected = $true
@@ -1853,7 +1879,7 @@ exit $code
         $wrongScopePolicySource = Join-Path $root 'OAC-Policy-Wrong-Scope.bin'
         Set-ProductionSignedRecordFiles `
             $wrongScopePolicySource "$wrongScopePolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         Start-Service -Name OACService -ErrorAction Stop
         Wait-TestServiceState OACService `
             ([ServiceProcess.ServiceControllerStatus]::Running)
@@ -1868,7 +1894,7 @@ exit $code
         $rollbackPolicySource = Join-Path $root 'OAC-Policy-Rollback.bin'
         Set-ProductionSignedRecordFiles `
             $rollbackPolicySource "$rollbackPolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         [void](Invoke-RejectedServiceStart `
             $launcher 'production-policy-rollback')
         $rollbackPolicyRejected = $true
@@ -1878,7 +1904,7 @@ exit $code
         Set-ProductionSignedRecordFiles `
             $authorizedRollbackPolicySource `
             "$authorizedRollbackPolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         $authorizedRollbackStatus = Invoke-ProductionStatus `
             $launcher 'production-policy-authorized-rollback'
         $authorizedRollbackPolicyAccepted =
@@ -1891,7 +1917,7 @@ exit $code
             Join-Path $root 'OAC-Policy-Emergency-Revoke.bin'
         Set-ProductionSignedRecordFiles `
             $emergencyPolicySource "$emergencyPolicySource.p7s" `
-            $policyDestination $policySignatureDestination 1024
+            $policyDestination $policySignatureDestination 2480
         [void](Invoke-RejectedServiceStart `
             $launcher 'production-policy-emergency-revoke')
         $emergencyPolicyRejected = $true
@@ -1921,14 +1947,14 @@ exit $code
         try {
             Set-ProductionSignedRecordFiles `
                 $validManifestSource $validSignatureSource `
-                $manifestDestination $signatureDestination 512
+                $manifestDestination $signatureDestination 960
         } catch {
             $cleanupErrors.Add("Restore production manifest: $($_.Exception.Message)")
         }
         try {
             Set-ProductionSignedRecordFiles `
                 $validPolicySource $validPolicySignatureSource `
-                $policyDestination $policySignatureDestination 1024
+                $policyDestination $policySignatureDestination 2480
         } catch {
             $cleanupErrors.Add("Restore signed policy: $($_.Exception.Message)")
         }

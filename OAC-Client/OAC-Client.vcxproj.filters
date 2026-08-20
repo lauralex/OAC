@@ -17,10 +17,12 @@
     <ClCompile Include="platform_security.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="scanner_common.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="system_scanner.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="..\shared\oac_driver_trust.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="client_options.hpp"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="driver_hash_policy.inc"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_driver_hash_policy.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_driver_trust.hpp"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="scanner.hpp"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_protocol.h"><Filter>Header Files</Filter></ClInclude>

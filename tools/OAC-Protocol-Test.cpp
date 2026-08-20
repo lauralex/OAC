@@ -500,6 +500,34 @@ OAC_V5_STATUS_REQUEST ValidV5Status(const OAC_V5_CLAIM_RESPONSE& claim)
     return request;
 }
 
+OAC_ENDPOINT_CONFIG_REQUEST ValidEndpointConfiguration(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    OAC_ENDPOINT_CONFIG_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_V5_MESSAGE_SET_CONFIG;
+    request.ConfigurationFlags = OAC_V5_CONFIG_FLAGS;
+    return request;
+}
+
+OAC_ENDPOINT_SCAN_REQUEST ValidEndpointScan(
+    const OAC_V5_CLAIM_RESPONSE& claim)
+{
+    OAC_ENDPOINT_SCAN_REQUEST request{};
+    request.Header.Version = OAC_V5_VERSION;
+    request.Header.Size = sizeof(request);
+    request.Header.RequestId = NextRequestId();
+    request.Header.SessionId = claim.Header.SessionId;
+    request.Header.Generation = claim.Header.Generation;
+    request.Header.MessageType = OAC_V5_MESSAGE_RUN_SCAN;
+    request.RequestedFlags = OAC_ENDPOINT_SCAN_REQUIRED_FLAGS;
+    return request;
+}
+
 OAC_REVOKE_SESSION_REQUEST ValidRevokeSession(
     const OAC_V5_CLAIM_RESPONSE& claim)
 {
@@ -3073,20 +3101,8 @@ void RunV5Tests(TestLog& log)
     negotiateRequest = ValidV5Negotiate();
     negotiateResponse = {};
     if (NegotiateV5(device, negotiateRequest, negotiateResponse, error) &&
-        (negotiateResponse.Capabilities &
-            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-             OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
-             OAC_V5_CAP_PAGED_SNAPSHOTS)) ==
-            (OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
-             OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
-             OAC_V5_CAP_PAGED_SNAPSHOTS) &&
-        (negotiateResponse.ProtocolFlags &
-            (OAC_V5_PROTOCOL_STRICT_LENGTHS |
-             OAC_V5_PROTOCOL_TYPED_EVENTS |
-             OAC_V5_PROTOCOL_V4_DIAGNOSTIC)) ==
-            (OAC_V5_PROTOCOL_STRICT_LENGTHS |
-             OAC_V5_PROTOCOL_TYPED_EVENTS |
-             OAC_V5_PROTOCOL_V4_DIAGNOSTIC))
+        negotiateResponse.Capabilities == OAC_V5_CAP_ALL &&
+        negotiateResponse.ProtocolFlags == OAC_V5_PROTOCOL_FLAGS)
     {
         log.Pass(L"v5 exact negotiation and correlation");
     }
@@ -3317,6 +3333,88 @@ void RunV5Tests(TestLog& log)
         &confirmResponse,
         sizeof(confirmResponse),
         {ERROR_NOT_SUPPORTED});
+
+    auto endpointConfiguration = ValidEndpointConfiguration(claimResponse);
+    OAC_ENDPOINT_CONFIG_RESPONSE endpointConfigurationResponse{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"diagnostic session cannot configure production endpoint monitoring",
+        IOCTL_OAC_V5_SET_CONFIG,
+        &endpointConfiguration,
+        sizeof(endpointConfiguration),
+        &endpointConfigurationResponse,
+        sizeof(endpointConfigurationResponse),
+        {ERROR_NOT_SUPPORTED});
+    auto invalidEndpointConfiguration = endpointConfiguration;
+    invalidEndpointConfiguration.Reserved = 1;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production endpoint configuration rejects reserved data",
+        IOCTL_OAC_V5_SET_CONFIG,
+        &invalidEndpointConfiguration,
+        sizeof(invalidEndpointConfiguration),
+        &endpointConfigurationResponse,
+        sizeof(endpointConfigurationResponse),
+        {ERROR_INVALID_PARAMETER});
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production endpoint configuration rejects a truncated request",
+        IOCTL_OAC_V5_SET_CONFIG,
+        &endpointConfiguration,
+        sizeof(endpointConfiguration) - 1,
+        &endpointConfigurationResponse,
+        sizeof(endpointConfigurationResponse),
+        {ERROR_INVALID_PARAMETER});
+
+    auto endpointScan = ValidEndpointScan(claimResponse);
+    OAC_ENDPOINT_SCAN_RESPONSE endpointScanResponse{};
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"diagnostic session cannot run production endpoint preflight",
+        IOCTL_OAC_V5_RUN_SCAN,
+        &endpointScan,
+        sizeof(endpointScan),
+        &endpointScanResponse,
+        sizeof(endpointScanResponse),
+        {ERROR_NOT_SUPPORTED});
+    auto invalidEndpointScan = endpointScan;
+    invalidEndpointScan.RequestedFlags |= 0x80000000UL;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production endpoint preflight rejects unknown flags",
+        IOCTL_OAC_V5_RUN_SCAN,
+        &invalidEndpointScan,
+        sizeof(invalidEndpointScan),
+        &endpointScanResponse,
+        sizeof(endpointScanResponse),
+        {ERROR_INVALID_PARAMETER});
+    invalidEndpointScan = endpointScan;
+    invalidEndpointScan.Reserved = 1;
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production endpoint preflight rejects reserved data",
+        IOCTL_OAC_V5_RUN_SCAN,
+        &invalidEndpointScan,
+        sizeof(invalidEndpointScan),
+        &endpointScanResponse,
+        sizeof(endpointScanResponse),
+        {ERROR_INVALID_PARAMETER});
+    ExpectIoctlFailure(
+        log,
+        device,
+        L"production endpoint preflight rejects a truncated request",
+        IOCTL_OAC_V5_RUN_SCAN,
+        &endpointScan,
+        sizeof(endpointScan) - 1,
+        &endpointScanResponse,
+        sizeof(endpointScanResponse),
+        {ERROR_INVALID_PARAMETER});
 
     OAC_STATUS_RESPONSE legacyStatus{};
     ExpectIoctlFailure(

@@ -89,7 +89,11 @@ OAC_SIGNED_POLICY_VALIDATION OacSignedPolicyValidate(
     if (policy->RuleCatalogRevision !=
             OAC_POLICY_RULE_CATALOG_REVISION ||
         policy->RuleCount != OAC_POLICY_RULE_COUNT ||
-        !OacPolicyRuleSetValid(policy->Rules, policy->RuleCount))
+        !OacPolicyRuleSetValid(policy->Rules, policy->RuleCount) ||
+        !OacBytesAreZero(
+            (const uint8_t*)&policy->Rules[policy->RuleCount],
+            sizeof(policy->Rules) -
+                (policy->RuleCount * sizeof(policy->Rules[0]))))
         return OAC_SIGNED_POLICY_INVALID_RULES;
     if (!OacBackendPolicyValid(
             policy->BackendLeaseMilliseconds,

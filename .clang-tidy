@@ -5,10 +5,11 @@ Checks: >
   bugprone-*,
   performance-*,
   portability-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -bugprone-easily-swappable-parameters,
   -performance-enum-size,
   -performance-no-int-to-ptr,
   -clang-analyzer-optin.core.EnumCastOutOfRange
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*[\\/](OAC-Client[\\/].*|shared[\\/]oac_windows\.hpp)$'
+HeaderFilterRegex: '.*[\\/](OAC-(Client|Service)[\\/].*|shared[\\/](oac_windows\.hpp|oac_driver_trust\.(hpp|cpp)))$'
 ...

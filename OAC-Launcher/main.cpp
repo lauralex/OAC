@@ -71,7 +71,7 @@ bool EnsureServiceRunning(
         return false;
     }
 
-    constexpr ULONGLONG timeoutMs = 10000;
+    constexpr ULONGLONG timeoutMs = 60000;
     const ULONGLONG deadline = GetTickCount64() + timeoutMs;
     bool startAttempted = false;
     for (;;)
@@ -161,6 +161,8 @@ const wchar_t* ServiceStageText(OAC_SERVICE_FAILURE_STAGE stage) noexcept
     case OAC_SERVICE_STAGE_RUNTIME: return L"control worker runtime";
     case OAC_SERVICE_STAGE_TARGET_JOB: return L"target job initialization";
     case OAC_SERVICE_STAGE_BACKEND: return L"backend session initialization";
+    case OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT:
+        return L"endpoint preflight and admission";
     default: return L"unknown stage";
     }
 }
@@ -438,7 +440,8 @@ int SendRequest(ULONG requestType)
             response.DriverProtocolVersion != 0 ||
             response.DriverCapabilities != 0 ||
             response.SessionLossSequence != 0 ||
-            response.LastSessionLossReason != 0 || response.Reserved != 0 ||
+            response.LastSessionLossReason != 0 ||
+            !OacIpcEndpointStatusAreZero(&response) ||
             !OacIpcBackendStatusAreZero(&response.Backend) ||
             !OacIpcScanMetricsAreZero(&response.Scanner))
         {
@@ -456,7 +459,7 @@ int SendRequest(ULONG requestType)
         response.ClientSessionId != ownSessionId ||
         response.ServiceProcessId != serverProcessId ||
         (response.StatusFlags & OAC_IPC_STATUS_DRIVER_READY) == 0 ||
-        response.Reserved != 0 ||
+        !OacIpcEndpointStatusValid(&response) ||
         response.LastSessionLossReason >
             OAC_REVOKE_TARGET_CONFIRMATION_FAILED ||
         ((response.SessionLossSequence == 0) !=
@@ -482,6 +485,10 @@ int SendRequest(ULONG requestType)
                << L"; flags=0x" << response.StatusFlags << std::dec
                << L"; session-loss-sequence=" << response.SessionLossSequence
                << L"; last-session-loss=" << response.LastSessionLossReason
+               << L"; endpoint-config=0x" << std::hex
+               << response.EndpointConfigurationFlags << std::dec
+               << L"; driver-gate-trips=" << response.DriverGateTrips
+               << L"; endpoint-scan-id=" << response.EndpointScanId
                << L"; backend-lease=" << response.Backend.LeaseState
                << L"; backend-flags=0x" << std::hex
                << response.Backend.Flags << std::dec

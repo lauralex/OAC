@@ -159,6 +159,11 @@ static ULONGLONG OacNextPositiveCounter(_Inout_ volatile LONG64* Counter)
     return value > 0 ? (ULONGLONG)value : 0;
 }
 
+OAC_V5_SCAN_ID OacEvidenceCreateScanId(VOID)
+{
+    return OacNextPositiveCounter(&g_Evidence.NextScanId);
+}
+
 NTSTATUS OacEvidenceInitialize(VOID)
 {
     RtlZeroMemory(&g_Evidence, sizeof(g_Evidence));
@@ -301,12 +306,50 @@ VOID OacEvidencePublish(
     _In_ ULONGLONG Auxiliary,
     _In_ ULONGLONG EvidenceFlags)
 {
+    (VOID)OacEvidencePublishForScan(
+        ExpectedSessionId,
+        ExpectedGeneration,
+        0,
+        RuleId,
+        EventType,
+        ObservationSeverity,
+        PolicySeverity,
+        Confidence,
+        Category,
+        ProcessId,
+        ThreadId,
+        Address,
+        Auxiliary,
+        EvidenceFlags,
+        NULL);
+}
+
+BOOLEAN OacEvidencePublishForScan(
+    _In_ const OAC_V5_SESSION_ID* ExpectedSessionId,
+    _In_ ULONGLONG ExpectedGeneration,
+    _In_ OAC_V5_SCAN_ID ScanId,
+    _In_ OAC_V5_RULE_ID RuleId,
+    _In_ OAC_V5_EVENT_TYPE EventType,
+    _In_ OAC_V5_OBSERVATION_SEVERITY ObservationSeverity,
+    _In_ OAC_V5_POLICY_SEVERITY PolicySeverity,
+    _In_ OAC_V5_CONFIDENCE Confidence,
+    _In_ OAC_V5_CATEGORY Category,
+    _In_opt_ HANDLE ProcessId,
+    _In_opt_ HANDLE ThreadId,
+    _In_opt_ PVOID Address,
+    _In_ ULONGLONG Auxiliary,
+    _In_ ULONGLONG EvidenceFlags,
+    _In_opt_z_ PCWSTR Text)
+{
     OAC_V5_EVENT_RECORD record;
     POAC_EVIDENCE_QUEUE queue;
     LARGE_INTEGER now = { 0 };
     KIRQL oldIrql;
     ULONG index;
     BOOLEAN alert;
+    BOOLEAN canInsert = TRUE;
+    BOOLEAN published = FALSE;
+    ULONG textLength = 0;
 
     if (ExpectedSessionId == NULL || ExpectedGeneration == 0 ||
         OacV5SessionIdIsZero(ExpectedSessionId) ||
@@ -318,7 +361,7 @@ VOID OacEvidencePublish(
         (EventType == OAC_V5_EVENT_POLICY_VIOLATION &&
          PolicySeverity == OAC_V5_POLICY_NOT_EVALUATED))
     {
-        return;
+        return FALSE;
     }
     alert = ObservationSeverity >= OAC_V5_OBSERVATION_HIGH ||
         PolicySeverity >= OAC_V5_POLICY_HIGH;
@@ -339,10 +382,27 @@ VOID OacEvidencePublish(
     record.Address = (ULONGLONG)(ULONG_PTR)Address;
     record.Auxiliary = Auxiliary;
     record.EvidenceFlags = EvidenceFlags;
+    record.ScanId = ScanId;
     record.Timestamp100ns = (ULONGLONG)now.QuadPart;
     record.OccurrenceCount = 1;
     record.FirstOccurrence100ns = record.Timestamp100ns;
     record.LastOccurrence100ns = record.Timestamp100ns;
+    if (Text != NULL)
+    {
+        while (textLength + 1 < RTL_NUMBER_OF(record.Text) &&
+            Text[textLength] != L'\0')
+        {
+            record.Text[textLength] = Text[textLength];
+            ++textLength;
+        }
+        record.Text[textLength] = L'\0';
+        record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+        record.PayloadLength = (textLength + 1) * sizeof(WCHAR);
+        if (Text[textLength] != L'\0')
+        {
+            record.EvidenceFlags |= OAC_V5_EVIDENCE_TRUNCATED;
+        }
+    }
 
     KeAcquireSpinLock(&queue->Lock, &oldIrql);
     if (!queue->Active || queue->Records == NULL ||
@@ -353,7 +413,7 @@ VOID OacEvidencePublish(
             ExpectedGeneration))
     {
         KeReleaseSpinLock(&queue->Lock, oldIrql);
-        return;
+        return FALSE;
     }
     record.SessionId = queue->SessionId;
     record.Generation = queue->Generation;
@@ -377,6 +437,17 @@ VOID OacEvidencePublish(
             {
                 ++queue->LostHighCount;
             }
+            canInsert = FALSE;
+        }
+        else if (ScanId != 0)
+        {
+            if (!queue->LossLatched)
+            {
+                queue->LossLatched = TRUE;
+                queue->FirstLostSequence = record.Sequence;
+            }
+            ++queue->DroppedCount;
+            canInsert = FALSE;
         }
         else
         {
@@ -391,14 +462,15 @@ VOID OacEvidencePublish(
             ++queue->DroppedCount;
         }
     }
-    if (!alert || queue->Count != queue->Capacity)
+    if (canInsert)
     {
         index = (queue->Head + queue->Count) % queue->Capacity;
         queue->Records[index] = record;
         ++queue->Count;
+        published = TRUE;
     }
     KeReleaseSpinLock(&queue->Lock, oldIrql);
-
+    return published;
 }
 
 static NTSTATUS OacAcknowledgeAlertsLocked(
@@ -576,6 +648,7 @@ static VOID OacFillSnapshotResponseLocked(
 NTSTATUS OacEvidenceManageSnapshot(
     _In_ const OAC_SNAPSHOT_REQUEST* Request,
     _In_ BOOLEAN SessionRevoked,
+    _In_ OAC_V5_SCAN_ID CorrelatedScanId,
     _Out_writes_bytes_to_(OutputLength, *BytesWritten)
         POAC_SNAPSHOT_RESPONSE Response,
     _In_ ULONG OutputLength,
@@ -628,7 +701,9 @@ NTSTATUS OacEvidenceManageSnapshot(
             sizeof(*snapshot) - FIELD_OFFSET(OAC_SNAPSHOT_STATE, SnapshotId));
         status = OacGenerateSnapshotId(&snapshot->SnapshotId);
         if (!NT_SUCCESS(status)) goto Exit;
-        snapshot->ScanId = OacNextPositiveCounter(&g_Evidence.NextScanId);
+        snapshot->ScanId = CorrelatedScanId != 0
+            ? CorrelatedScanId
+            : OacNextPositiveCounter(&g_Evidence.NextScanId);
         snapshot->CursorGeneration = OacNextPositiveCounter(
             &g_Evidence.NextCursorGeneration);
         if (snapshot->ScanId == 0 || snapshot->CursorGeneration == 0)

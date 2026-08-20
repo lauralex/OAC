@@ -28,11 +28,12 @@ VOID OacAsciiToWide(
     _Out_writes_(DestinationCount) PWCHAR Destination,
     _In_ SIZE_T DestinationCount);
 
-VOID OacScanKernelModules(
+BOOLEAN OacScanKernelModules(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount);
 
-VOID OacScanProcessesAndHandles(
+ULONG OacScanProcessesAndHandles(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount,
-    _In_ ULONG ScanFlags);
+    _In_ ULONG ScanFlags,
+    _In_ ULONG RequestedEndpointFlags);

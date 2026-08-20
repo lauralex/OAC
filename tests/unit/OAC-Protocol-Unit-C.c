@@ -32,7 +32,9 @@ _Static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056,
     "C service launch request layout changed");
 _Static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56,
     "C service launch response layout changed");
-_Static_assert(sizeof(OAC_GAME_MANIFEST) == 512,
+_Static_assert(sizeof(OAC_IPC_RESPONSE) == 304,
+    "C service status response layout changed");
+_Static_assert(sizeof(OAC_GAME_MANIFEST) == 960,
     "C game-manifest layout changed");
 _Static_assert(sizeof(OAC_GAME_MOVEMENT_EVENT) == 256,
     "C game movement-event layout changed");
@@ -42,7 +44,7 @@ _Static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE,
     "C manifest digest size drifted from the production protocol");
 _Static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96,
     "C manifest rollback-state layout changed");
-_Static_assert(sizeof(OAC_SIGNED_POLICY) == 1024,
+_Static_assert(sizeof(OAC_SIGNED_POLICY) == 2480,
     "C signed-policy layout changed");
 _Static_assert(sizeof(OAC_POLICY_CACHE_STATE) == 160,
     "C policy-cache layout changed");

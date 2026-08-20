@@ -4,9 +4,12 @@
 campaign at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build
 26100. PR #18 hosted checks also passed. WP-13's portable game/server records and reference movement
 detector passed local and PR #19 hosted driver-free acceptance at
-`8eca1747680f7dc9ad084d1e1897f30bfec08d83`; they are not a deployed game backend. The current
-WP-14 source adds an unsigned release-candidate boundary, deterministic metadata, SPDX inventory,
-and symbol separation; production certification, keys, and distribution remain external.
+`8eca1747680f7dc9ad084d1e1897f30bfec08d83`; they are not a deployed game backend. WP-14 adds the
+unsigned release-candidate boundary. WP-15 endpoint admission, loaded-driver trust, runtime-module
+authorization, and typed target observations passed the exact signed-package, networkless Windows
+11 build 26100, and standard Driver Verifier campaign at
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. Production certification, keys, and distribution remain
+external.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -39,6 +42,9 @@ trust boundaries, adversaries, and failure behavior.
 | Service scheduler | Alert and liveness work remains on the health loop; one coalescing worker incrementally samples target memory regions and threads under fixed budgets | Driver-free budget, metric, and resume tests, Clang-Tidy, and the restricted-service campaign passed; the measured health-loop delay stayed within its bound |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
+| Endpoint admission | The service requires one complete, identity-correlated production scan, evaluates the frozen loaded-driver inventory by signature, hash, and blocked family, and obtains backend acknowledgement before opening launcher IPC | The exact `974d2c4` package passed startup admission, loaded-driver evaluation, backend acknowledgement/failure recovery, and Driver Verifier on Windows 11 build 26100 |
+| Runtime modules | The signed game manifest contains a bounded runtime-module allowlist and an explicit trusted-Windows-module policy; the service evaluates current path, hash, and Windows trust for observed images | The authorized runtime path passed at `974d2c4`; hostile manifest/evaluator units pass, while mapped-file identity and representative middleware/JIT tuning remain pending |
+| Target observations | A bounded worker emits typed findings for executable private/mapped memory, embedded PE headers, direct-syscall stubs, thread start/RIP/stack/debug-register state, instrumentation callbacks, and lifecycle events | The `974d2c4` campaign completed 37 bounded slices and eight sweeps without failure; hostile helper/policy cases are driver-free and skipped coverage remains explicit |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests plus integrated signed-policy VM execution pass |
@@ -84,8 +90,10 @@ for implementation commit `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 
   modification, suspension, termination, or handle duplication.
 - A local process attempting to impersonate the launcher, pipe server, service, device-file owner,
   or an earlier session generation.
-- User-mode DLL injection, manually mapped user images, debuggers, instrumentation, and suspicious
-  overlay or input behavior in the lab scanner.
+- User-mode DLL injection, manually mapped user images, writable-executable regions, direct-syscall
+  stubs, thread-context anomalies, debuggers, instrumentation, and suspicious overlay or input
+  behavior. Production implements the typed bounded subset documented here; broader heuristics stay
+  in the lab scanner.
 - Known denied or vulnerable drivers and observable driver-load changes.
 - Some manually mapped kernel code when it leaves loader-independent execution or control-flow
   evidence.
@@ -123,11 +131,13 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - The service authenticates the pipe client, opens and resolves the executable under impersonation,
   duplicates the same identity to a primary token, and keeps the selected file locked against writes
   and deletion through process creation.
-- Before arming the driver, the service validates an exact 512-byte canonical manifest and detached
+- Before arming the driver, the service validates an exact 960-byte canonical manifest and detached
   SHA-256/RSA CMS signature, the locked executable's Windows trust and strong-RSA Authenticode
   signer, the protected deployment signer pin, component compatibility, expiry, and exact leaf
-  name/size/SHA-256. It rejects rollback and same-sequence equivocation using protected per-game
-  high-water state, then carries the verified manifest digest in correlated driver status.
+  name/size/SHA-256. The manifest also carries a bounded runtime-module hash allowlist and an
+  explicit trusted-Windows-module flag. The service rejects rollback and same-sequence equivocation
+  using protected per-game high-water state, then carries the verified manifest digest in correlated
+  driver status.
 - The production controller may create exactly one child process per session; additional children
   from that service process are denied after target binding.
 - The service owns one unnamed job with exactly `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, verifies target
@@ -140,6 +150,11 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   kernel provenance, adds local ingestion ordering, and drains once more before orderly shutdown.
 - Lower-priority event overwrite cannot consume alert capacity, and frozen snapshot work is paged,
   identity-bound, expiring, and unavailable for new work after revocation.
+- A production claim does not create launcher IPC until one exact configuration and scan completes.
+  The kernel reports explicit process, thread, handle, module, and integrity coverage plus a frozen
+  module snapshot. The service rejects incomplete coverage, untrusted or denied loaded drivers,
+  evidence-queue failure, and backend acknowledgement failure. It arms the driver-load gate before
+  the scan so a scan-to-admission load cannot pass silently.
 - Before claiming production authority, the service establishes one authenticated backend session
   and binds its nonzero digest into the driver session. Nonces, request sequences, response
   correlation, lease sequences, and evidence acknowledgements are strictly validated. The service
@@ -164,25 +179,28 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - The health loop never performs target memory or thread inspection. One cancellation-aware worker
   keeps continuation state and enforces per-slice time, byte, region, and thread limits. It opens
   threads under the authenticated target-owner identity, reverts immediately, and uses one shared
-  RAII guard so every successful suspension has an explicit resume and cleanup fallback.
+  RAII guard so every successful suspension has an explicit resume and cleanup fallback. Findings
+  are typed, bounded, and deduplicated; unsupported or skipped observations remain visible, and
+  observation-queue overflow fails closed.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 - Public candidates contain no private symbols, signing material, lab executables, reports, or raw
   evidence. Every included file is exact-name and hash allowlisted.
 
 WP-01 through WP-12 statements combine source behavior with one exact platform acceptance run. The
-current driver-backed production, service installation, lifecycle, race, job/liveness, typed
-evidence, signed-policy, signed-manifest, backend-session, snapshot, and standard Driver Verifier
-campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That result does not
-replace the broader supported-platform, effective-right, compatibility, or production-deployment
-matrix. WP-13 changes only portable shared code and driver-free tests, so it does not extend the
-recorded Windows runtime claim.
+current WP-15 driver-backed production, service installation, endpoint-admission, lifecycle, race,
+job/liveness, typed-evidence, signed-policy, signed-manifest, backend-session, snapshot, and standard
+Driver Verifier campaign passed at `974d2c4` on Windows 11 build 26100 with zero crash events and
+minidumps. That result does not replace the broader supported-platform, effective-right,
+compatibility, or production-deployment matrix. WP-13 changes only portable shared code and
+driver-free tests, so it does not extend the recorded Windows runtime claim.
 
 ## Planned controls
 
-- Manifest and policy signer rotation and revocation metadata, approved
-  module/middleware/child-process scope, remote policy delivery, production authenticated network
-  transport, durable evidence and replay storage, a production game adapter, broader game-specific
-  detectors, production certification/signing, and backend operations.
+- Manifest and policy signer rotation and revocation metadata, representative module/middleware and
+  approved-JIT tuning, stable mapped-file identity, create-time job assignment, remote policy
+  delivery, production authenticated network transport, durable evidence and replay storage, a
+  production game adapter, broader game-specific detectors, production certification/signing, and
+  backend operations.
 
 ## Evidence and enforcement
 
@@ -195,15 +213,17 @@ text has no policy meaning in the production schema.
 The stable rule identities and default rule set are compiled, while the authenticated policy selects
 the active thresholds, actions, and deployment mode. The signer model records signature source,
 chain, revocation, timestamp, approval flags, and an exact certificate thumbprint as typed fields.
-Runtime-module approval classifications remain explicitly unavailable until game-specific policy
-supplies them; game-manifest authorization is a separate exact pre-launch check and does not infer
-trust from an image name or display string. Lower-priority overwrite gaps remain visible transport facts;
-only records actually delivered to the service can receive a local policy decision.
+Runtime-module authorization is explicit: the signed game manifest supplies bounded hashes and may
+permit currently trusted Windows system images. The service checks current path, content, and trust;
+it does not infer authorization from an image name or display string. Stable mapped-file identity,
+approved JIT profiles, and broad middleware policy remain later work. Lower-priority overwrite gaps
+remain visible transport facts; only records actually delivered to the service can receive a local
+policy decision.
 
-Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
-path can fail its gate after detecting the latch; the production launch transaction closes the
-creation-time target-binding gap but does not replace Windows Code Integrity or authenticated
-backend controls.
+Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. Both the
+diagnostic test and production admission paths can fail after observing the load-gate latch; neither
+is a pre-map driver veto. The production launch transaction closes the creation-time target-binding
+gap but does not replace Windows Code Integrity or authenticated backend controls.
 
 ## Unsupported guarantees
 

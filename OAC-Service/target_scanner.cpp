@@ -1,6 +1,7 @@
 #include "target_scanner.hpp"
 
 #include <TlHelp32.h>
+#include <strsafe.h>
 
 #include <algorithm>
 #include <array>
@@ -8,6 +9,7 @@
 #include <limits>
 
 #include "..\shared\oac_thread_suspension.hpp"
+#include "..\shared\protocol\oac_validate.h"
 
 namespace
 {
@@ -17,8 +19,22 @@ using NtQueryInformationThreadFn = LONG(NTAPI*)(
     void*,
     ULONG,
     ULONG*);
+using NtQueryInformationProcessFn = LONG(NTAPI*)(
+    HANDLE,
+    ULONG,
+    void*,
+    ULONG,
+    ULONG*);
 
 constexpr LONG kThreadQuerySetWin32StartAddress = 9;
+constexpr ULONG kProcessInstrumentationCallback = 40;
+
+struct InstrumentationCallbackInformation
+{
+    ULONG Version;
+    ULONG Reserved;
+    void* Callback;
+};
 
 std::uint64_t FileTimeValue(const FILETIME& value) noexcept
 {
@@ -141,6 +157,14 @@ DWORD TargetScanWorker::Start(
     targetProcess_ = targetProcess;
     targetProcessId_ = targetProcessId;
     targetUserToken_ = targetUserToken;
+    AcquireSRWLockExclusive(&observationLock_);
+    for (auto& observation : observations_) observation = {};
+    observationRead_ = 0;
+    observationWrite_ = 0;
+    observationCount_ = 0;
+    ReleaseSRWLockExclusive(&observationLock_);
+    for (auto& key : observedKeys_) key = {};
+    observedKeyCount_ = 0;
     AcquireSRWLockExclusive(&metricsLock_);
     metrics_.State = OAC_IPC_SCAN_READY;
     ReleaseSRWLockExclusive(&metricsLock_);
@@ -230,6 +254,23 @@ void TargetScanWorker::CopyMetrics(
     ReleaseSRWLockShared(&metricsLock_);
 }
 
+bool TargetScanWorker::TakeObservation(
+    TargetObservation& observation) noexcept
+{
+    AcquireSRWLockExclusive(&observationLock_);
+    if (observationCount_ == 0)
+    {
+        ReleaseSRWLockExclusive(&observationLock_);
+        return false;
+    }
+    observation = observations_[observationRead_];
+    observations_[observationRead_] = {};
+    observationRead_ = (observationRead_ + 1) % observations_.size();
+    --observationCount_;
+    ReleaseSRWLockExclusive(&observationLock_);
+    return true;
+}
+
 HANDLE TargetScanWorker::FailureEvent() const noexcept
 {
     return failureEvent_;
@@ -313,7 +354,9 @@ DWORD TargetScanWorker::RunSlice(SliceReport& report) noexcept
 
     DWORD error = CancellationRequested()
         ? ERROR_OPERATION_ABORTED
-        : InspectNextThread(budget, progress, report);
+        : InspectInstrumentationCallback(report);
+    if (error == ERROR_SUCCESS)
+        error = InspectNextThread(budget, progress, report);
     if (error == ERROR_SUCCESS)
         error = InspectMemory(budget, progress, report);
     if (error == ERROR_SUCCESS && CancellationRequested())
@@ -348,6 +391,61 @@ DWORD TargetScanWorker::RunSlice(SliceReport& report) noexcept
     return error;
 }
 
+DWORD TargetScanWorker::InspectInstrumentationCallback(
+    SliceReport& report) noexcept
+{
+    const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    const auto queryProcess = reinterpret_cast<NtQueryInformationProcessFn>(
+        ntdll != nullptr
+            ? GetProcAddress(ntdll, "NtQueryInformationProcess")
+            : nullptr);
+    if (queryProcess == nullptr)
+    {
+        ++report.itemsSkipped;
+        return ERROR_SUCCESS;
+    }
+
+    InstrumentationCallbackInformation information{};
+    ULONG returned = 0;
+    const LONG status = queryProcess(
+        targetProcess_,
+        kProcessInstrumentationCallback,
+        &information,
+        sizeof(information),
+        &returned);
+    if (status < 0)
+    {
+        ++report.itemsSkipped;
+        return ERROR_SUCCESS;
+    }
+    ++report.itemsInspected;
+    if (information.Callback == nullptr) return ERROR_SUCCESS;
+
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQueryEx(
+            targetProcess_,
+            information.Callback,
+            &memory,
+            sizeof(memory)) != sizeof(memory))
+    {
+        ++report.itemsSkipped;
+        return ERROR_SUCCESS;
+    }
+    if (memory.State == MEM_COMMIT && memory.Type == MEM_IMAGE &&
+        IsExecutableProtection(memory.Protect))
+    {
+        return ERROR_SUCCESS;
+    }
+    return PublishObservation(
+        OAC_V5_RULE_INSTRUMENTATION_CALLBACK,
+        OAC_V5_OBSERVATION_HIGH,
+        OAC_V5_CATEGORY_DEBUGGER,
+        0,
+        reinterpret_cast<ULONGLONG>(information.Callback),
+        (static_cast<ULONGLONG>(memory.Type) << 32) | memory.Protect,
+        L"Target process instrumentation callback points outside executable image-backed memory");
+}
+
 DWORD TargetScanWorker::InspectNextThread(
     const ScanSliceBudget& budget,
     ScanSliceProgress& progress,
@@ -369,6 +467,7 @@ DWORD TargetScanWorker::InspectNextThread(
     }
 
     DWORD candidate = 0;
+    bool enumerationComplete = true;
     THREADENTRY32 entry{};
     entry.dwSize = sizeof(entry);
     if (Thread32First(rawSnapshot, &entry))
@@ -382,13 +481,24 @@ DWORD TargetScanWorker::InspectNextThread(
                 candidate = entry.th32ThreadID;
             }
         } while (Thread32Next(rawSnapshot, &entry));
+        enumerationComplete = GetLastError() == ERROR_NO_MORE_FILES;
     }
+    else
+        enumerationComplete = GetLastError() == ERROR_NO_MORE_FILES;
     CloseHandle(rawSnapshot);
 
     if (candidate == 0)
     {
-        threadSweepComplete_ = true;
-        lastThreadId_ = 0;
+        if (enumerationComplete)
+        {
+            threadSweepComplete_ = true;
+            lastThreadId_ = 0;
+        }
+        else
+        {
+            ++report.itemsSkipped;
+            ++report.threadsSkipped;
+        }
         return ERROR_SUCCESS;
     }
     lastThreadId_ = candidate;
@@ -406,6 +516,9 @@ DWORD TargetScanWorker::InspectNextThread(
 
     ++report.threadsInspected;
     ++report.itemsInspected;
+    bool startOutsideImage = false;
+    ULONGLONG startAddressValue = 0;
+    ULONGLONG startMemoryState = 0;
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
     const auto queryThread = reinterpret_cast<NtQueryInformationThreadFn>(
         ntdll != nullptr
@@ -423,12 +536,33 @@ DWORD TargetScanWorker::InspectNextThread(
                 &returned) >= 0 && startAddress != nullptr)
         {
             MEMORY_BASIC_INFORMATION memory{};
-            (void)VirtualQueryEx(
-                targetProcess_,
-                startAddress,
-                &memory,
-                sizeof(memory));
+            if (VirtualQueryEx(
+                    targetProcess_,
+                    startAddress,
+                    &memory,
+                    sizeof(memory)) == sizeof(memory))
+            {
+                startOutsideImage = memory.State != MEM_COMMIT ||
+                    memory.Type != MEM_IMAGE ||
+                    !IsExecutableProtection(memory.Protect);
+                startAddressValue = reinterpret_cast<ULONGLONG>(startAddress);
+                startMemoryState =
+                    (static_cast<ULONGLONG>(memory.Type) << 32) |
+                    memory.Protect;
+            }
+            else
+            {
+                ++report.itemsSkipped;
+            }
         }
+        else
+        {
+            ++report.itemsSkipped;
+        }
+    }
+    else
+    {
+        ++report.itemsSkipped;
     }
 
     if (CancellationRequested())
@@ -446,21 +580,61 @@ DWORD TargetScanWorker::InspectNextThread(
         return ERROR_SUCCESS;
     }
 
+    bool instructionOutsideImage = false;
+    bool debugRegistersEnabled = false;
+    bool stackRegionUnexpected = false;
+    ULONGLONG instructionAddress = 0;
+    ULONGLONG instructionMemoryState = 0;
+    ULONGLONG debugAddress = 0;
+    ULONGLONG debugControl = 0;
+    ULONGLONG stackAddress = 0;
+    ULONGLONG stackMemoryState = 0;
     CONTEXT context{};
     context.ContextFlags = CONTEXT_CONTROL | CONTEXT_DEBUG_REGISTERS;
     if (GetThreadContext(thread, &context))
     {
         MEMORY_BASIC_INFORMATION memory{};
-        (void)VirtualQueryEx(
-            targetProcess_,
-            reinterpret_cast<const void*>(context.Rip),
-            &memory,
-            sizeof(memory));
-        (void)VirtualQueryEx(
-            targetProcess_,
-            reinterpret_cast<const void*>(context.Rsp),
-            &memory,
-            sizeof(memory));
+        if (VirtualQueryEx(
+                targetProcess_,
+                reinterpret_cast<const void*>(context.Rip),
+                &memory,
+                sizeof(memory)) == sizeof(memory))
+        {
+            instructionOutsideImage = memory.State != MEM_COMMIT ||
+                memory.Type != MEM_IMAGE ||
+                !IsExecutableProtection(memory.Protect);
+            instructionAddress = context.Rip;
+            instructionMemoryState =
+                (static_cast<ULONGLONG>(memory.Type) << 32) |
+                memory.Protect;
+        }
+        else
+        {
+            ++report.itemsSkipped;
+        }
+        if (context.Rsp != 0 && VirtualQueryEx(
+                targetProcess_,
+                reinterpret_cast<const void*>(context.Rsp),
+                &memory,
+                sizeof(memory)) == sizeof(memory))
+        {
+            stackRegionUnexpected = !IsExpectedThreadStackRegion(
+                memory.State, memory.Type, memory.Protect);
+            stackAddress = context.Rsp;
+            stackMemoryState =
+                (static_cast<ULONGLONG>(memory.Type) << 32) |
+                memory.Protect;
+        }
+        else
+        {
+            ++report.itemsSkipped;
+        }
+        debugRegistersEnabled = (context.Dr7 & 0xFFULL) != 0 ||
+            (context.Dr7 & (1ULL << 13)) != 0;
+        debugAddress = context.Dr0 != 0 ? context.Dr0
+            : (context.Dr1 != 0 ? context.Dr1
+                : (context.Dr2 != 0 ? context.Dr2 : context.Dr3));
+        debugControl = context.Dr7;
     }
     else
     {
@@ -479,6 +653,52 @@ DWORD TargetScanWorker::InspectNextThread(
         return resumeError;
     }
     CloseHandle(thread);
+    DWORD observationError = ERROR_SUCCESS;
+    if (startOutsideImage)
+    {
+        observationError = PublishObservation(
+            OAC_V5_RULE_THREAD_OUTSIDE_IMAGE,
+            OAC_V5_OBSERVATION_HIGH,
+            OAC_V5_CATEGORY_THREAD,
+            candidate,
+            startAddressValue,
+            startMemoryState,
+            L"Target thread starts outside executable image-backed memory");
+    }
+    if (observationError == ERROR_SUCCESS && instructionOutsideImage)
+    {
+        observationError = PublishObservation(
+            OAC_V5_RULE_THREAD_OUTSIDE_IMAGE,
+            OAC_V5_OBSERVATION_HIGH,
+            OAC_V5_CATEGORY_THREAD,
+            candidate,
+            instructionAddress,
+            instructionMemoryState,
+            L"Target thread instruction pointer is outside executable image-backed memory");
+    }
+    if (observationError == ERROR_SUCCESS && debugRegistersEnabled)
+    {
+        observationError = PublishObservation(
+            OAC_V5_RULE_THREAD_DEBUG_REGISTERS,
+            OAC_V5_OBSERVATION_CRITICAL,
+            OAC_V5_CATEGORY_DEBUGGER,
+            candidate,
+            debugAddress,
+            debugControl,
+            L"Target thread has enabled hardware debug registers");
+    }
+    if (observationError == ERROR_SUCCESS && stackRegionUnexpected)
+    {
+        observationError = PublishObservation(
+            OAC_V5_RULE_THREAD_STACK_ANOMALY,
+            OAC_V5_OBSERVATION_HIGH,
+            OAC_V5_CATEGORY_THREAD,
+            candidate,
+            stackAddress,
+            stackMemoryState,
+            L"Target thread stack pointer is outside committed private writable memory");
+    }
+    if (observationError != ERROR_SUCCESS) return observationError;
     return CancellationRequested()
         ? ERROR_OPERATION_ABORTED
         : ERROR_SUCCESS;
@@ -559,6 +779,37 @@ DWORD TargetScanWorker::InspectMemory(
 
         ++report.memoryRegions;
         ++report.itemsInspected;
+        if (memory.State == MEM_COMMIT &&
+            IsExecutableProtection(memory.Protect))
+        {
+            DWORD observationError = ERROR_SUCCESS;
+            const ULONGLONG memoryState =
+                (static_cast<ULONGLONG>(memory.Type) << 32) |
+                memory.Protect;
+            if (IsWritableExecutableProtection(memory.Protect))
+            {
+                observationError = PublishObservation(
+                    OAC_V5_RULE_WRITABLE_EXECUTABLE_MEMORY,
+                    OAC_V5_OBSERVATION_CRITICAL,
+                    OAC_V5_CATEGORY_MEMORY,
+                    0,
+                    base,
+                    memoryState,
+                    L"Target contains writable executable memory");
+            }
+            else if (memory.Type != MEM_IMAGE)
+            {
+                observationError = PublishObservation(
+                    OAC_V5_RULE_EXECUTABLE_NONIMAGE_MEMORY,
+                    OAC_V5_OBSERVATION_HIGH,
+                    OAC_V5_CATEGORY_MEMORY,
+                    0,
+                    base,
+                    memoryState,
+                    L"Target contains executable memory without image backing");
+            }
+            if (observationError != ERROR_SUCCESS) return observationError;
+        }
         if (memory.State == MEM_COMMIT && memory.Type != MEM_IMAGE &&
             IsExecutableProtection(memory.Protect) &&
             CanReadProtection(memory.Protect))
@@ -584,6 +835,37 @@ DWORD TargetScanWorker::InspectMemory(
                     report.bytesRead += received;
                 }
                 if (!read && received == 0) ++report.itemsSkipped;
+                if (received != 0 &&
+                    ContainsPortableExecutable(sample.data(), received))
+                {
+                    const DWORD observationError = PublishObservation(
+                        OAC_V5_RULE_UNBACKED_PE_IMAGE,
+                        OAC_V5_OBSERVATION_HIGH,
+                        OAC_V5_CATEGORY_MEMORY,
+                        0,
+                        base,
+                        (static_cast<ULONGLONG>(memory.Type) << 32) |
+                            memory.Protect,
+                        L"Target contains a PE image in executable memory without image backing");
+                    if (observationError != ERROR_SUCCESS)
+                        return observationError;
+                }
+                const std::size_t syscallOffset = FindDirectSyscallStub(
+                    sample.data(), received);
+                if (syscallOffset != kDirectSyscallStubNotFound)
+                {
+                    const DWORD observationError = PublishObservation(
+                        OAC_V5_RULE_DIRECT_SYSCALL_STUB,
+                        OAC_V5_OBSERVATION_HIGH,
+                        OAC_V5_CATEGORY_MEMORY,
+                        0,
+                        base + syscallOffset,
+                        (static_cast<ULONGLONG>(memory.Type) << 32) |
+                            memory.Protect,
+                        L"Target contains a direct system-call stub in executable memory without image backing");
+                    if (observationError != ERROR_SUCCESS)
+                        return observationError;
+                }
             }
         }
 
@@ -594,6 +876,64 @@ DWORD TargetScanWorker::InspectMemory(
         }
         nextMemoryAddress_ = next;
     }
+    return ERROR_SUCCESS;
+}
+
+DWORD TargetScanWorker::PublishObservation(
+    OAC_V5_RULE_ID ruleId,
+    OAC_V5_OBSERVATION_SEVERITY severity,
+    OAC_V5_CATEGORY category,
+    ULONGLONG threadId,
+    ULONGLONG address,
+    ULONGLONG auxiliary,
+    const wchar_t* text) noexcept
+{
+    if (!OacV5RuleIdValid(ruleId) ||
+        !OacV5ObservationSeverityValid(severity) ||
+        !OacV5CategoryValid(category) || text == nullptr || text[0] == L'\0')
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    for (std::size_t index = 0; index != observedKeyCount_; ++index)
+    {
+        const ObservationKey& key = observedKeys_[index];
+        if (key.RuleId == ruleId && key.ThreadId == threadId &&
+            key.Address == address)
+        {
+            return ERROR_SUCCESS;
+        }
+    }
+    if (observedKeyCount_ == observedKeys_.size())
+        return ERROR_BUFFER_OVERFLOW;
+
+    TargetObservation observation{};
+    observation.RuleId = ruleId;
+    observation.Severity = severity;
+    observation.Category = category;
+    observation.ProcessId = targetProcessId_;
+    observation.ThreadId = threadId;
+    observation.Address = address;
+    observation.Auxiliary = auxiliary;
+    if (FAILED(StringCchCopyW(
+            observation.Text,
+            ARRAYSIZE(observation.Text),
+            text)))
+    {
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    AcquireSRWLockExclusive(&observationLock_);
+    if (observationCount_ == observations_.size())
+    {
+        ReleaseSRWLockExclusive(&observationLock_);
+        return ERROR_BUFFER_OVERFLOW;
+    }
+    observations_[observationWrite_] = observation;
+    observationWrite_ = (observationWrite_ + 1) % observations_.size();
+    ++observationCount_;
+    ReleaseSRWLockExclusive(&observationLock_);
+
+    observedKeys_[observedKeyCount_++] = {ruleId, threadId, address};
     return ERROR_SUCCESS;
 }
 

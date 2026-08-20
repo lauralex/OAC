@@ -4,9 +4,10 @@
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
 the complete runtime suite most recently passed at implementation commit
-`67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100 under standard Driver
-Verifier, including signed-manifest and signed-policy authorization, backend failure/recovery,
-job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a` on Windows 11 build 26100 under standard Driver
+Verifier, including endpoint admission, loaded-driver trust, signed-manifest and signed-policy
+authorization, backend failure/recovery, job/liveness, typed evidence, bounded service scheduling,
+and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -14,30 +15,55 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050006`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050007`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
 function number and is validated even when every other field is well formed.
 
-The current driver advertises session control, launch-ticket, session-liveness, typed-evidence, and
-paged-snapshot capabilities. Negotiate, claim, status, explicit revoke, launch control, evidence
-read, and snapshot management are available:
+The current driver advertises session control, launch-ticket, session-liveness, typed-evidence,
+paged-snapshot, kernel-scan, and driver-gate capabilities. Negotiate, claim, endpoint configuration
+and scan, status, explicit revoke, launch control, evidence read, and snapshot management are
+available:
 
 | Function | IOCTL | Input | Output | Current behavior |
 |---:|---|---|---|---|
 | `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
 | `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 88-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session; production claim requires a nonzero backend binding digest |
+| `0x812` | `IOCTL_OAC_V5_SET_CONFIG` | 56-byte configuration request | 64-byte configuration response | Arms the exact production image-log and driver-gate configuration once, before preflight |
+| `0x813` | `IOCTL_OAC_V5_RUN_SCAN` | 56-byte scan request | 104-byte scan response | Runs the exact current-state endpoint checks once and returns explicit completion, failure, timing, evidence count, and scan identity |
 | `0x814` | `IOCTL_OAC_READ_EVIDENCE` | 80-byte evidence request | 136-byte prefix plus up to 16 fixed records | Reads the retained alert or overwrite-event channel; alert reads acknowledge only previously delivered records |
 | `0x815` | `IOCTL_OAC_MANAGE_SNAPSHOT` | 96-byte snapshot request | 152-byte prefix plus up to 16 fixed records | Opens, reads, or closes one frozen, expiring kernel-module snapshot |
-| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 200-byte status response | Returns correlated session state, mode, capability, counters, manifest and backend digests, and monotonic session-loss latch |
+| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 208-byte status response | Returns correlated session state, mode, capabilities, endpoint configuration and scan identity, counters, manifest and backend digests, and monotonic session-loss latch |
 | `0x817` | `IOCTL_OAC_V5_REVOKE_SESSION` | 56-byte revoke request | 80-byte revoke response | Idempotently revokes the caller's exact session and records requested-shutdown provenance |
 | `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2144-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket bound to a nonzero verified-manifest digest |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
 | `0x81A` | `IOCTL_OAC_CONFIRM_TARGET` | 72-byte confirmation request | 72-byte confirmation response | Confirms the exact bound process handle and enters monitoring |
 
-The shared header still reserves production configuration and scan IOCTL/message IDs for later
-work. The separate diagnostic compatibility ABI retains its existing scan and CPU-snapshot paths.
+The separate diagnostic compatibility ABI retains its broader scan, optional private-profile, and
+CPU-snapshot paths; it is not a fallback production authority.
+
+### Endpoint admission
+
+After claiming a production session, the service configures the exact image-log and driver-gate
+flags before requesting the scan. Configuration and scanning are one-use operations in the
+`CLAIMED` state: a scan cannot begin without the exact configuration, launch cannot arm while a scan
+is active, and a failed or incomplete scan clears the production configuration. A successful scan
+records one nonzero scan identity in session status and leaves the gate armed for the remainder of
+the session.
+
+The request names the complete required set: kernel-module cross-views, process and system-thread
+state, dangerous handles, bounded kernel-integrity checks, and platform state. The response carries
+the requested and completed masks, start and completion times, evidence count, state, and native
+failure status. Allocation failure, malformed system information, evidence loss, missing scan
+provenance, or any incomplete required check produces `INCOMPLETE`; it never becomes a clean scan.
+
+The service then reads a frozen kernel-module snapshot. It resolves every reported path and requires
+valid embedded or catalog trust plus a nonempty Authenticode SHA-256, rejects the generated exact
+vulnerable-driver hashes and conservative family policy, evaluates all typed observations through
+the signed rule set, uploads them through the backend interface, and waits for acknowledgement.
+Launcher IPC is created only after this boundary succeeds. A post-start driver-gate trip remains a
+terminal policy condition.
 
 ### Launch transaction
 
@@ -81,10 +107,12 @@ signature verification, filesystem I/O, or registry access.
 
 ### Signed game-build authorization
 
-`shared/oac_manifest.h` defines a packed 512-byte canonical record. It carries fixed identities,
+`shared/oac_manifest.h` defines a packed 960-byte canonical record. It carries fixed identities,
 monotonic per-game sequence, bounded issuance and expiry, minimum driver/service/launcher protocol
-revisions, exact executable leaf name, size and SHA-256, and signer-certificate SHA-256. Unused bytes
-must be zero, and the detached CMS signature is not part of the canonical bytes.
+revisions, exact executable leaf name, size and SHA-256, signer-certificate SHA-256, up to sixteen
+sorted unique approved runtime-module hashes, and an explicit flag for trusted Windows modules.
+Unused entries and reserved fields must be zero, and the detached CMS signature is not part of the
+canonical bytes.
 
 The service opens both sidecars without following reparse points and accepts exactly one SHA-256/RSA
 CMS signer with no countersignature or unsigned attributes. The signer certificate must be the exact
@@ -95,12 +123,16 @@ followed by the protected per-game high-water record. A lower sequence, or a dif
 manifest/build at the current sequence, is denied. A new high-water record is flushed and read back
 before the driver ticket is armed.
 
-This milestone authorizes the main executable only. Approved modules, middleware, child processes,
-runtime classes, manifest-key rotation, and backend admission remain separate work.
+Target image-load records are evaluated in the service against this manifest. The exact main image,
+an explicit module digest, or—when the manifest enables the class—a Windows-directory file with
+valid embedded or catalog trust is admitted. Everything else becomes a typed critical runtime-module
+record. The current check binds the observed path, current file content, and trust result; complete
+mapped-file identity, approved JIT regions, middleware classification, child-process policy,
+manifest-key rotation, and production backend admission remain separate work.
 
 ### Signed policy record
 
-`shared/oac_signed_policy.*` defines a fixed 1024-byte schema-2 canonical policy record and a fixed 160-byte
+`shared/oac_signed_policy.*` defines a fixed 2480-byte schema-3 canonical policy record and a fixed 160-byte
 persistent cache record. The policy carries game, build, and channel scope; deployment mode;
 component compatibility; a bounded validity interval; a complete typed rule set; a signer identity;
 and explicit emergency-revocation or rollback-authorization fields. Its detached CMS signature is
@@ -251,16 +283,18 @@ and required provenance. It maps the record through deterministic Observe, Enfor
 tables and returns separate action, five-level policy confidence, and policy severity fields. The
 service selects the authenticated policy's rule set and deployment mode. It preserves the
 observation's original confidence and source provenance, queues the record with its exact decision,
-and ends the service runtime for `RevokeSession`. The service implements the `DenyLaunch` action
-needed by later game-specific rules, but no current rule selects it. The included backend transport
+and ends the service runtime for `RevokeSession`. Current endpoint-preflight and driver-trust rules
+use `DenyLaunch`; runtime target violations may request review or revoke the session according to
+the signed deployment mode. The included backend transport
 acknowledges this strict local contract; production network delivery and server persistence remain
 later work.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010006`. Hello and status retain fixed 32-byte
-requests. Status responses are 288 bytes and include the session-loss sequence and cause, a strict
-32-byte backend record, and a strict 184-byte scanner record. The backend record reports lease
+The local launcher/service wire revision is `0x00010007`. Hello and status retain fixed 32-byte
+requests. Status responses are 304 bytes and include the session-loss sequence and cause, endpoint
+configuration, driver-gate count and completed-scan identity, a strict 32-byte backend record, and a
+strict 184-byte scanner record. The backend record reports lease
 state, authenticated/test flags, pending evidence, last error, lease sequence, and acknowledged
 service sequence. The scanner record reports health-loop iterations and maximum delay,
 queued/completed/coalesced/cancelled/failed slices, completed sweeps, memory and thread coverage,
@@ -295,7 +329,7 @@ authenticated diagnostic session; it is not advertised as a production capabilit
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
 request/response validation, evidence and snapshot correlation, the session transition matrix,
 hostile binary and UTF-16 event payloads, and backend record, replay, lease, queue, and
-acknowledgement behavior. The current Debug and Release runs pass `663/663`; the driver-backed VM
+acknowledgement behavior. The current driver-free suite includes more than 700 checks; the driver-backed VM
 campaign remains a separate runtime gate for each coherent kernel/runtime milestone.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,
@@ -310,6 +344,11 @@ sessions cannot invoke production launch operations. The complete WP-01 through 
 at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 Pro build
 26100. Four driver-backed protocol executions passed under the baseline and standard Driver
 Verifier phases.
+
+The endpoint-admission source adds malformed and authorization checks for the configuration and
+scan messages, status invariants, current-state evidence correlation, loaded-driver trust, runtime
+module policy, and target memory/thread observations. The exact `974d2c4` package passed those paths
+in the Windows 11 build 26100 and standard Driver Verifier campaign.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
@@ -329,6 +368,7 @@ rollback state, accepted one explicitly authorized rollback, and persisted emerg
 before refusing startup. The current VM harness additionally contains bounded backend replay,
 withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; all passed
 in the named campaign.
-The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 437 ms maximum
-health-loop delay, a 43.498 ms maximum slice duration, and no failed or cancelled slice.
+The current campaign required bounded scheduler coverage, health latency, slice duration, and
+thread-resume metrics. It accepted 37 completed slices, eight completed sweeps, a 406 ms maximum
+health-loop delay, a 107.878 ms maximum slice duration, a 1.750 ms maximum thread suspension, and no
+failed or cancelled slice.

@@ -20,6 +20,9 @@ typedef struct OAC_SYSTEM_THREAD_INFORMATION_TAG
     ULONG WaitReason;
 } OAC_SYSTEM_THREAD_INFORMATION, *POAC_SYSTEM_THREAD_INFORMATION;
 
+C_ASSERT(sizeof(OAC_SYSTEM_THREAD_INFORMATION) == 80);
+C_ASSERT(FIELD_OFFSET(OAC_SYSTEM_THREAD_INFORMATION, StartAddress) == 32);
+
 typedef struct OAC_SYSTEM_PROCESS_INFORMATION_TAG
 {
     ULONG NextEntryOffset;
@@ -47,6 +50,9 @@ typedef struct OAC_SYSTEM_PROCESS_INFORMATION_TAG
     LARGE_INTEGER Reserved7[6];
 } OAC_SYSTEM_PROCESS_INFORMATION, *POAC_SYSTEM_PROCESS_INFORMATION;
 
+C_ASSERT(sizeof(OAC_SYSTEM_PROCESS_INFORMATION) == 256);
+C_ASSERT(FIELD_OFFSET(OAC_SYSTEM_PROCESS_INFORMATION, UniqueProcessId) == 80);
+
 typedef struct OAC_SYSTEM_HANDLE_ENTRY_TAG
 {
     PVOID Object;
@@ -66,7 +72,7 @@ typedef struct OAC_SYSTEM_HANDLE_INFORMATION_TAG
     OAC_SYSTEM_HANDLE_ENTRY Handles[ANYSIZE_ARRAY];
 } OAC_SYSTEM_HANDLE_INFORMATION, *POAC_SYSTEM_HANDLE_INFORMATION;
 
-static VOID OacScanProcessesAndSystemThreads(
+static BOOLEAN OacScanProcessesAndSystemThreads(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount,
     _In_opt_ POAC_SYSTEM_HANDLE_INFORMATION Handles,
@@ -81,6 +87,7 @@ static VOID OacScanProcessesAndSystemThreads(
     NTSTATUS status;
     ULONG processCount = 0;
     ULONG threadCount = 0;
+    BOOLEAN terminalRecord = FALSE;
 
     status = OacQuerySystemInformation(
         OAC_SYSTEM_PROCESS_INFORMATION_CLASS,
@@ -90,17 +97,42 @@ static VOID OacScanProcessesAndSystemThreads(
     {
         OacReportFinding(OacSeverityMedium, OacCategoryProcess, NULL, NULL,
             NULL, status, L"Process cross-view query failed: 0x%08X", status);
-        return;
+        return FALSE;
     }
 
     bitmapBuffer = (PULONG)OacAllocatePool(
         TRUE,
         OAC_PID_BITMAP_BITS / 8,
         OAC_SCAN_TAG);
-    if (bitmapBuffer != NULL)
+    if (bitmapBuffer == NULL)
     {
-        RtlZeroMemory(bitmapBuffer, OAC_PID_BITMAP_BITS / 8);
-        RtlInitializeBitMap(&bitmap, bitmapBuffer, OAC_PID_BITMAP_BITS);
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            OAC_PID_BITMAP_BITS / 8,
+            L"Process cross-view bitmap allocation failed");
+        ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+        return FALSE;
+    }
+    RtlZeroMemory(bitmapBuffer, OAC_PID_BITMAP_BITS / 8);
+    RtlInitializeBitMap(&bitmap, bitmapBuffer, OAC_PID_BITMAP_BITS);
+
+    if (processLength < sizeof(OAC_SYSTEM_PROCESS_INFORMATION))
+    {
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            processLength,
+            L"Process snapshot was shorter than its fixed header");
+        ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+        ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+        return FALSE;
     }
 
     cursor = (PUCHAR)processBuffer;
@@ -121,22 +153,54 @@ static VOID OacScanProcessesAndSystemThreads(
         {
             OacReportFinding(OacSeverityHigh, OacCategoryIntegrity, NULL, NULL,
                 cursor, entryLength, L"Malformed SystemProcessInformation record");
-            break;
+            ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+            ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+            return FALSE;
         }
 
         ++processCount;
-        if (bitmapBuffer != NULL && pid < OAC_PID_BITMAP_BITS)
-            RtlSetBit(&bitmap, pid);
+        if (pid >= OAC_PID_BITMAP_BITS)
+        {
+            OacReportFinding(
+                OacSeverityHigh,
+                OacCategoryIntegrity,
+                process->UniqueProcessId,
+                NULL,
+                NULL,
+                OAC_PID_BITMAP_BITS,
+                L"Process identifier exceeds the bounded cross-view range");
+            ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+            ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+            return FALSE;
+        }
+        RtlSetBit(&bitmap, pid);
 
         threads = (POAC_SYSTEM_THREAD_INFORMATION)(process + 1);
         availableThreads = (entryLength - sizeof(*process)) /
                            sizeof(OAC_SYSTEM_THREAD_INFORMATION);
-        availableThreads = min(availableThreads, process->NumberOfThreads);
-        threadCount += availableThreads;
+        if (process->NumberOfThreads > availableThreads)
+        {
+            OacReportFinding(
+                OacSeverityHigh,
+                OacCategoryIntegrity,
+                process->UniqueProcessId,
+                NULL,
+                NULL,
+                process->NumberOfThreads,
+                L"Process snapshot thread array was truncated; available=%lu reported=%lu",
+                availableThreads,
+                process->NumberOfThreads);
+            ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+            ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+            return FALSE;
+        }
+        /* The entry may contain OS-owned extension data after the reported
+         * thread array.  Use the derived capacity only as a bounds check. */
+        threadCount += process->NumberOfThreads;
 
         if (pid == 4)
         {
-            for (i = 0; i < availableThreads; ++i)
+            for (i = 0; i < process->NumberOfThreads; ++i)
             {
                 if (threads[i].StartAddress != NULL &&
                     !OacAddressInModules(
@@ -157,15 +221,34 @@ static VOID OacScanProcessesAndSystemThreads(
             }
         }
 
-        if (process->NextEntryOffset == 0) break;
+        if (process->NextEntryOffset == 0)
+        {
+            terminalRecord = TRUE;
+            break;
+        }
         cursor += process->NextEntryOffset;
+    }
+
+    if (!terminalRecord)
+    {
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            processLength,
+            L"Process snapshot ended without a terminal record");
+        ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+        ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+        return FALSE;
     }
 
     OacReportFinding(OacSeverityInfo, OacCategoryProcess, NULL, NULL,
         NULL, threadCount, L"Process snapshot: %lu processes, %lu threads",
         processCount, threadCount);
 
-    if (bitmapBuffer != NULL && Handles != NULL &&
+    if (Handles != NULL &&
         HandleBufferLength >=
             (ULONG)FIELD_OFFSET(OAC_SYSTEM_HANDLE_INFORMATION, Handles))
     {
@@ -202,8 +285,9 @@ static VOID OacScanProcessesAndSystemThreads(
         }
     }
 
-    if (bitmapBuffer != NULL) ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
+    ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
     ExFreePoolWithTag(processBuffer, OAC_SCAN_TAG);
+    return TRUE;
 }
 
 static NTSTATUS OacReferencePhysicalMemoryObject(
@@ -242,7 +326,7 @@ static NTSTATUS OacReferencePhysicalMemoryObject(
     return status;
 }
 
-static VOID OacScanHandles(
+static BOOLEAN OacScanHandles(
     _In_ POAC_SYSTEM_HANDLE_INFORMATION Handles,
     _In_ ULONG BufferLength,
     _In_ ULONG ScanFlags)
@@ -268,11 +352,25 @@ static VOID OacScanHandles(
             NULL,
             BufferLength,
             L"Extended handle snapshot was shorter than its fixed header");
-        return;
+        return FALSE;
     }
 
     maximum = (BufferLength - FIELD_OFFSET(OAC_SYSTEM_HANDLE_INFORMATION, Handles)) /
               sizeof(OAC_SYSTEM_HANDLE_ENTRY);
+    if (Handles->NumberOfHandles > maximum)
+    {
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            Handles->NumberOfHandles,
+            L"Extended handle snapshot was truncated; available=%llu reported=%llu",
+            (ULONGLONG)maximum,
+            (ULONGLONG)Handles->NumberOfHandles);
+        return FALSE;
+    }
     count = min(Handles->NumberOfHandles, maximum);
 
     (VOID)OacReferencePhysicalMemoryObject(
@@ -347,16 +445,20 @@ static VOID OacScanHandles(
 
     if (physicalMemoryObject != NULL) ObDereferenceObject(physicalMemoryObject);
     if (physicalMemoryHandle != NULL) ZwClose(physicalMemoryHandle);
+    return TRUE;
 }
 
-VOID OacScanProcessesAndHandles(
+ULONG OacScanProcessesAndHandles(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount,
-    _In_ ULONG ScanFlags)
+    _In_ ULONG ScanFlags,
+    _In_ ULONG RequestedEndpointFlags)
 {
     PVOID handleBuffer = NULL;
     ULONG handleLength = 0;
     NTSTATUS status;
+    ULONG completedFlags = 0;
+    BOOLEAN processComplete;
 
     status = OacQuerySystemInformation(
         OAC_SYS_EXT_HANDLE_INFO,
@@ -370,17 +472,28 @@ VOID OacScanProcessesAndHandles(
         handleLength = 0;
     }
 
-    OacScanProcessesAndSystemThreads(
+    processComplete = OacScanProcessesAndSystemThreads(
         Modules,
         ModuleCount,
         (POAC_SYSTEM_HANDLE_INFORMATION)handleBuffer,
         handleLength);
+    if (processComplete &&
+        (RequestedEndpointFlags & OAC_ENDPOINT_SCAN_PROCESS_STATE) != 0)
+    {
+        completedFlags |= OAC_ENDPOINT_SCAN_PROCESS_STATE;
+    }
     if (handleBuffer != NULL)
     {
-        OacScanHandles(
+        if (OacScanHandles(
             (POAC_SYSTEM_HANDLE_INFORMATION)handleBuffer,
             handleLength,
-            ScanFlags);
+            ScanFlags) &&
+            (RequestedEndpointFlags &
+                OAC_ENDPOINT_SCAN_DANGEROUS_HANDLES) != 0)
+        {
+            completedFlags |= OAC_ENDPOINT_SCAN_DANGEROUS_HANDLES;
+        }
         ExFreePoolWithTag(handleBuffer, OAC_SCAN_TAG);
     }
+    return completedFlags;
 }

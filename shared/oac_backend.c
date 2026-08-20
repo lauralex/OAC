@@ -258,7 +258,8 @@ int OacBackendValidateEvidenceBatch(
         const OAC_BACKEND_EVIDENCE_ITEM* item = &items[index];
         if (item->Reserved != 0 ||
             (item->SourceChannel != OAC_EVIDENCE_CHANNEL_ALERT &&
-             item->SourceChannel != OAC_EVIDENCE_CHANNEL_EVENT) ||
+             item->SourceChannel != OAC_EVIDENCE_CHANNEL_EVENT &&
+             item->SourceChannel != OAC_BACKEND_EVIDENCE_SOURCE_SERVICE) ||
             item->Record.ServiceSequence !=
                 metadata->FirstServiceSequence + index ||
             OacV5ValidateEventRecord(&item->Record, sizeof(item->Record)) !=

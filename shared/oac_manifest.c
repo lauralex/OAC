@@ -29,6 +29,36 @@ static int OacBytesAreNonzero(const uint8_t* bytes, size_t length)
     return !OacBytesAreZero(bytes, length);
 }
 
+static int OacManifestModulePolicyValid(
+    const OAC_GAME_MANIFEST* manifest)
+{
+    uint32_t index;
+
+    if (manifest->ModuleHashCount > OAC_MANIFEST_MODULE_HASH_CAPACITY)
+        return 0;
+    for (index = 0; index < manifest->ModuleHashCount; ++index)
+    {
+        if (!OacBytesAreNonzero(
+                manifest->ModuleSha256[index], OAC_MANIFEST_HASH_SIZE) ||
+            (index != 0 && memcmp(
+                manifest->ModuleSha256[index - 1],
+                manifest->ModuleSha256[index],
+                OAC_MANIFEST_HASH_SIZE) >= 0))
+        {
+            return 0;
+        }
+    }
+    for (; index < OAC_MANIFEST_MODULE_HASH_CAPACITY; ++index)
+    {
+        if (!OacBytesAreZero(
+                manifest->ModuleSha256[index], OAC_MANIFEST_HASH_SIZE))
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static uint16_t OacAsciiLower(uint16_t value)
 {
     if (value >= (uint16_t)'A' && value <= (uint16_t)'Z')
@@ -60,7 +90,8 @@ static int OacManifestExecutableNameValid(
         }
         if (value >= 0xD800 && value <= 0xDBFF)
         {
-            if (++index >= length || name[index] < 0xDC00 ||
+            ++index;
+            if (index >= length || name[index] < 0xDC00 ||
                 name[index] > 0xDFFF)
             {
                 return 0;
@@ -135,8 +166,8 @@ OAC_MANIFEST_VALIDATION OacManifestValidate(
     {
         return OAC_MANIFEST_INVALID_SCHEMA;
     }
-    if (manifest->Flags != 0 || manifest->Reserved0 != 0 ||
-        !OacBytesAreZero(manifest->Reserved, sizeof(manifest->Reserved)))
+    if ((manifest->Flags & ~OAC_MANIFEST_FLAGS) != 0 ||
+        manifest->Reserved0 != 0 || manifest->Reserved1 != 0)
     {
         return OAC_MANIFEST_INVALID_RESERVED;
     }
@@ -186,6 +217,8 @@ OAC_MANIFEST_VALIDATION OacManifestValidate(
     {
         return OAC_MANIFEST_INVALID_FILE_IDENTITY;
     }
+    if (!OacManifestModulePolicyValid(manifest))
+        return OAC_MANIFEST_INVALID_MODULE_POLICY;
     return OAC_MANIFEST_VALID;
 }
 
@@ -212,6 +245,52 @@ int OacManifestFileIdentityMatches(
             manifest->SigningKeyId,
             signerCertificateSha256,
             OAC_MANIFEST_HASH_SIZE) == 0;
+}
+
+int OacManifestRuntimeModuleAllowed(
+    const OAC_GAME_MANIFEST* manifest,
+    const uint8_t moduleSha256[OAC_MANIFEST_HASH_SIZE],
+    int trustedWindowsModule)
+{
+    size_t low = 0;
+    size_t high;
+
+    if (manifest == NULL || moduleSha256 == NULL ||
+        (trustedWindowsModule != 0 && trustedWindowsModule != 1) ||
+        (manifest->Flags & ~OAC_MANIFEST_FLAGS) != 0 ||
+        manifest->Reserved0 != 0 || manifest->Reserved1 != 0 ||
+        !OacManifestModulePolicyValid(manifest))
+    {
+        return 0;
+    }
+    if (memcmp(
+            manifest->ExecutableSha256,
+            moduleSha256,
+            OAC_MANIFEST_HASH_SIZE) == 0)
+    {
+        return 1;
+    }
+    if (trustedWindowsModule &&
+        (manifest->Flags & OAC_MANIFEST_ALLOW_TRUSTED_WINDOWS_MODULES) != 0)
+    {
+        return 1;
+    }
+
+    high = manifest->ModuleHashCount;
+    while (low < high)
+    {
+        const size_t middle = low + (high - low) / 2;
+        const int comparison = memcmp(
+            manifest->ModuleSha256[middle],
+            moduleSha256,
+            OAC_MANIFEST_HASH_SIZE);
+        if (comparison == 0) return 1;
+        if (comparison < 0)
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    return 0;
 }
 
 int OacManifestRollbackStateValid(
@@ -248,41 +327,37 @@ OAC_MANIFEST_ROLLBACK_DECISION OacManifestEvaluateRollback(
         return OAC_MANIFEST_ROLLBACK_INVALID_STATE;
     }
     memset(nextState, 0, sizeof(*nextState));
-    if (!hasCurrentState)
+    decision = OAC_MANIFEST_ROLLBACK_ACCEPT_NEW;
+    if (hasCurrentState)
     {
-        decision = OAC_MANIFEST_ROLLBACK_ACCEPT_NEW;
-    }
-    else if (!OacManifestRollbackStateValid(currentState) ||
-        memcmp(
-            currentState->GameId,
-            manifest->GameId,
-            OAC_MANIFEST_ID_SIZE) != 0)
-    {
-        return OAC_MANIFEST_ROLLBACK_INVALID_STATE;
-    }
-    else if (manifest->Sequence < currentState->Sequence)
-    {
-        return OAC_MANIFEST_ROLLBACK_REJECT_OLDER;
-    }
-    else if (manifest->Sequence == currentState->Sequence)
-    {
-        if (memcmp(
-                currentState->ManifestSha256,
-                manifestSha256,
-                OAC_MANIFEST_HASH_SIZE) != 0 ||
+        if (!OacManifestRollbackStateValid(currentState) ||
             memcmp(
-                currentState->BuildId,
-                manifest->BuildId,
+                currentState->GameId,
+                manifest->GameId,
                 OAC_MANIFEST_ID_SIZE) != 0)
         {
-            return OAC_MANIFEST_ROLLBACK_REJECT_EQUIVOCATION;
+            return OAC_MANIFEST_ROLLBACK_INVALID_STATE;
         }
-        *nextState = *currentState;
-        return OAC_MANIFEST_ROLLBACK_ACCEPT_CURRENT;
-    }
-    else
-    {
-        decision = OAC_MANIFEST_ROLLBACK_ACCEPT_NEW;
+        if (manifest->Sequence < currentState->Sequence)
+        {
+            return OAC_MANIFEST_ROLLBACK_REJECT_OLDER;
+        }
+        if (manifest->Sequence == currentState->Sequence)
+        {
+            if (memcmp(
+                    currentState->ManifestSha256,
+                    manifestSha256,
+                    OAC_MANIFEST_HASH_SIZE) != 0 ||
+                memcmp(
+                    currentState->BuildId,
+                    manifest->BuildId,
+                    OAC_MANIFEST_ID_SIZE) != 0)
+            {
+                return OAC_MANIFEST_ROLLBACK_REJECT_EQUIVOCATION;
+            }
+            *nextState = *currentState;
+            return OAC_MANIFEST_ROLLBACK_ACCEPT_CURRENT;
+        }
     }
 
     memcpy(nextState->Magic, g_ManifestStateMagic, sizeof(g_ManifestStateMagic));

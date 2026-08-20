@@ -1,46 +1,38 @@
 #include "scanner.hpp"
-#include "..\shared\oac_driver_policy.h"
+#include "..\shared\oac_driver_trust.hpp"
 
 #include <TlHelp32.h>
 #include <Psapi.h>
 #include <SetupAPI.h>
-#include <bcrypt.h>
 #include <cfgmgr32.h>
 #include <intrin.h>
 #include <winioctl.h>
 #include <winternl.h>
 #include <ntddstor.h>
-#include <softpub.h>
-#include <wincrypt.h>
-#include <mscat.h>
-#include <wintrust.h>
 #include <winsvc.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <map>
+#include <ranges>
 #include <set>
 #include <sstream>
 #include <string_view>
 #include <vector>
 
 #pragma comment(lib, "Advapi32.lib")
-#pragma comment(lib, "Bcrypt.lib")
 #pragma comment(lib, "Cfgmgr32.lib")
 #pragma comment(lib, "Psapi.lib")
 #pragma comment(lib, "Setupapi.lib")
-#pragma comment(lib, "Wintrust.lib")
 
 namespace
 {
 using oac::UniqueHandle;
 using oac::UniqueServiceHandle;
-
-#include "driver_hash_policy.inc"
 
 using NtQuerySystemInformationFn = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
 using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
@@ -322,8 +314,6 @@ void ReportOperatingSystem(Reporter& reporter)
     }
 }
 
-LONG VerifyFileTrust(const std::wstring& path);
-
 std::wstring ProcessImagePath(DWORD processId)
 {
     if (processId == 4) return L"System";
@@ -341,13 +331,10 @@ std::wstring ProcessImagePath(DWORD processId)
 bool IsTrustedWindowsImage(const std::wstring& path)
 {
     if (path.empty() || path == L"System") return path == L"System";
-    std::vector<wchar_t> windows(32768);
-    if (GetWindowsDirectoryW(windows.data(), static_cast<UINT>(windows.size())) == 0)
-        return false;
-    std::wstring prefix = oac::Lowercase(windows.data());
-    if (!prefix.ends_with(L'\\')) prefix += L'\\';
-    const std::wstring lowerPath = oac::Lowercase(path);
-    return lowerPath.starts_with(prefix) && VerifyFileTrust(path) == ERROR_SUCCESS;
+    oac::FileTrustReport trust{};
+    return oac::EvaluateFileTrust(path, trust) == ERROR_SUCCESS &&
+        trust.UnderWindowsDirectory &&
+        oac::FileTrustAccepted(trust);
 }
 
 void ScanHandles(const ScanOptions& options, Reporter& reporter)
@@ -459,219 +446,6 @@ void ScanHandles(const ScanOptions& options, Reporter& reporter)
             (csv ? L"; raw list: " + csvPath.wstring() : L"; raw list unavailable"));
 }
 
-std::wstring NormalizeDriverPath(std::wstring path)
-{
-    wchar_t windows[MAX_PATH]{};
-    (void)GetWindowsDirectoryW(windows, static_cast<UINT>(std::size(windows)));
-    if (path.starts_with(L"\\SystemRoot\\"))
-        return std::wstring(windows) + path.substr(11);
-    if (path.starts_with(L"\\??\\")) return path.substr(4);
-    if (path.starts_with(L"\\Windows\\"))
-    {
-        wchar_t drive[4] = L"C:";
-        if (windows[1] == L':') { drive[0] = windows[0]; drive[1] = L':'; }
-        return std::wstring(drive) + path;
-    }
-    return path;
-}
-
-LONG VerifyEmbeddedTrust(const std::wstring& path)
-{
-    WINTRUST_FILE_INFO fileInfo{};
-    fileInfo.cbStruct = sizeof(fileInfo);
-    fileInfo.pcwszFilePath = path.c_str();
-
-    WINTRUST_DATA trust{};
-    trust.cbStruct = sizeof(trust);
-    trust.dwUIChoice = WTD_UI_NONE;
-    trust.fdwRevocationChecks = WTD_REVOKE_NONE;
-    trust.dwUnionChoice = WTD_CHOICE_FILE;
-    trust.pFile = &fileInfo;
-    trust.dwStateAction = WTD_STATEACTION_VERIFY;
-    trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_NONE;
-
-    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
-    const LONG status = WinVerifyTrust(nullptr, &action, &trust);
-    trust.dwStateAction = WTD_STATEACTION_CLOSE;
-    (void)WinVerifyTrust(nullptr, &action, &trust);
-    return status;
-}
-
-LONG VerifyCatalogTrust(const std::wstring& path)
-{
-    using AcquireContext2Fn = BOOL(WINAPI*)(HCATADMIN*, const GUID*, LPCWSTR,
-        PCCERT_STRONG_SIGN_PARA, DWORD);
-    using CalculateHash2Fn = BOOL(WINAPI*)(HCATADMIN, HANDLE, DWORD*, BYTE*, DWORD);
-    const HMODULE wintrust = GetModuleHandleW(L"wintrust.dll");
-    const auto acquireContext2 = oac::ResolveFunction<AcquireContext2Fn>(
-        wintrust, "CryptCATAdminAcquireContext2");
-    const auto calculateHash2 = oac::ResolveFunction<CalculateHash2Fn>(
-        wintrust, "CryptCATAdminCalcHashFromFileHandle2");
-    HCATADMIN administrator = nullptr;
-    bool modernCatalogApi = acquireContext2 != nullptr && calculateHash2 != nullptr;
-    GUID driverAction = DRIVER_ACTION_VERIFY;
-    BOOL acquired = modernCatalogApi
-        ? acquireContext2(&administrator, nullptr, BCRYPT_SHA256_ALGORITHM, nullptr, 0)
-        : CryptCATAdminAcquireContext(&administrator, &driverAction, 0);
-    if (!acquired && modernCatalogApi)
-    {
-        modernCatalogApi = false;
-        acquired = CryptCATAdminAcquireContext(&administrator, &driverAction, 0);
-    }
-    if (!acquired)
-        return static_cast<LONG>(TRUST_E_NOSIGNATURE);
-
-    UniqueHandle file(CreateFileW(path.c_str(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (!file)
-    {
-        const DWORD error = GetLastError();
-        CryptCATAdminReleaseContext(administrator, 0);
-        return HRESULT_FROM_WIN32(error);
-    }
-
-    DWORD hashSize = 0;
-    const auto calculateHash = [&](DWORD* size, BYTE* buffer) -> BOOL
-    {
-        return modernCatalogApi
-            ? calculateHash2(administrator, file.get(), size, buffer, 0)
-            : CryptCATAdminCalcHashFromFileHandle(file.get(), size, buffer, 0);
-    };
-    if (!calculateHash(&hashSize, nullptr) || hashSize == 0 || hashSize > 1024)
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return static_cast<LONG>(TRUST_E_NOSIGNATURE);
-    }
-    std::vector<BYTE> hash(hashSize);
-    if (!calculateHash(&hashSize, hash.data()))
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return static_cast<LONG>(TRUST_E_NOSIGNATURE);
-    }
-    if (hashSize == 0 || hashSize > hash.size())
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return static_cast<LONG>(TRUST_E_NOSIGNATURE);
-    }
-    hash.resize(hashSize);
-
-    HCATINFO catalog = CryptCATAdminEnumCatalogFromHash(
-        administrator, hash.data(), hashSize, 0, nullptr);
-    if (catalog == nullptr)
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return static_cast<LONG>(TRUST_E_NOSIGNATURE);
-    }
-
-    LONG status = static_cast<LONG>(TRUST_E_NOSIGNATURE);
-    for (unsigned attempt = 0; catalog != nullptr && attempt < 128; ++attempt)
-    {
-        CATALOG_INFO catalogInfo{};
-        catalogInfo.cbStruct = sizeof(catalogInfo);
-        if (CryptCATCatalogInfoFromContext(catalog, &catalogInfo, 0))
-        {
-            std::wostringstream tag;
-            for (const BYTE byte : hash)
-                tag << std::uppercase << std::hex << std::setw(2) << std::setfill(L'0')
-                    << static_cast<unsigned>(byte);
-            const std::wstring memberTag = tag.str();
-
-            WINTRUST_CATALOG_INFO member{};
-            member.cbStruct = sizeof(member);
-            member.pcwszCatalogFilePath = catalogInfo.wszCatalogFile;
-            member.pcwszMemberTag = memberTag.c_str();
-            member.pcwszMemberFilePath = path.c_str();
-            member.hMemberFile = file.get();
-
-            WINTRUST_DATA trust{};
-            trust.cbStruct = sizeof(trust);
-            trust.dwUIChoice = WTD_UI_NONE;
-            trust.fdwRevocationChecks = WTD_REVOKE_NONE;
-            trust.dwUnionChoice = WTD_CHOICE_CATALOG;
-            trust.pCatalog = &member;
-            trust.dwStateAction = WTD_STATEACTION_VERIFY;
-            trust.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL |
-                WTD_REVOCATION_CHECK_NONE;
-
-            GUID action = DRIVER_ACTION_VERIFY;
-            status = WinVerifyTrust(nullptr, &action, &trust);
-            trust.dwStateAction = WTD_STATEACTION_CLOSE;
-            (void)WinVerifyTrust(nullptr, &action, &trust);
-            if (status == ERROR_SUCCESS) break;
-        }
-
-        HCATINFO previous = catalog;
-        catalog = CryptCATAdminEnumCatalogFromHash(
-            administrator,
-            hash.data(),
-            hashSize,
-            0,
-            &previous);
-    }
-
-    if (catalog != nullptr)
-        CryptCATAdminReleaseCatalogContext(administrator, catalog, 0);
-    CryptCATAdminReleaseContext(administrator, 0);
-    return status;
-}
-
-LONG VerifyFileTrust(const std::wstring& path)
-{
-    const LONG embedded = VerifyEmbeddedTrust(path);
-    return embedded == ERROR_SUCCESS ? embedded : VerifyCatalogTrust(path);
-}
-
-std::string CalculateAuthenticodeSha256(const std::wstring& path)
-{
-    using AcquireContext2Fn = BOOL(WINAPI*)(HCATADMIN*, const GUID*, LPCWSTR,
-        PCCERT_STRONG_SIGN_PARA, DWORD);
-    using CalculateHash2Fn = BOOL(WINAPI*)(HCATADMIN, HANDLE, DWORD*, BYTE*, DWORD);
-    const HMODULE wintrust = GetModuleHandleW(L"wintrust.dll");
-    const auto acquireContext2 = oac::ResolveFunction<AcquireContext2Fn>(
-        wintrust, "CryptCATAdminAcquireContext2");
-    const auto calculateHash2 = oac::ResolveFunction<CalculateHash2Fn>(
-        wintrust, "CryptCATAdminCalcHashFromFileHandle2");
-    if (acquireContext2 == nullptr || calculateHash2 == nullptr) return {};
-
-    HCATADMIN administrator = nullptr;
-    if (!acquireContext2(&administrator, nullptr, BCRYPT_SHA256_ALGORITHM, nullptr, 0))
-        return {};
-
-    UniqueHandle file(CreateFileW(path.c_str(), GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    if (!file)
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return {};
-    }
-
-    DWORD size = 0;
-    if (!calculateHash2(administrator, file.get(), &size, nullptr, 0) || size != 32)
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return {};
-    }
-    std::array<BYTE, 32> hash{};
-    if (!calculateHash2(administrator, file.get(), &size, hash.data(), 0) ||
-        size != hash.size())
-    {
-        CryptCATAdminReleaseContext(administrator, 0);
-        return {};
-    }
-    CryptCATAdminReleaseContext(administrator, 0);
-
-    static constexpr char alphabet[] = "0123456789ABCDEF";
-    std::string text(hash.size() * 2, '0');
-    for (size_t index = 0; index < hash.size(); ++index)
-    {
-        text[index * 2] = alphabet[hash[index] >> 4];
-        text[index * 2 + 1] = alphabet[hash[index] & 0x0f];
-    }
-    return text;
-}
-
 void ScanLoadedDrivers(
     const ScanOptions& options,
     Reporter& reporter,
@@ -696,10 +470,6 @@ void ScanLoadedDrivers(
         }
     }
 
-    static constexpr std::wstring_view highBaseNames[] =
-        { OAC_DRIVER_DENY_BASENAMES_W };
-    static constexpr std::wstring_view reviewBaseNames[] =
-        { OAC_DRIVER_REVIEW_BASENAMES_W };
     static std::set<std::wstring> evaluatedInstances;
     const size_t count = std::min(drivers.size(), static_cast<size_t>(needed / sizeof(LPVOID)));
     size_t checked = 0;
@@ -715,42 +485,42 @@ void ScanLoadedDrivers(
             continue;
         }
         ++checked;
-        const std::wstring normalized = NormalizeDriverPath(path.data());
-        const std::wstring baseName = oac::Lowercase(
-            std::filesystem::path(normalized).filename().wstring());
+        oac::DriverTrustReport trust{};
+        const DWORD evaluationError = oac::EvaluateDriverTrust(
+            path.data(), trust);
+        const std::wstring identityPath = evaluationError == ERROR_SUCCESS
+            ? (trust.CrashDumpAlias ? trust.ReportedPath : trust.Path)
+            : std::wstring(path.data());
         std::wostringstream instance;
-        instance << oac::Lowercase(normalized) << L'@' << std::hex
+        instance << oac::Lowercase(identityPath) << L'@' << std::hex
                  << reinterpret_cast<ULONG_PTR>(drivers[i]);
         const bool firstEvaluation = evaluatedInstances.insert(instance.str()).second;
         if (!includeInventory && !firstEvaluation) continue;
         ++newlyEvaluated;
 
-        const bool suspicious = std::ranges::find(highBaseNames, baseName) !=
-            std::end(highBaseNames);
-        const bool review = std::ranges::find(reviewBaseNames, baseName) !=
-            std::end(reviewBaseNames);
-        const std::string authenticodeHash = CalculateAuthenticodeSha256(normalized);
-        const bool exactDeny = !authenticodeHash.empty() && std::ranges::binary_search(
-            kOacDeniedDriverAuthenticodeSha256, std::string_view(authenticodeHash));
-        const LONG trust = VerifyFileTrust(normalized);
-        const bool transientDumpDriver = baseName.starts_with(L"dump_") &&
-            HRESULT_CODE(trust) == ERROR_FILE_NOT_FOUND;
         std::wostringstream message;
-        message << (exactDeny ? L"Exact denied driver hash is loaded: " :
-            (suspicious ? L"OAC deny-policy driver family is loaded: " :
-                (review ? L"Loaded driver family requires version review: " : L"Loaded driver: ")))
-                << normalized << L"; trust=0x" << std::hex << static_cast<ULONG>(trust)
+        message << (trust.DeniedHash ? L"Exact denied driver hash is loaded: " :
+            (trust.DeniedFamily ? L"OAC deny-policy driver family is loaded: " :
+                (trust.ReviewFamily ? L"Loaded driver family requires version review: " :
+                    L"Loaded driver: ")))
+                << identityPath << L"; trust=0x" << std::hex
+                << static_cast<ULONG>(trust.TrustStatus)
                 << L"; authenticode-sha256=";
-        if (authenticodeHash.empty()) message << L"unavailable";
-        else message << std::wstring(authenticodeHash.begin(), authenticodeHash.end());
+        if (trust.AuthenticodeSha256.empty()) message << L"unavailable";
+        else message << std::wstring(
+            trust.AuthenticodeSha256.begin(), trust.AuthenticodeSha256.end());
+        if (trust.CrashDumpAlias)
+            message << L"; trusted-backing=" << trust.Path;
+        if (evaluationError != ERROR_SUCCESS)
+            message << L"; evaluation-error=" << std::dec << evaluationError;
 
-        const FindingSeverity severity = exactDeny
+        const FindingSeverity severity = trust.DeniedHash
             ? FindingSeverity::Critical
-            : (suspicious
+            : (trust.DeniedFamily
                 ? (options.deploymentMode == DeploymentMode::Production
                     ? FindingSeverity::Critical : FindingSeverity::High)
-                : (review ? FindingSeverity::Medium
-                    : (trust == ERROR_SUCCESS || transientDumpDriver
+                : (trust.ReviewFamily ? FindingSeverity::Medium
+                    : (trust.TrustStatus == ERROR_SUCCESS
                         ? FindingSeverity::Info : FindingSeverity::Medium)));
         if (includeInventory || severity != FindingSeverity::Info)
             reporter.Add(severity, L"drivers", message.str(), 0, 0,
@@ -759,14 +529,11 @@ void ScanLoadedDrivers(
     if (includeInventory || newlyEvaluated != 0)
         reporter.Add(unnamed == 0 ? FindingSeverity::Info : FindingSeverity::Low,
             L"drivers",
-            L"OAC driver policy " +
-                std::wstring(kOacDriverPolicyVersion,
-                    kOacDriverPolicyVersion + std::char_traits<char>::length(kOacDriverPolicyVersion)) +
-                L" evaluated " + std::to_wstring(newlyEvaluated) + L" new of " +
+            L"OAC driver policy evaluated " +
+                std::to_wstring(newlyEvaluated) + L" new of " +
                 std::to_wstring(count) + L" loaded drivers; readable paths=" +
                 std::to_wstring(checked) + L"; unnamed/unreadable paths=" +
-                std::to_wstring(unnamed) + L"; exact SHA-256 denies=" +
-                std::to_wstring(kOacDeniedDriverAuthenticodeSha256.size()));
+                std::to_wstring(unnamed));
 }
 
 std::wstring QueryServicePath(SC_HANDLE service)

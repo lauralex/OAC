@@ -36,7 +36,7 @@ If Visual Studio is installed in another edition or location, use `vswhere.exe` 
 - Keep the driver demand-start and preserve all documented protocol and kernel safety checks.
 - Update the driver, service, launcher or lab client, shared size assertions, pure unit tests,
   driver-backed protocol test, and docs together for an ABI change.
-- Regenerate `OAC-Client/driver_hash_policy.inc` only with the pinned policy script. Review the
+- Regenerate `shared/oac_driver_hash_policy.hpp` only with the pinned policy script. Review the
   archive hash, upstream policy version, rule count, and generated diff.
 - Keep current behavior and planned behavior clearly labeled. A single VM result is not a universal
   Windows compatibility claim.

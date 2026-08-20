@@ -31,6 +31,25 @@ VOID OacEvidencePublish(
     _In_ ULONGLONG Auxiliary,
     _In_ ULONGLONG EvidenceFlags);
 
+OAC_V5_SCAN_ID OacEvidenceCreateScanId(VOID);
+
+BOOLEAN OacEvidencePublishForScan(
+    _In_ const OAC_V5_SESSION_ID* ExpectedSessionId,
+    _In_ ULONGLONG ExpectedGeneration,
+    _In_ OAC_V5_SCAN_ID ScanId,
+    _In_ OAC_V5_RULE_ID RuleId,
+    _In_ OAC_V5_EVENT_TYPE EventType,
+    _In_ OAC_V5_OBSERVATION_SEVERITY ObservationSeverity,
+    _In_ OAC_V5_POLICY_SEVERITY PolicySeverity,
+    _In_ OAC_V5_CONFIDENCE Confidence,
+    _In_ OAC_V5_CATEGORY Category,
+    _In_opt_ HANDLE ProcessId,
+    _In_opt_ HANDLE ThreadId,
+    _In_opt_ PVOID Address,
+    _In_ ULONGLONG Auxiliary,
+    _In_ ULONGLONG EvidenceFlags,
+    _In_opt_z_ PCWSTR Text);
+
 NTSTATUS OacEvidenceRead(
     _In_ const OAC_EVIDENCE_READ_REQUEST* Request,
     _In_ BOOLEAN SessionRevoked,
@@ -42,6 +61,7 @@ NTSTATUS OacEvidenceRead(
 NTSTATUS OacEvidenceManageSnapshot(
     _In_ const OAC_SNAPSHOT_REQUEST* Request,
     _In_ BOOLEAN SessionRevoked,
+    _In_ OAC_V5_SCAN_ID CorrelatedScanId,
     _Out_writes_bytes_to_(OutputLength, *BytesWritten)
         POAC_SNAPSHOT_RESPONSE Response,
     _In_ ULONG OutputLength,

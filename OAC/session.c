@@ -1,6 +1,7 @@
 #include "session.h"
 #include "compat.h"
 #include "evidence.h"
+#include "protection.h"
 #include "..\shared\protocol\oac_validate.h"
 
 #include <bcrypt.h>
@@ -49,6 +50,8 @@ struct OAC_SESSION_TAG
     ULONG Mode;
     ULONG State;
     ULONG RevokeReason;
+    ULONG ConfigurationFlags;
+    OAC_V5_SCAN_ID LastCompletedScanId;
     OAC_PENDING_LAUNCH PendingLaunch;
     OAC_LAUNCH_ID BoundLaunchId;
     UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
@@ -56,6 +59,7 @@ struct OAC_SESSION_TAG
     BOOLEAN Cleaned;
     BOOLEAN ServiceExited;
     BOOLEAN SessionLossRecorded;
+    BOOLEAN EndpointScanInProgress;
 };
 
 static PDEVICE_OBJECT g_SessionDevice;
@@ -273,6 +277,8 @@ static VOID OacFillSnapshotLocked(
     Snapshot->LastSessionLossReason =
         OacExtension(Session->DeviceObject)->LastSessionLossReason;
     Snapshot->Mode = Session->Mode;
+    Snapshot->ConfigurationFlags = Session->ConfigurationFlags;
+    Snapshot->LastCompletedScanId = Session->LastCompletedScanId;
     RtlCopyMemory(
         Snapshot->ManifestSha256,
         Session->ManifestSha256,
@@ -937,6 +943,138 @@ NTSTATUS OacSessionSnapshot(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS OacSessionBeginEndpointScan(
+    _In_ const OAC_SESSION_LEASE* Lease)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    NTSTATUS status;
+
+    if (Lease == NULL) return STATUS_INVALID_PARAMETER;
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (session->State != OAC_V5_SESSION_CLAIMED ||
+        session->EndpointScanInProgress ||
+        session->ConfigurationFlags != OAC_V5_CONFIG_FLAGS ||
+        session->LastCompletedScanId != 0)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        session->EndpointScanInProgress = TRUE;
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return status;
+}
+
+NTSTATUS OacSessionFinishEndpointScan(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ OAC_V5_SCAN_ID ScanId,
+    _In_ BOOLEAN Complete,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    NTSTATUS status;
+
+    if (Lease == NULL || Snapshot == NULL || (Complete && ScanId == 0))
+        return STATUS_INVALID_PARAMETER;
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION ||
+        session->State != OAC_V5_SESSION_CLAIMED ||
+        !session->EndpointScanInProgress)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        session->EndpointScanInProgress = FALSE;
+        if (Complete)
+        {
+            session->LastCompletedScanId = ScanId;
+        }
+        else
+        {
+            session->ConfigurationFlags = 0;
+            session->LastCompletedScanId = 0;
+        }
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return status;
+}
+
+NTSTATUS OacSessionConfigureEndpoint(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ ULONG ConfigurationFlags,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot)
+{
+    POAC_SESSION session;
+    POAC_DEVICE_EXTENSION extension;
+    NTSTATUS status;
+
+    if (Lease == NULL || Snapshot == NULL || ConfigurationFlags == 0 ||
+        (ConfigurationFlags & ~OAC_V5_CONFIG_FLAGS) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    session = (POAC_SESSION)Lease->Session;
+    if (session == NULL) return STATUS_INVALID_PARAMETER;
+    RtlZeroMemory(Snapshot, sizeof(*Snapshot));
+
+    extension = OacExtension(session->DeviceObject);
+    OacLockExclusive(&extension->SessionLock);
+    OacApplyEvidenceLossLocked(extension, session);
+    if (session->Cleaned || extension->ActiveSession != session)
+    {
+        status = STATUS_FILE_CLOSED;
+    }
+    else if (session->Mode != OAC_V5_SESSION_PRODUCTION)
+    {
+        status = STATUS_NOT_SUPPORTED;
+    }
+    else if (session->State != OAC_V5_SESSION_CLAIMED ||
+        session->EndpointScanInProgress ||
+        session->ConfigurationFlags != 0 ||
+        session->LastCompletedScanId != 0)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else
+    {
+        session->ConfigurationFlags = ConfigurationFlags;
+        OacFillSnapshotLocked(session, Snapshot);
+        status = STATUS_SUCCESS;
+    }
+    OacUnlockExclusive(&extension->SessionLock);
+    return status;
+}
+
 NTSTATUS OacSessionRevoke(
     _In_ const OAC_SESSION_LEASE* Lease,
     _In_ OAC_V5_REVOKE_REASON RevokeReason,
@@ -1102,6 +1240,13 @@ NTSTATUS OacSessionArmLaunch(
         status = STATUS_NOT_SUPPORTED;
     }
     else if (session->State != OAC_V5_SESSION_CLAIMED)
+    {
+        status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (session->EndpointScanInProgress ||
+        session->LastCompletedScanId == 0 ||
+        session->ConfigurationFlags != OAC_V5_CONFIG_FLAGS ||
+        OacDriverGateTrips() != 0)
     {
         status = STATUS_INVALID_DEVICE_STATE;
     }
@@ -1467,6 +1612,26 @@ BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process)
         NULL,
         &sessionId,
         &generation);
+}
+
+ULONG OacSessionConfigurationFlags(VOID)
+{
+    PDEVICE_OBJECT deviceObject = g_SessionDevice;
+    POAC_DEVICE_EXTENSION extension;
+    POAC_SESSION session;
+    ULONG flags = 0;
+
+    if (deviceObject == NULL) return 0;
+    extension = OacExtension(deviceObject);
+    OacLockShared(&extension->SessionLock);
+    session = (POAC_SESSION)extension->ActiveSession;
+    if (session != NULL && !session->Cleaned &&
+        session->Mode == OAC_V5_SESSION_PRODUCTION)
+    {
+        flags = session->ConfigurationFlags;
+    }
+    OacUnlockShared(&extension->SessionLock);
+    return flags;
 }
 
 BOOLEAN OacSessionCaptureEvidenceIdentity(

@@ -16,6 +16,11 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Signed build authorization | Before arming the driver, the service requires a canonical detached-signed manifest, an explicitly provisioned signer pin, exact executable and Authenticode-signer identity, bounded compatibility/expiry, and monotonic per-game rollback state. The named VM/Verifier campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests. |
 | Signed policy | At service start, a canonical detached-signed policy must match the protected policy signer, component revisions, bounded validity period, and canonical rule set. Game/build scope is checked before launch. Per-game/channel state rejects replay and equivocation, permits only an explicitly signed rollback from the exact current digest, and makes emergency revocation terminal. The named Windows 11 campaign passed the signer, scope, expiry, rollback, authorized-rollback, and emergency-revocation cases. |
 | Backend session | The service opens a transport-independent authenticated session before claiming the driver. A digest of the session identity and nonces is bound into the production driver session. Signed policy bounds lease, grace, renewal, and evidence-acknowledgement intervals; nonce replay, lease loss, revocation, queue exhaustion, and acknowledgement timeout fail closed. The named VM/Verifier campaign passed replay rejection, acknowledgement-loss and lease-loss target-tree containment, and fresh-session recovery. The included transport is a protected, test-only mock; a production network transport and backend service are not included. |
+| Endpoint preflight | Before exposing launcher IPC, the service arms image logging and the driver-load gate, requests the exact required current-state scan, and requires explicit completion for kernel modules, process state, dangerous handles, kernel integrity, and platform state. Scan evidence is typed, correlated by a nonzero scan ID, delivered to the backend contract, and acknowledged before launch can be admitted. Incomplete work, evidence loss, a policy denial, or a gate trip fails closed. |
+| Loaded-driver trust | A frozen kernel-module snapshot is resolved in user mode. Every reported module must have a readable canonical path, a nonempty Authenticode SHA-256, and valid embedded or catalog trust, and must avoid the compiled exact-hash deny set and conservative deny/review families. The same generated policy and trust implementation are shared with the diagnostic client. |
+| Runtime module authorization | The signed game manifest carries up to 16 sorted module SHA-256 values and may explicitly permit trusted files beneath the Windows directory. Target image events are authorized by current path, content hash, and trust; the main executable is admitted by its manifest hash. Any other target module becomes a typed critical policy record. |
+| Target memory and thread observations | The bounded worker publishes deduplicated typed findings for executable non-image memory, writable-executable memory, unbacked PE headers, direct system-call stubs, thread start or instruction pointers outside executable image mappings, enabled hardware debug registers, unexpected stack-pointer backing, and instrumentation callbacks outside executable image mappings. Queue exhaustion is fatal; unavailable optional queries and transient access failures remain visible in skipped-work metrics. |
+| Target lifecycle events | Kernel process and thread callbacks publish target-scoped typed lifecycle evidence. Unrelated user-image names are not attributed to the active production session. |
 | Target-tree containment | The service assigns the confirmed target to an unnamed kill-on-close job before resume. Children inherit the job, and graceful stop or service failure terminates the tree. |
 | Session-loss reporting | A device-lifetime monotonic sequence and stable loss reason let a replacement service distinguish requested shutdown from unexpected controller loss. |
 | Retained alerts | High and critical typed records remain in a dedicated queue until the controlling service acknowledges an exact delivered sequence. Full-queue loss preserves existing data, records severity counts, and revokes production authority. |
@@ -27,8 +32,11 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
 
 The current production path intentionally supports one target and no command-line arguments.
-Approved-module policy, manifest-key rotation, a deployable authenticated backend transport,
-durable remote storage, and target-session reuse remain planned work.
+Create-time job assignment, complete mapped-file identity binding, manifest-key rotation, a tuned
+game-specific module/JIT catalog, a deployable authenticated backend transport, durable remote
+storage, and target-session reuse remain planned work. The endpoint-trust boundary passed its exact
+commit-bound Windows 11 build 26100 and standard Driver Verifier campaign at `974d2c4`; that result
+does not extend the supported-platform or workload-compatibility matrix.
 
 ## Game and server integration
 
@@ -67,18 +75,20 @@ platform admission remain deployment controls. See [release engineering](RELEASE
 
 ## Scanner organization
 
-The scanner is divided by responsibility without changing its security semantics. Kernel-module
-inventory and frozen snapshots, process/thread/handle cross-views, and kernel-integrity orchestration
-live in focused implementation files behind one scanner interface. User-mode components share
-move-only Windows resource wrappers and small text and optional-API helpers, while the diagnostic
-client's option parser is tested without loading the driver. The capability matrix and evidence
-thresholds below are unchanged.
+The scanner is divided by responsibility. Kernel-module inventory and frozen snapshots,
+process/thread/handle cross-views, and kernel-integrity orchestration live in focused implementation
+files behind one scanner interface. The production endpoint preflight reuses the bounded stable
+checks and publishes only typed policy input; optional private-profile scans remain diagnostic.
+User-mode components share move-only Windows resource wrappers, file/driver trust evaluation, and
+small text and optional-API helpers, while the diagnostic client's option parser is tested without
+loading the driver.
 
 ## Lab scanner matrix
 
 The following broad diagnostic capabilities belong to `OAC-Client` and require explicit
-`LabMode=1`. The production service does not expose this diagnostic interface; its smaller target
-worker currently reports bounded coverage and performance metrics rather than policy findings.
+`LabMode=1`. The production service does not expose this diagnostic interface. Its smaller worker
+uses typed policy records for the specific memory, thread, and instrumentation checks listed above,
+while the broader mutation, overlay, hardware, and private-profile features remain laboratory-only.
 
 | Capability | Implementation |
 |---|---|
@@ -117,12 +127,13 @@ rule set and Observe, Enforce, or Strict mode. Policy action and five-level poli
 separate from the source observation, and display text is never an evaluator input.
 
 The rule model also defines typed signer classification for signature source, chain, revocation,
-timestamp, approval state, and certificate thumbprint. Current driver observations do not yet carry
-an approved runtime-module classification, so those fields remain explicitly unavailable. Policy
-updates are signed and locally replay-protected. The backend session contract carries evaluated
-records with monotonic service sequences and advances retained-alert acknowledgement only after
-the backend acknowledges delivery. The test transport exercises this contract in process;
-authenticated remote policy delivery and durable server persistence remain later work.
+timestamp, approval state, and certificate thumbprint. Loaded-driver and runtime-module trust are
+evaluated by the service and marked with service/signature provenance; the signed manifest supplies
+the runtime allowlist rather than display names. Policy updates are signed and locally
+replay-protected. The backend session contract carries evaluated records with monotonic service
+sequences and advances retained-alert acknowledgement only after the backend acknowledges delivery.
+The test transport exercises this contract in process; authenticated remote policy delivery and
+durable server persistence remain later work.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or
@@ -131,7 +142,7 @@ production evidence-session contract.
 
 ### Vulnerable-driver policy
 
-`OAC-Client/driver_hash_policy.inc` is a compiled snapshot so the lab scanner does not depend on the
+`shared/oac_driver_hash_policy.hpp` is a compiled snapshot so the scanners do not depend on the
 host's vulnerable-driver blocklist toggle or HVCI state. Regeneration is hash-pinned through
 `tools/Update-OACDriverPolicy.ps1`; maintainers must review the upstream policy version, archive
 digest, rule count, and generated diff before accepting an update.

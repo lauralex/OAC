@@ -198,15 +198,15 @@ function New-GameManifestBytes(
         throw 'The game-manifest executable name must be a bounded leaf name.'
     }
 
-    $stream = [IO.MemoryStream]::new(512)
+    $stream = [IO.MemoryStream]::new(960)
     $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::Unicode, $true)
     try {
         $writer.Write([byte[]]@(
             [byte][char]'O', [byte][char]'A', [byte][char]'C', [byte][char]'G',
             [byte][char]'M', [byte][char]'A', [byte][char]'N', 0))
+        $writer.Write([uint32]2)
+        $writer.Write([uint32]960)
         $writer.Write([uint32]1)
-        $writer.Write([uint32]512)
-        $writer.Write([uint32]0)
         $writer.Write([uint32]$ExecutableName.Length)
         $writer.Write($ManifestId)
         $writer.Write($GameId)
@@ -215,9 +215,9 @@ function New-GameManifestBytes(
         $writer.Write($IssuedAtUnixSeconds)
         $writer.Write($ExpiresAtUnixSeconds)
         $writer.Write($ExecutableSize)
-        $writer.Write([uint32]0x00050006)
-        $writer.Write([uint32]0x00010006)
-        $writer.Write([uint32]0x00010006)
+        $writer.Write([uint32]0x00050007)
+        $writer.Write([uint32]0x00010007)
+        $writer.Write([uint32]0x00010007)
         $writer.Write([uint32]0)
         $writer.Write($ExecutableSha256)
         $writer.Write($SigningKeyId)
@@ -227,10 +227,12 @@ function New-GameManifestBytes(
         for ($index = $ExecutableName.Length; $index -lt 128; $index++) {
             $writer.Write([uint16]0)
         }
-        $writer.Write([byte[]]::new(72))
+        $writer.Write([uint32]0)
+        $writer.Write([uint32]0)
+        $writer.Write([byte[]]::new(16 * 32))
         $writer.Flush()
         $bytes = $stream.ToArray()
-        if ($bytes.Length -ne 512) {
+        if ($bytes.Length -ne 960) {
             throw "The canonical game manifest has an unexpected size: $($bytes.Length)"
         }
         return ,$bytes
@@ -279,6 +281,9 @@ function Write-SignedRecord(
 function Get-PolicyRules {
     $kernel = [uint64]1
     $callback = [uint64]2
+    $signatureChecked = [uint64]8
+    $incomplete = [uint64]0x40
+    $service = [uint64]0x80
     return ,@(
         @(0x00010001, 7, 10, 0, 0, 0, 0, 0, 0, $kernel, 0),
         @(0x00010002, 9, 10, 4, 4, 4, 1, 5, 5, $kernel, 0),
@@ -286,14 +291,42 @@ function Get-PolicyRules {
         @(0x00010004, 1, 0, 1, 4, 2, 1, 2, 3, $kernel, 0),
         @(0x00010005, 7, 1, 0, 0, 0, 0, 0, 0, $kernel, 0),
         @(0x00010006, 7, 1, 0, 0, 0, 0, 0, 0, ($kernel -bor $callback), 0),
+        @(0x00010007, 4, 8, 0, 0, 0, 0, 0, 0, $kernel, 0),
+        @(0x00010008, 5, 8, 0, 0, 0, 0, 0, 0, $kernel, 0),
+        @(0x00010009, 6, 8, 3, 3, 3, 1, 4, 4,
+            ($kernel -bor $incomplete), 0),
         @(0x00020001, 1, 2, 1, 2, 2, 1, 2, 3, ($kernel -bor $callback), 0),
         @(0x00020002, 1, 3, 0, 3, 1, 1, 1, 2, ($kernel -bor $callback), 0),
+        @(0x00020003, 1, 1, 2, 4, 3, 1, 4, 4, $kernel, 0),
+        @(0x00020004, 1, 6, 3, 4, 4, 1, 4, 4, $kernel, 0),
+        @(0x00020005, 1, 2, 3, 4, 3, 1, 4, 4, $kernel, 0),
+        @(0x00020006, 1, 6, 3, 3, 3, 1, 6, 5, $service, 0),
+        @(0x00020007, 1, 6, 0, 0, 0, 0, 0, 0, ($kernel -bor $callback), 0),
+        @(0x00020008, 1, 3, 4, 4, 4, 1, 5, 5,
+            ($kernel -bor $callback -bor $service), 0),
+        @(0x00020009, 1, 6, 3, 3, 3, 1, 6, 5, $service, 0),
         @(0x00030001, 1, 4, 2, 2, 2, 1, 2, 5, ($kernel -bor $callback), 1),
         @(0x00030002, 1, 4, 4, 4, 4, 1, 5, 5, ($kernel -bor $callback), 0),
         @(0x00030003, 1, 4, 4, 4, 4, 1, 5, 5, ($kernel -bor $callback), 0),
+        @(0x00030004, 1, 4, 2, 4, 3, 1, 4, 4, $kernel, 0),
+        @(0x00030005, 1, 4, 4, 4, 4, 1, 4, 4,
+            ($service -bor $signatureChecked), 0),
+        @(0x00030006, 1, 4, 3, 4, 3, 1, 4, 4, $service, 0),
+        @(0x00030007, 1, 4, 3, 3, 3, 1, 6, 5,
+            ($service -bor $signatureChecked), 0),
+        @(0x00030008, 1, 4, 4, 4, 4, 1, 4, 4,
+            ($service -bor $signatureChecked), 0),
         @(0x00040001, 1, 8, 3, 4, 3, 1, 6, 5, $kernel, 0),
         @(0x00040002, 1, 8, 1, 3, 1, 1, 2, 3, $kernel, 0),
-        @(0x00080001, 1, 9, 1, 3, 1, 1, 1, 2, $kernel, 0)
+        @(0x00050001, 1, 5, 3, 3, 2, 1, 6, 5, $service, 0),
+        @(0x00050002, 1, 5, 4, 4, 4, 1, 5, 5, $service, 0),
+        @(0x00050003, 1, 5, 3, 3, 3, 1, 6, 5, $service, 0),
+        @(0x00050004, 1, 5, 3, 3, 3, 1, 6, 5, $service, 0),
+        @(0x00060001, 1, 7, 3, 4, 3, 1, 4, 4, $kernel, 0),
+        @(0x00060002, 1, 7, 4, 4, 4, 1, 5, 5, $service, 0),
+        @(0x00060003, 1, 7, 3, 3, 3, 1, 6, 5, $service, 0),
+        @(0x00080001, 1, 9, 1, 3, 1, 1, 1, 2, $kernel, 0),
+        @(0x00080002, 1, 9, 3, 4, 2, 1, 6, 4, $kernel, 0)
     )
 }
 
@@ -327,16 +360,16 @@ function New-SignedPolicyBytes(
         throw 'The signed-policy rollback digest must contain exactly 32 bytes.'
     }
     $rules = Get-PolicyRules
-    if ($rules.Count -ne 14) {
-        throw 'The canonical signed-policy rule catalog must contain 14 rules.'
+    if ($rules.Count -ne 37) {
+        throw 'The canonical signed-policy rule catalog must contain 37 rules.'
     }
 
-    $stream = [IO.MemoryStream]::new(1024)
+    $stream = [IO.MemoryStream]::new(2480)
     $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::Unicode, $true)
     try {
         $writer.Write([Text.Encoding]::ASCII.GetBytes('OACPOLCY'))
-        $writer.Write([uint32]2)
-        $writer.Write([uint32]1024)
+        $writer.Write([uint32]3)
+        $writer.Write([uint32]2480)
         $writer.Write($Flags)
         $writer.Write([uint32]2)
         $writer.Write($PolicyId)
@@ -347,10 +380,10 @@ function New-SignedPolicyBytes(
         $writer.Write($UpdateSequence)
         $writer.Write($IssuedAtUnixSeconds)
         $writer.Write($ExpiresAtUnixSeconds)
-        $writer.Write([uint32]0x00050006)
-        $writer.Write([uint32]0x00010006)
-        $writer.Write([uint32]0x00010006)
-        $writer.Write([uint32]1)
+        $writer.Write([uint32]0x00050007)
+        $writer.Write([uint32]0x00010007)
+        $writer.Write([uint32]0x00010007)
+        $writer.Write([uint32]3)
         $writer.Write([uint32]$rules.Count)
         $writer.Write($EmergencyReason)
         $writer.Write($SigningKeyId)
@@ -365,6 +398,7 @@ function New-SignedPolicyBytes(
             $writer.Write([uint32]$rule[10])
             $writer.Write([uint32]0)
         }
+        $writer.Write([byte[]]::new((40 - $rules.Count) * 56))
         # Task Scheduler starts the standard-user launcher during the VM test.
         # Keep the disposable policy lease long enough for that bounded handoff;
         # the lease-loss scenario still stops renewals and proves termination.
@@ -375,7 +409,7 @@ function New-SignedPolicyBytes(
         $writer.Write([byte[]]::new(8))
         $writer.Flush()
         $bytes = $stream.ToArray()
-        if ($bytes.Length -ne 1024) {
+        if ($bytes.Length -ne 2480) {
             throw "The canonical signed policy has an unexpected size: $($bytes.Length)"
         }
         return ,$bytes
@@ -735,7 +769,7 @@ try {
         created_utc = [DateTime]::UtcNow.ToString('o')
         source_commit = $sourceCommit
         configuration = $Configuration
-        protocol_version = '0x00050006'
+        protocol_version = '0x00050007'
         legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
         certificate_thumbprint = $certificateThumbprint
