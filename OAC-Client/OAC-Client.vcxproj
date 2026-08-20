@@ -65,10 +65,12 @@
     <ClCompile Include="platform_security.cpp" />
     <ClCompile Include="scanner_common.cpp" />
     <ClCompile Include="system_scanner.cpp" />
+    <ClCompile Include="..\shared\oac_driver_trust.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="client_options.hpp" />
-    <ClInclude Include="driver_hash_policy.inc" />
+    <ClInclude Include="..\shared\oac_driver_hash_policy.hpp" />
+    <ClInclude Include="..\shared\oac_driver_trust.hpp" />
     <ClInclude Include="scanner.hpp" />
     <ClInclude Include="..\shared\oac_driver_policy.h" />
     <ClInclude Include="..\shared\oac_protocol.h" />

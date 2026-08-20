@@ -4,8 +4,9 @@
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
 passed. WP-13 game/server contracts and the reference detector passed local and PR #19 hosted
 driver-free acceptance at implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`.
-WP-14 unsigned-candidate, metadata, SBOM, artifact-separation, and hostile-mutation checks pass in
-both supported PowerShell engines; hosted acceptance is required at merge.
+WP-14 adds the reviewed unsigned release boundary. WP-15 endpoint-admission source, driver-free
+coverage, full builds, and static analysis pass locally; its commit-bound disposable-VM and Driver
+Verifier acceptance is pending.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -23,7 +24,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local and PR #19 hosted Debug/Release runs passed `663/663` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current source contains more than 700 checks; the final Debug/Release count is recorded after the milestone build |
 | Protocol layout assertions | Diagnostic, production, and game-event compile-time sizes/offsets | Compiled in both local configurations and on PR #19 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -170,10 +171,14 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `67d3f61`; both process trees terminated and SCM recovery completed |
 | Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `67d3f61`; four driver-backed executions passed |
 | Independent health loop and bounded target worker | Tested at `67d3f61`; 35 slices, seven sweeps, 437 ms maximum health delay, 43.498 ms maximum slice duration, 5.166 ms maximum suspension |
-| Typed policy rules and service evaluation | Current driver-free tests pass `663/663`; integrated signed-policy service execution passed at `67d3f61` |
+| Typed policy rules and service evaluation | Current driver-free tests pass `726/726`; integrated signed-policy service execution passed at `67d3f61` |
 | Signed main-executable manifest authorization | Tested at `67d3f61`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
 | Signed policy selection and update state | Tested at `67d3f61`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
 | Backend session, lease, replay, and acknowledgement failure | Tested at `67d3f61`; replay was rejected, withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
+| Production endpoint admission and scan completeness | Local builds, analysis, and malformed/correlation/completeness units pass; a commit-bound VM/Verifier campaign is pending |
+| Loaded-driver trust, hash policy, and denied family | Local shared-trust analysis and pure trust/policy units pass; signed-package runtime acceptance is pending |
+| Runtime-module manifest authorization | Source present; hostile manifest and evaluator units cover explicit hashes and trusted Windows modules; representative middleware/JIT tuning is planned |
+| Typed target memory, thread, instrumentation, and lifecycle observations | Source present; helper, schema, queue, and policy units exist; runtime acceptance and skipped-coverage evidence are pending |
 | Authoritative game movement, replay, and risk | Current driver-free tests pass canonical construction, hostile validation, replay rejection, sequence/tick gaps, movement/velocity bounds, server correction, coordinate extremes, and risk saturation; no production game workload is claimed |
 | Renamed, signed normal post-start driver image | Tested at `67d3f61`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
@@ -198,22 +203,23 @@ or game-compatibility evidence.
 | WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `67d3f61`; literal numeric PID reuse remains unforced |
 | WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `67d3f61` |
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `67d3f61` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `663/663`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `67d3f61` |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | The accepted campaign's `663/663`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier gates passed at `67d3f61` |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy baseline, restricted-service metrics, and Driver Verifier passed at `67d3f61` |
-| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `663/663`, static analysis, repository checks, and integrated VM/Verifier execution passed at `67d3f61` |
+| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | The accepted campaign's Debug/Release `663/663`, static analysis, repository checks, and integrated VM/Verifier execution passed at `67d3f61` |
 | WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-12 scanner modularization | Coherent kernel scanner responsibilities, common user-mode ownership helpers, parser/helper units, no behavioral regression | Debug/Release `623/623`, driver PREfast, scanner Clang-Tidy, repository checks, VM/Verifier acceptance at `67d3f61`, and PR #18 hosted checks passed |
 | WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
 | WP-14 production release engineering | Signing/HLK plan, deterministic metadata, SPDX SBOM, symbol separation, update/rollback and key-rotation design, support, privacy, and runbooks | Source profile, exact unsigned candidate, schema and five hostile mutation checks pass locally; production certification/signing and deployed operations remain external promotion gates; hosted acceptance pending |
+| WP-15 production endpoint trust | Correlated complete scan, frozen module inventory, driver trust/hash/family policy, signed runtime-module scope, typed target memory/thread/lifecycle findings, explicit degraded state, backend acknowledgement | Debug/Release `726/726`, full solution analysis, PREfast, complete service/client Clang-Tidy, repository validation, and release-candidate hostility pass locally; signed-package VM and Driver Verifier acceptance pending |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation
 evidence. PR #19 supplies WP-13's portable hosted build, unit, and repository-validation evidence.
 WP-13 does not modify or extend the Windows runtime claim. WP-14 changes build metadata and
-packaging boundaries rather than privileged runtime behavior; it requires build, INF/catalog,
-signature-state, package-manifest, candidate, and hosted checks, not another unchanged VM campaign.
+packaging boundaries rather than privileged runtime behavior. WP-15 changes privileged driver and
+service behavior and therefore requires one fresh exact-commit package and VM/Verifier campaign.
 
 ## Exact host commands
 

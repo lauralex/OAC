@@ -10,8 +10,9 @@
 #include <stdint.h>
 
 #include "oac_lease.h"
+#include "protocol/oac_v5.h"
 
-#define OAC_IPC_PROTOCOL_REVISION 0x00010006u
+#define OAC_IPC_PROTOCOL_REVISION 0x00010007u
 #define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
 #define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
@@ -106,7 +107,8 @@ typedef enum OAC_SERVICE_FAILURE_STAGE_TAG
     OAC_SERVICE_STAGE_PIPE_THREAD = 8,
     OAC_SERVICE_STAGE_RUNTIME = 9,
     OAC_SERVICE_STAGE_TARGET_JOB = 10,
-    OAC_SERVICE_STAGE_BACKEND = 11
+    OAC_SERVICE_STAGE_BACKEND = 11,
+    OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT = 12
 } OAC_SERVICE_FAILURE_STAGE;
 
 static inline uint32_t OacEncodeServiceFailure(
@@ -114,7 +116,7 @@ static inline uint32_t OacEncodeServiceFailure(
     uint32_t win32Error)
 {
     if (stage == OAC_SERVICE_STAGE_NONE ||
-        stage > OAC_SERVICE_STAGE_BACKEND ||
+        stage > OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT ||
         win32Error == 0 || win32Error > OAC_SERVICE_FAILURE_ERROR_MASK)
     {
         return 0;
@@ -137,7 +139,8 @@ static inline int OacDecodeServiceFailure(
     if (stage == 0 || win32Error == 0 || stage == win32Error ||
         (value & OAC_SERVICE_FAILURE_MAGIC_MASK) != OAC_SERVICE_FAILURE_MAGIC ||
         decodedStage == OAC_SERVICE_STAGE_NONE ||
-        decodedStage > OAC_SERVICE_STAGE_BACKEND || decodedError == 0)
+        decodedStage > OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT ||
+        decodedError == 0)
     {
         return 0;
     }
@@ -240,7 +243,9 @@ typedef struct OAC_IPC_RESPONSE_TAG
     uint64_t DriverCapabilities;
     uint64_t SessionLossSequence;
     uint32_t LastSessionLossReason;
-    uint32_t Reserved;
+    uint32_t EndpointConfigurationFlags;
+    uint64_t DriverGateTrips;
+    uint64_t EndpointScanId;
     OAC_IPC_BACKEND_STATUS Backend;
     OAC_IPC_SCAN_METRICS Scanner;
 } OAC_IPC_RESPONSE;
@@ -276,6 +281,21 @@ static inline int OacIpcHeaderMatches(
         header->Version == OAC_IPC_PROTOCOL_REVISION &&
         header->Size == expectedSize && header->Type == expectedType &&
         header->Flags == 0 && header->RequestId != 0;
+}
+
+static inline int OacIpcEndpointStatusAreZero(
+    const OAC_IPC_RESPONSE* response)
+{
+    return response != 0 && response->EndpointConfigurationFlags == 0 &&
+        response->DriverGateTrips == 0 && response->EndpointScanId == 0;
+}
+
+static inline int OacIpcEndpointStatusValid(
+    const OAC_IPC_RESPONSE* response)
+{
+    return response != 0 &&
+        response->EndpointConfigurationFlags == OAC_V5_CONFIG_FLAGS &&
+        response->DriverGateTrips == 0 && response->EndpointScanId != 0;
 }
 
 static inline int OacIpcScanMetricsAreZero(
@@ -546,7 +566,7 @@ OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_BACKEND_STATUS) == 32,
 OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_BACKEND_STATUS, LeaseSequence) == 16,
     "OAC_IPC_BACKEND_STATUS sequence moved");
-OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 288,
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 304,
     "OAC_IPC_RESPONSE layout changed");
 OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, SessionLossSequence) == 56,
@@ -555,13 +575,19 @@ OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, LastSessionLossReason) == 64,
     "OAC_IPC_RESPONSE liveness reason moved");
 OAC_IPC_STATIC_ASSERT(
-    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Reserved) == 68,
-    "OAC_IPC_RESPONSE reserved field moved");
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, EndpointConfigurationFlags) == 68,
+    "OAC_IPC_RESPONSE endpoint configuration moved");
 OAC_IPC_STATIC_ASSERT(
-    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Backend) == 72,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, DriverGateTrips) == 72,
+    "OAC_IPC_RESPONSE driver-gate counter moved");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, EndpointScanId) == 80,
+    "OAC_IPC_RESPONSE endpoint scan identity moved");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Backend) == 88,
     "OAC_IPC_RESPONSE backend status moved");
 OAC_IPC_STATIC_ASSERT(
-    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Scanner) == 104,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Scanner) == 120,
     "OAC_IPC_RESPONSE scanner metrics moved");
 OAC_IPC_STATIC_ASSERT(sizeof(uint16_t) == 2,
     "OAC IPC paths require 16-bit code units");
@@ -589,7 +615,7 @@ OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0 &&
     (OAC_SERVICE_FAILURE_STAGE_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0,
     "service failure fields overlap");
-OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_BACKEND <= 0xFu,
+OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT <= 0xFu,
     "service failure stage exceeds its field");
 
 #undef OAC_IPC_STATIC_ASSERT

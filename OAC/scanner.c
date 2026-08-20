@@ -1,6 +1,7 @@
 #include "scanner_internal.h"
 #include "compat.h"
 #include "descriptor.h"
+#include "evidence.h"
 #include "protection.h"
 #include "telemetry.h"
 #include <intrin.h>
@@ -8,6 +9,7 @@
 
 #ifdef ALLOC_PRAGMA
 #pragma alloc_text(PAGE, OacRunKernelScan)
+#pragma alloc_text(PAGE, OacRunEndpointScan)
 #endif
 
 #define OAC_EXPORT_BASELINE_BYTES 24UL
@@ -112,6 +114,23 @@ static OAC_EXPORT_BASELINE g_ExportBaselines[RTL_NUMBER_OF(g_IntegrityExportName
 typedef PVOID (*OAC_PS_GET_PROCESS_DEBUG_PORT)(_In_ PEPROCESS Process);
 static OAC_PS_GET_PROCESS_DEBUG_PORT g_PsGetProcessDebugPort;
 
+typedef struct OAC_ENDPOINT_SCAN_CONTEXT_TAG
+{
+    OAC_V5_SESSION_ID SessionId;
+    ULONGLONG Generation;
+    OAC_V5_SCAN_ID ScanId;
+    ULONG EvidenceRecordCount;
+    BOOLEAN EvidenceFailed;
+} OAC_ENDPOINT_SCAN_CONTEXT;
+
+static OAC_ENDPOINT_SCAN_CONTEXT g_EndpointScan;
+static PVOID volatile g_EndpointScanThread;
+
+C_ASSERT(OacSeverityInfo == OAC_V5_OBSERVATION_INFO);
+C_ASSERT(OacSeverityCritical == OAC_V5_OBSERVATION_CRITICAL);
+C_ASSERT(OacCategoryGeneral == OAC_V5_CATEGORY_GENERAL);
+C_ASSERT(OacCategoryHwid == OAC_V5_CATEGORY_HWID);
+
 static PVOID OacFindImageExport(_In_ PVOID ImageBase, _In_z_ PCSTR Name);
 static BOOLEAN OacReadVirtual(
     _Out_writes_bytes_(Size) PVOID Destination,
@@ -121,6 +140,119 @@ static BOOLEAN OacAddressInImage(
     _In_opt_ PVOID Address,
     _In_opt_ PVOID ImageBase,
     _In_ ULONG ImageSize);
+
+static OAC_V5_RULE_ID OacEndpointRuleForCategory(
+    _In_ OAC_CATEGORY Category)
+{
+    switch (Category)
+    {
+    case OacCategoryDriver:
+    case OacCategoryModule:
+        return OAC_V5_RULE_DRIVER_PREFLIGHT;
+    case OacCategoryProcess:
+        return OAC_V5_RULE_SYSTEM_STATE_PREFLIGHT;
+    case OacCategoryThread:
+        return OAC_V5_RULE_SYSTEM_THREAD_PREFLIGHT;
+    case OacCategoryHandle:
+        return OAC_V5_RULE_DANGEROUS_KERNEL_HANDLE;
+    case OacCategoryDebugger:
+        return OAC_V5_RULE_DEBUGGER_PREFLIGHT;
+    case OacCategoryVirtualization:
+    case OacCategoryDevice:
+        return OAC_V5_RULE_PLATFORM_PREFLIGHT;
+    default:
+        return OAC_V5_RULE_KERNEL_INTEGRITY;
+    }
+}
+
+VOID OacPublishEndpointFinding(_In_ const OAC_FINDING* Finding)
+{
+    OAC_V5_CONFIDENCE confidence;
+    ULONG minimumSeverity;
+
+    if (Finding == NULL ||
+        PsGetCurrentThread() != (PETHREAD)InterlockedCompareExchangePointer(
+            &g_EndpointScanThread, NULL, NULL))
+    {
+        return;
+    }
+    switch ((OAC_CATEGORY)Finding->Category)
+    {
+    case OacCategoryDriver:
+    case OacCategoryProcess:
+        minimumSeverity = OacSeverityMedium;
+        break;
+    case OacCategoryThread:
+    case OacCategoryHandle:
+    case OacCategoryIntegrity:
+    case OacCategoryDebugger:
+    case OacCategoryVirtualization:
+        minimumSeverity = OacSeverityHigh;
+        break;
+    default:
+        return;
+    }
+    if (Finding->Severity < minimumSeverity) return;
+    confidence = Finding->Severity >= OacSeverityHigh
+        ? OAC_V5_CONFIDENCE_HIGH
+        : OAC_V5_CONFIDENCE_MEDIUM;
+    if (OacEvidencePublishForScan(
+            &g_EndpointScan.SessionId,
+            g_EndpointScan.Generation,
+            g_EndpointScan.ScanId,
+            OacEndpointRuleForCategory((OAC_CATEGORY)Finding->Category),
+            OAC_V5_EVENT_OBSERVATION,
+            (OAC_V5_OBSERVATION_SEVERITY)Finding->Severity,
+            OAC_V5_POLICY_NOT_EVALUATED,
+            confidence,
+            (OAC_V5_CATEGORY)Finding->Category,
+            ULongToHandle(Finding->ProcessId),
+            ULongToHandle(Finding->ThreadId),
+            (PVOID)(ULONG_PTR)Finding->Address,
+            Finding->Auxiliary,
+            OAC_V5_EVIDENCE_KERNEL_SOURCE,
+            Finding->Text))
+    {
+        ++g_EndpointScan.EvidenceRecordCount;
+    }
+    else
+    {
+        g_EndpointScan.EvidenceFailed = TRUE;
+    }
+}
+
+static VOID OacPublishEndpointScanState(
+    _In_ OAC_V5_RULE_ID RuleId,
+    _In_ OAC_V5_EVENT_TYPE EventType,
+    _In_ OAC_V5_OBSERVATION_SEVERITY Severity,
+    _In_ ULONGLONG Auxiliary,
+    _In_ ULONGLONG EvidenceFlags,
+    _In_z_ PCWSTR Text)
+{
+    if (OacEvidencePublishForScan(
+            &g_EndpointScan.SessionId,
+            g_EndpointScan.Generation,
+            g_EndpointScan.ScanId,
+            RuleId,
+            EventType,
+            Severity,
+            OAC_V5_POLICY_NOT_EVALUATED,
+            OAC_V5_CONFIDENCE_HIGH,
+            OAC_V5_CATEGORY_INTEGRITY,
+            PsGetCurrentProcessId(),
+            PsGetCurrentThreadId(),
+            NULL,
+            Auxiliary,
+            EvidenceFlags,
+            Text))
+    {
+        ++g_EndpointScan.EvidenceRecordCount;
+    }
+    else
+    {
+        g_EndpointScan.EvidenceFailed = TRUE;
+    }
+}
 
 NTSTATUS OacQuerySystemInformation(
     _In_ ULONG InformationClass,
@@ -942,7 +1074,7 @@ static VOID OacValidateKernelControlTarget(
     }
 }
 
-static VOID OacScanKernelIntegrity(
+static BOOLEAN OacScanKernelIntegrity(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount)
 {
@@ -957,6 +1089,7 @@ static VOID OacScanKernelIntegrity(
     ULONG idtDivergences = 0;
     ULONG malformedGates = 0;
     ULONG i;
+    BOOLEAN complete = TRUE;
 
     RtlZeroMemory(&cpuContext, sizeof(cpuContext));
     RtlZeroMemory(&fallbackSample, sizeof(fallbackSample));
@@ -987,6 +1120,7 @@ static VOID OacScanKernelIntegrity(
     }
     else
     {
+        complete = FALSE;
         cpuContext.Samples = &fallbackSample;
         cpuContext.Capacity = 1;
         (VOID)OacCaptureCpuIntegrity((ULONG_PTR)&cpuContext);
@@ -1000,6 +1134,21 @@ static VOID OacScanKernelIntegrity(
             NULL,
             processorCapacity,
             L"All-processor integrity snapshot allocation failed; sampled current CPU only");
+    }
+
+    if (capturedProcessors != processorCapacity)
+    {
+        complete = FALSE;
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            ((ULONGLONG)capturedProcessors << 32) | processorCapacity,
+            L"All-processor integrity snapshot was incomplete; captured=%lu expected=%lu",
+            capturedProcessors,
+            processorCapacity);
     }
 
     for (i = 0; i < capturedProcessors; ++i)
@@ -1281,11 +1430,13 @@ static VOID OacScanKernelIntegrity(
         }
         else
         {
+            complete = FALSE;
             OacReportFinding(OacSeverityMedium, OacCategoryIntegrity, NULL, NULL,
                 NULL, (ULONGLONG)(ULONG)STATUS_PARTIAL_COPY,
                 L"Kernel-debugger state read failed");
         }
     }
+    return complete;
 }
 
 static VOID OacScanProtectedDebugPort(VOID)
@@ -1656,9 +1807,14 @@ NTSTATUS OacRunKernelScan(_In_ const OAC_SCAN_REQUEST* Request)
     status = OacQueryKernelModules(&modules, &moduleCount);
     if (!NT_SUCCESS(status)) return status;
 
-    OacScanKernelModules(modules, moduleCount);
-    OacScanProcessesAndHandles(modules, moduleCount, Request->Flags);
-    OacScanKernelIntegrity(modules, moduleCount);
+    (VOID)OacScanKernelModules(modules, moduleCount);
+    (VOID)OacScanProcessesAndHandles(
+        modules,
+        moduleCount,
+        Request->Flags,
+        OAC_ENDPOINT_SCAN_PROCESS_STATE |
+            OAC_ENDPOINT_SCAN_DANGEROUS_HANDLES);
+    (VOID)OacScanKernelIntegrity(modules, moduleCount);
     OacScanProtectedDebugPort();
     OacScanHypervisor();
     OacScanTdlArtifacts();
@@ -1669,4 +1825,144 @@ NTSTATUS OacRunKernelScan(_In_ const OAC_SCAN_REQUEST* Request)
 
     ExFreePoolWithTag(modules, OAC_SCAN_TAG);
     return STATUS_SUCCESS;
+}
+
+NTSTATUS OacRunEndpointScan(
+    _In_ const OAC_ENDPOINT_SCAN_REQUEST* Request,
+    _Out_ POAC_ENDPOINT_SCAN_RESPONSE Response)
+{
+    PAUX_MODULE_EXTENDED_INFO modules = NULL;
+    ULONG moduleCount = 0;
+    ULONG completedFlags = 0;
+    NTSTATUS firstFailure = STATUS_SUCCESS;
+    NTSTATUS status;
+    LARGE_INTEGER now = { 0 };
+    PVOID currentThread;
+
+    PAGED_CODE();
+    if (Request == NULL || Response == NULL ||
+        Request->RequestedFlags == 0 ||
+        (Request->RequestedFlags & ~OAC_ENDPOINT_SCAN_FLAGS) != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    currentThread = PsGetCurrentThread();
+    if (InterlockedCompareExchangePointer(
+            &g_EndpointScanThread,
+            currentThread,
+            NULL) != NULL)
+    {
+        return STATUS_DEVICE_BUSY;
+    }
+
+    RtlZeroMemory(&g_EndpointScan, sizeof(g_EndpointScan));
+    g_EndpointScan.SessionId = Request->Header.SessionId;
+    g_EndpointScan.Generation = Request->Header.Generation;
+    g_EndpointScan.ScanId = OacEvidenceCreateScanId();
+    RtlZeroMemory(Response, sizeof(*Response));
+    Response->ScanId = g_EndpointScan.ScanId;
+    Response->RequestedFlags = Request->RequestedFlags;
+    KeQuerySystemTime(&now);
+    Response->StartedTimestamp100ns = (ULONGLONG)now.QuadPart;
+    if (g_EndpointScan.ScanId == 0)
+    {
+        InterlockedExchangePointer(&g_EndpointScanThread, NULL);
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    OacPublishEndpointScanState(
+        OAC_V5_RULE_PREFLIGHT_STARTED,
+        OAC_V5_EVENT_SCAN_STARTED,
+        OAC_V5_OBSERVATION_INFO,
+        Request->RequestedFlags,
+        OAC_V5_EVIDENCE_KERNEL_SOURCE,
+        L"Production endpoint preflight started");
+
+    status = OacQueryKernelModules(&modules, &moduleCount);
+    if (!NT_SUCCESS(status))
+    {
+        firstFailure = status;
+    }
+    else
+    {
+        if ((Request->RequestedFlags &
+            OAC_ENDPOINT_SCAN_KERNEL_MODULES) != 0 &&
+            OacScanKernelModules(modules, moduleCount))
+        {
+            completedFlags |= OAC_ENDPOINT_SCAN_KERNEL_MODULES;
+        }
+        if ((Request->RequestedFlags &
+            (OAC_ENDPOINT_SCAN_PROCESS_STATE |
+             OAC_ENDPOINT_SCAN_DANGEROUS_HANDLES)) != 0)
+        {
+            completedFlags |= OacScanProcessesAndHandles(
+                modules,
+                moduleCount,
+                0,
+                Request->RequestedFlags);
+        }
+        if ((Request->RequestedFlags &
+            OAC_ENDPOINT_SCAN_KERNEL_INTEGRITY) != 0)
+        {
+            if (OacScanKernelIntegrity(modules, moduleCount))
+                completedFlags |= OAC_ENDPOINT_SCAN_KERNEL_INTEGRITY;
+        }
+        if ((Request->RequestedFlags &
+            OAC_ENDPOINT_SCAN_PLATFORM_STATE) != 0)
+        {
+            OacScanProtectedDebugPort();
+            OacScanHypervisor();
+            OacScanTdlArtifacts();
+            completedFlags |= OAC_ENDPOINT_SCAN_PLATFORM_STATE;
+        }
+        ExFreePoolWithTag(modules, OAC_SCAN_TAG);
+    }
+
+    if (g_EndpointScan.EvidenceFailed)
+    {
+        completedFlags = 0;
+        if (NT_SUCCESS(firstFailure)) firstFailure = STATUS_BUFFER_OVERFLOW;
+    }
+    Response->CompletedFlags = completedFlags;
+    if (completedFlags == Request->RequestedFlags &&
+        NT_SUCCESS(firstFailure))
+    {
+        Response->State = OAC_ENDPOINT_SCAN_COMPLETE;
+        OacPublishEndpointScanState(
+            OAC_V5_RULE_PREFLIGHT_COMPLETED,
+            OAC_V5_EVENT_SCAN_COMPLETED,
+            OAC_V5_OBSERVATION_INFO,
+            completedFlags,
+            OAC_V5_EVIDENCE_KERNEL_SOURCE,
+            L"Production endpoint preflight completed");
+    }
+    else
+    {
+        if (NT_SUCCESS(firstFailure)) firstFailure = STATUS_UNSUCCESSFUL;
+        Response->State = OAC_ENDPOINT_SCAN_INCOMPLETE;
+        Response->FailureStatus = firstFailure;
+        OacPublishEndpointScanState(
+            OAC_V5_RULE_PREFLIGHT_INCOMPLETE,
+            OAC_V5_EVENT_SCAN_INCOMPLETE,
+            OAC_V5_OBSERVATION_HIGH,
+            completedFlags,
+            OAC_V5_EVIDENCE_KERNEL_SOURCE |
+                OAC_V5_EVIDENCE_INCOMPLETE,
+            L"Production endpoint preflight was incomplete");
+    }
+    KeQuerySystemTime(&now);
+    Response->CompletedTimestamp100ns = (ULONGLONG)now.QuadPart;
+    Response->EvidenceRecordCount = g_EndpointScan.EvidenceRecordCount;
+    if (g_EndpointScan.EvidenceFailed &&
+        Response->State == OAC_ENDPOINT_SCAN_COMPLETE)
+    {
+        Response->State = OAC_ENDPOINT_SCAN_INCOMPLETE;
+        Response->CompletedFlags = 0;
+        Response->FailureStatus = STATUS_BUFFER_OVERFLOW;
+    }
+    InterlockedExchangePointer(&g_EndpointScanThread, NULL);
+    RtlZeroMemory(&g_EndpointScan, sizeof(g_EndpointScan));
+    return Response->EvidenceRecordCount != 0
+        ? STATUS_SUCCESS
+        : STATUS_BUFFER_OVERFLOW;
 }

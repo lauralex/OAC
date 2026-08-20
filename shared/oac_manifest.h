@@ -10,14 +10,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OAC_MANIFEST_SCHEMA 1u
-#define OAC_MANIFEST_SIZE 512u
+#define OAC_MANIFEST_SCHEMA 2u
+#define OAC_MANIFEST_SIZE 960u
 #define OAC_MANIFEST_MAGIC_SIZE 8u
 #define OAC_MANIFEST_ID_SIZE 16u
 #define OAC_MANIFEST_HASH_SIZE 32u
 #define OAC_MANIFEST_EXECUTABLE_NAME_CHARS 128u
+#define OAC_MANIFEST_MODULE_HASH_CAPACITY 16u
 #define OAC_MANIFEST_CLOCK_SKEW_SECONDS 300ULL
 #define OAC_MANIFEST_MAX_VALIDITY_SECONDS (31ULL * 24ULL * 60ULL * 60ULL)
+
+#define OAC_MANIFEST_ALLOW_TRUSTED_WINDOWS_MODULES 0x00000001u
+#define OAC_MANIFEST_FLAGS OAC_MANIFEST_ALLOW_TRUSTED_WINDOWS_MODULES
 
 #define OAC_MANIFEST_STATE_SCHEMA 1u
 #define OAC_MANIFEST_STATE_SIZE 96u
@@ -35,7 +39,8 @@ typedef enum OAC_MANIFEST_VALIDATION_TAG
     OAC_MANIFEST_EXPIRED = 8,
     OAC_MANIFEST_INCOMPATIBLE_COMPONENT = 9,
     OAC_MANIFEST_INVALID_EXECUTABLE_NAME = 10,
-    OAC_MANIFEST_INVALID_FILE_IDENTITY = 11
+    OAC_MANIFEST_INVALID_FILE_IDENTITY = 11,
+    OAC_MANIFEST_INVALID_MODULE_POLICY = 12
 } OAC_MANIFEST_VALIDATION;
 
 typedef enum OAC_MANIFEST_ROLLBACK_DECISION_TAG
@@ -69,7 +74,10 @@ typedef struct OAC_GAME_MANIFEST_TAG
     uint8_t ExecutableSha256[OAC_MANIFEST_HASH_SIZE];
     uint8_t SigningKeyId[OAC_MANIFEST_HASH_SIZE];
     uint16_t ExecutableName[OAC_MANIFEST_EXECUTABLE_NAME_CHARS];
-    uint8_t Reserved[72];
+    uint32_t ModuleHashCount;
+    uint32_t Reserved1;
+    uint8_t ModuleSha256[OAC_MANIFEST_MODULE_HASH_CAPACITY]
+        [OAC_MANIFEST_HASH_SIZE];
 } OAC_GAME_MANIFEST;
 
 typedef struct OAC_MANIFEST_ROLLBACK_STATE_TAG
@@ -114,8 +122,10 @@ static_assert(offsetof(OAC_GAME_MANIFEST, SigningKeyId) == 152,
     "manifest signing-key identity moved");
 static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableName) == 184,
     "manifest executable name moved");
-static_assert(offsetof(OAC_GAME_MANIFEST, Reserved) == 440,
-    "manifest reserved tail moved");
+static_assert(offsetof(OAC_GAME_MANIFEST, ModuleHashCount) == 440,
+    "manifest module count moved");
+static_assert(offsetof(OAC_GAME_MANIFEST, ModuleSha256) == 448,
+    "manifest module hashes moved");
 static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == OAC_MANIFEST_STATE_SIZE,
     "OAC_MANIFEST_ROLLBACK_STATE layout changed");
 static_assert(offsetof(OAC_MANIFEST_ROLLBACK_STATE, GameId) == 16,
@@ -155,8 +165,10 @@ _Static_assert(offsetof(OAC_GAME_MANIFEST, SigningKeyId) == 152,
     "manifest signing-key identity moved");
 _Static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableName) == 184,
     "manifest executable name moved");
-_Static_assert(offsetof(OAC_GAME_MANIFEST, Reserved) == 440,
-    "manifest reserved tail moved");
+_Static_assert(offsetof(OAC_GAME_MANIFEST, ModuleHashCount) == 440,
+    "manifest module count moved");
+_Static_assert(offsetof(OAC_GAME_MANIFEST, ModuleSha256) == 448,
+    "manifest module hashes moved");
 _Static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == OAC_MANIFEST_STATE_SIZE,
     "OAC_MANIFEST_ROLLBACK_STATE layout changed");
 _Static_assert(offsetof(OAC_MANIFEST_ROLLBACK_STATE, GameId) == 16,
@@ -188,6 +200,11 @@ int OacManifestFileIdentityMatches(
     uint64_t executableSize,
     const uint8_t executableSha256[OAC_MANIFEST_HASH_SIZE],
     const uint8_t signerCertificateSha256[OAC_MANIFEST_HASH_SIZE]);
+
+int OacManifestRuntimeModuleAllowed(
+    const OAC_GAME_MANIFEST* manifest,
+    const uint8_t moduleSha256[OAC_MANIFEST_HASH_SIZE],
+    int trustedWindowsModule);
 
 OAC_MANIFEST_ROLLBACK_DECISION OacManifestEvaluateRollback(
     const OAC_GAME_MANIFEST* manifest,

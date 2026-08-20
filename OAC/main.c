@@ -117,7 +117,8 @@ static ULONG OacV5Capabilities(VOID)
 {
     return OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
         OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
-        OAC_V5_CAP_PAGED_SNAPSHOTS;
+        OAC_V5_CAP_PAGED_SNAPSHOTS | OAC_V5_CAP_KERNEL_SCAN |
+        OAC_V5_CAP_DRIVER_GATE;
 }
 
 static VOID OacInitializeV5Response(
@@ -439,6 +440,116 @@ NTSTATUS OacDeviceControl(
         }
         break;
 
+    case IOCTL_OAC_V5_SET_CONFIG:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateEndpointConfigRequest(
+                (const OAC_ENDPOINT_CONFIG_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_ENDPOINT_CONFIG_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        {
+            const OAC_ENDPOINT_CONFIG_REQUEST request =
+                *(const OAC_ENDPOINT_CONFIG_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_ENDPOINT_CONFIG_RESPONSE response;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionConfigureEndpoint(
+                &lease,
+                request.ConfigurationFlags,
+                &snapshot);
+            if (!NT_SUCCESS(status)) break;
+            response = (POAC_ENDPOINT_CONFIG_RESPONSE)buffer;
+            RtlZeroMemory(response, sizeof(*response));
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_V5_MESSAGE_SET_CONFIG,
+                &snapshot);
+            response->State = snapshot.State;
+            response->ConfigurationFlags = snapshot.ConfigurationFlags;
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
+    case IOCTL_OAC_V5_RUN_SCAN:
+        if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
+            OacValidateEndpointScanRequest(
+                (const OAC_ENDPOINT_SCAN_REQUEST*)buffer,
+                inputLength) != OAC_V5_VALID)
+        {
+            status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        if (outputLength < sizeof(OAC_ENDPOINT_SCAN_RESPONSE))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        if (KeGetCurrentIrql() != PASSIVE_LEVEL)
+        {
+            status = STATUS_INVALID_DEVICE_STATE;
+            break;
+        }
+        {
+            const OAC_ENDPOINT_SCAN_REQUEST request =
+                *(const OAC_ENDPOINT_SCAN_REQUEST*)buffer;
+            OAC_SESSION_SNAPSHOT snapshot;
+            POAC_ENDPOINT_SCAN_RESPONSE response =
+                (POAC_ENDPOINT_SCAN_RESPONSE)buffer;
+            BOOLEAN complete;
+
+            status = OacSessionAcquireV5(
+                DeviceObject,
+                stack->FileObject,
+                &request.Header,
+                &lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacSessionBeginEndpointScan(&lease);
+            if (!NT_SUCCESS(status)) break;
+            status = OacRunEndpointScan(&request, response);
+            complete = NT_SUCCESS(status) &&
+                response->State == OAC_ENDPOINT_SCAN_COMPLETE &&
+                response->CompletedFlags == request.RequestedFlags &&
+                response->FailureStatus == STATUS_SUCCESS;
+            {
+                const NTSTATUS finishStatus = OacSessionFinishEndpointScan(
+                    &lease,
+                    response->ScanId,
+                    complete,
+                    &snapshot);
+                if (!NT_SUCCESS(finishStatus))
+                {
+                    status = finishStatus;
+                    break;
+                }
+            }
+            if (!NT_SUCCESS(status)) break;
+            OacInitializeV5Response(
+                &response->Header,
+                sizeof(*response),
+                request.Header.RequestId,
+                OAC_V5_MESSAGE_RUN_SCAN,
+                &snapshot);
+            bytesWritten = sizeof(*response);
+            status = STATUS_SUCCESS;
+        }
+        break;
+
     case IOCTL_OAC_ARM_LAUNCH:
         if (buffer == NULL || outputLength > OAC_V5_MAX_OUTPUT_SIZE ||
             OacValidateArmLaunchRequest(
@@ -747,6 +858,7 @@ NTSTATUS OacDeviceControl(
             status = OacEvidenceManageSnapshot(
                 &request,
                 snapshot.State >= OAC_V5_SESSION_REVOKED,
+                snapshot.LastCompletedScanId,
                 response,
                 outputLength,
                 &bytesWritten);
@@ -826,7 +938,6 @@ NTSTATUS OacDeviceControl(
                 ((const OAC_V5_STATUS_REQUEST*)buffer)->Header;
             OAC_SESSION_SNAPSHOT snapshot;
             POAC_V5_STATUS_RESPONSE response;
-            ULONG configurationFlags;
 
             status = OacSessionAcquireV5Status(
                 DeviceObject,
@@ -850,15 +961,7 @@ NTSTATUS OacDeviceControl(
                 response->Header.Flags |= OAC_V5_RESPONSE_REVOKED;
             }
             response->Capabilities = OacV5Capabilities();
-            configurationFlags = OacConfigurationFlags();
-            if ((configurationFlags & OAC_CONFIG_ENABLE_IMAGE_LOG) != 0)
-            {
-                response->ConfigurationFlags |= OAC_V5_CONFIG_IMAGE_LOG;
-            }
-            if ((configurationFlags & OAC_CONFIG_DRIVER_GATE) != 0)
-            {
-                response->ConfigurationFlags |= OAC_V5_CONFIG_DRIVER_GATE;
-            }
+            response->ConfigurationFlags = snapshot.ConfigurationFlags;
             response->RevokeReason = snapshot.RevokeReason;
             response->ServiceProcessId = snapshot.ServiceProcessId;
             response->TargetProcessId = snapshot.TargetProcessId;
@@ -871,6 +974,7 @@ NTSTATUS OacDeviceControl(
             response->LastSessionLossReason =
                 snapshot.LastSessionLossReason;
             response->SessionMode = snapshot.Mode;
+            response->LastCompletedScanId = snapshot.LastCompletedScanId;
             RtlCopyMemory(
                 response->ManifestSha256,
                 snapshot.ManifestSha256,

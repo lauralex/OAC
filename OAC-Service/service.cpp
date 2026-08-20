@@ -7,6 +7,7 @@
 #include <sddl.h>
 #include <userenv.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1260,6 +1261,7 @@ DWORD LaunchTarget(
     HANDLE& targetProcess,
     HANDLE& targetUserToken,
     DWORD& targetProcessId,
+    oac::VerifiedGameManifest& targetManifest,
     bool& driverSessionChanged,
     uint32_t& failureStage,
     uint32_t& failureDetail)
@@ -1267,6 +1269,7 @@ DWORD LaunchTarget(
     targetProcess = nullptr;
     targetUserToken = nullptr;
     targetProcessId = 0;
+    targetManifest = {};
     driverSessionChanged = false;
     failureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
     failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
@@ -1414,6 +1417,8 @@ DWORD LaunchTarget(
         status.State != OAC_V5_SESSION_MONITORING ||
         status.TargetProcessId != confirmed.TargetProcessId ||
         status.TargetProcessId != processInformation.dwProcessId ||
+        status.ConfigurationFlags != OAC_V5_CONFIG_FLAGS ||
+        status.LastCompletedScanId == 0 || status.DriverGateTrips != 0 ||
         std::memcmp(
             status.ManifestSha256,
             verifiedManifest.Digest.data(),
@@ -1474,6 +1479,7 @@ DWORD LaunchTarget(
     targetProcessId = processInformation.dwProcessId;
     targetUserToken = scannerToken.release();
     targetProcess = process.release();
+    targetManifest = verifiedManifest;
     failureStage = OAC_IPC_LAUNCH_STAGE_NONE;
     failureDetail = OAC_IPC_LAUNCH_DETAIL_NONE;
     return ERROR_SUCCESS;
@@ -1529,7 +1535,8 @@ DWORD OpenAndClaimDriver(
     constexpr ULONG requiredCapabilities =
         OAC_V5_CAP_SESSION_CONTROL | OAC_V5_CAP_LAUNCH_TICKET |
         OAC_V5_CAP_SESSION_LIVENESS | OAC_V5_CAP_TYPED_EVENTS |
-        OAC_V5_CAP_PAGED_SNAPSHOTS;
+        OAC_V5_CAP_PAGED_SNAPSHOTS | OAC_V5_CAP_KERNEL_SCAN |
+        OAC_V5_CAP_DRIVER_GATE;
     if (OacV5ValidateNegotiateResponse(&negotiated, returned) != OAC_V5_VALID ||
         OacV5ValidateCorrelation(
             &negotiate.Header, &negotiated.Header) != OAC_V5_VALID ||
@@ -1595,7 +1602,7 @@ DWORD OpenAndClaimDriver(
         status.ConfigurationFlags != 0 ||
         status.RevokeReason != OAC_V5_REVOKE_NONE ||
         status.ServiceProcessId != GetCurrentProcessId() ||
-        status.TargetProcessId != 0)
+        status.TargetProcessId != 0 || status.LastCompletedScanId != 0)
     {
         return statusError == ERROR_SUCCESS
             ? ERROR_INVALID_STATE
@@ -1672,6 +1679,12 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
 
+        failureStage = OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT;
+        error = RunEndpointPreflight();
+        if (error != ERROR_SUCCESS) return error;
+        if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
+            return ERROR_OPERATION_ABORTED;
+
         failureStage = OAC_SERVICE_STAGE_PIPE_CREATE;
         firstPipe_ = CreateControlPipe(true, error);
         if (firstPipe_ == INVALID_HANDLE_VALUE) return error;
@@ -1692,6 +1705,321 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
     }
 }
 
+DWORD ServiceHost::EvaluateAndQueueEvidence(
+    OAC_V5_EVENT_RECORD& record,
+    ULONG source) noexcept
+{
+    if (source != OAC_EVIDENCE_CHANNEL_ALERT &&
+        source != OAC_EVIDENCE_CHANNEL_EVENT &&
+        source != OAC_BACKEND_EVIDENCE_SOURCE_SERVICE)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if (serviceEvidenceSequence_ == ~0ULL)
+        return ERROR_ARITHMETIC_OVERFLOW;
+    if (source == OAC_BACKEND_EVIDENCE_SOURCE_SERVICE)
+    {
+        if (serviceObservationSequence_ == ~0ULL || record.Sequence != 0)
+            return ERROR_ARITHMETIC_OVERFLOW;
+        record.Sequence = ++serviceObservationSequence_;
+    }
+
+    const ULONGLONG ingestionTime = CurrentSystemTime100ns();
+    record.IngestionTimestamp100ns = ingestionTime >= record.Timestamp100ns
+        ? ingestionTime
+        : record.Timestamp100ns;
+    record.ServiceSequence = ++serviceEvidenceSequence_;
+
+    OAC_POLICY_DECISION decision{};
+    if (!OacPolicyEvaluateRules(
+            policy_.Record.Mode,
+            policy_.Record.Rules,
+            policy_.Record.RuleCount,
+            &record,
+            nullptr,
+            &decision) ||
+        !OacPolicyApplyDecision(&record, &decision) ||
+        OacV5ValidateEventRecord(&record, sizeof(record)) != OAC_V5_VALID)
+    {
+        return ERROR_INVALID_DATA;
+    }
+
+    OAC_BACKEND_EVIDENCE_ITEM backendItem{};
+    backendItem.Record = record;
+    backendItem.Decision = decision;
+    backendItem.SourceChannel = source;
+    const DWORD backendError = backend_.Enqueue(
+        backendItem, GetTickCount64());
+    if (backendError != ERROR_SUCCESS) return backendError;
+
+    if (decision.Action == OAC_POLICY_ACTION_DENY_LAUNCH)
+        InterlockedExchange(&launchDenied_, TRUE);
+    return decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION
+        ? ERROR_ACCESS_DISABLED_BY_POLICY
+        : ERROR_SUCCESS;
+}
+
+DWORD ServiceHost::AuthorizeRuntimeModule(
+    OAC_V5_EVENT_RECORD& record) noexcept
+{
+    if (record.RuleId != OAC_V5_RULE_PROCESS_IMAGE_LOADED)
+        return ERROR_SUCCESS;
+
+    const std::size_t length = wcsnlen_s(record.Text, ARRAYSIZE(record.Text));
+    oac::RuntimeModuleEvaluation evaluation{};
+    DWORD error = ERROR_INVALID_DATA;
+    if (InterlockedCompareExchange(
+            &activeManifestValid_, FALSE, FALSE) != FALSE &&
+        record.PayloadType == OAC_V5_PAYLOAD_UTF16 &&
+        record.PayloadLength == (length + 1) * sizeof(wchar_t) &&
+        length != 0 && length < ARRAYSIZE(record.Text) &&
+        (record.EvidenceFlags & OAC_V5_EVIDENCE_TRUNCATED) == 0)
+    {
+        error = oac::EvaluateRuntimeModule(
+            std::wstring_view(record.Text, length),
+            activeManifest_.Record,
+            evaluation);
+        if (error == ERROR_SUCCESS && evaluation.Allowed)
+        {
+            record.EvidenceFlags |= OAC_V5_EVIDENCE_SERVICE_SOURCE |
+                OAC_V5_EVIDENCE_SIGNATURE_CHECKED;
+            return ERROR_SUCCESS;
+        }
+    }
+
+    record.RuleId = OAC_V5_RULE_RUNTIME_MODULE_DENIED;
+    record.EventType = OAC_V5_EVENT_OBSERVATION;
+    record.ObservationSeverity = OAC_V5_OBSERVATION_CRITICAL;
+    record.PolicySeverity = OAC_V5_POLICY_NOT_EVALUATED;
+    record.Confidence = OAC_V5_CONFIDENCE_HIGH;
+    record.Category = OAC_V5_CATEGORY_MODULE;
+    record.Auxiliary = error;
+    record.EvidenceFlags |= OAC_V5_EVIDENCE_SERVICE_SOURCE;
+    if (error == ERROR_SUCCESS)
+        record.EvidenceFlags |= OAC_V5_EVIDENCE_SIGNATURE_CHECKED;
+    return ERROR_SUCCESS;
+}
+
+DWORD ServiceHost::QueueEndpointObservation(
+    const oac::EndpointObservation& observation) noexcept
+{
+    return QueueObservation(
+        observation.RuleId,
+        observation.EventType,
+        observation.Severity,
+        observation.Category,
+        observation.ScanId,
+        observation.ProcessId,
+        observation.ThreadId,
+        observation.Address,
+        observation.Auxiliary,
+        observation.EvidenceFlags,
+        observation.Text);
+}
+
+DWORD ServiceHost::QueueObservation(
+    OAC_V5_RULE_ID ruleId,
+    OAC_V5_EVENT_TYPE eventType,
+    OAC_V5_OBSERVATION_SEVERITY severity,
+    OAC_V5_CATEGORY category,
+    OAC_V5_SCAN_ID scanId,
+    ULONGLONG processId,
+    ULONGLONG threadId,
+    ULONGLONG address,
+    ULONGLONG auxiliary,
+    ULONGLONG evidenceFlags,
+    std::wstring_view text) noexcept
+{
+    OAC_V5_EVENT_RECORD record{};
+    record.Version = OAC_V5_VERSION;
+    record.Size = sizeof(record);
+    record.RuleId = ruleId;
+    record.EventType = eventType;
+    record.ObservationSeverity = severity;
+    record.PolicySeverity = OAC_V5_POLICY_NOT_EVALUATED;
+    record.Confidence = OAC_V5_CONFIDENCE_UNKNOWN;
+    record.Category = category;
+    record.SessionId = driverSessionId_;
+    record.Generation = driverSessionGeneration_;
+    record.Timestamp100ns = CurrentSystemTime100ns();
+    record.ScanId = scanId;
+    record.OccurrenceCount = 1;
+    record.FirstOccurrence100ns = record.Timestamp100ns;
+    record.LastOccurrence100ns = record.Timestamp100ns;
+    record.ProcessId = processId;
+    record.ThreadId = threadId;
+    record.Address = address;
+    record.Auxiliary = auxiliary;
+    record.EvidenceFlags = evidenceFlags;
+
+    if (!text.empty())
+    {
+        std::size_t characters = (std::min)(
+            text.size(),
+            static_cast<std::size_t>(OAC_V5_MAX_EVENT_TEXT - 1));
+        if (characters != 0 && characters < text.size())
+        {
+            const wchar_t tail = text[characters - 1];
+            if (tail >= 0xD800 && tail <= 0xDBFF) --characters;
+            record.EvidenceFlags |= OAC_V5_EVIDENCE_TRUNCATED;
+        }
+        if (characters != 0)
+        {
+            std::copy_n(
+                text.begin(), characters, record.Text);
+        }
+        record.Text[characters] = L'\0';
+        record.PayloadType = OAC_V5_PAYLOAD_UTF16;
+        record.PayloadLength = static_cast<ULONG>(
+            (characters + 1) * sizeof(wchar_t));
+    }
+    return EvaluateAndQueueEvidence(
+        record, OAC_BACKEND_EVIDENCE_SOURCE_SERVICE);
+}
+
+DWORD ServiceHost::PollTargetObservations() noexcept
+{
+    oac::TargetObservation observation{};
+    DWORD enforcementError = ERROR_SUCCESS;
+    while (targetScanner_.TakeObservation(observation))
+    {
+        const std::size_t textLength = wcsnlen_s(
+            observation.Text, ARRAYSIZE(observation.Text));
+        if (textLength == ARRAYSIZE(observation.Text))
+            return ERROR_INVALID_DATA;
+        const DWORD error = QueueObservation(
+            observation.RuleId,
+            OAC_V5_EVENT_OBSERVATION,
+            observation.Severity,
+            observation.Category,
+            0,
+            observation.ProcessId,
+            observation.ThreadId,
+            observation.Address,
+            observation.Auxiliary,
+            OAC_V5_EVIDENCE_SERVICE_SOURCE,
+            std::wstring_view(observation.Text, textLength));
+        if (error == ERROR_ACCESS_DISABLED_BY_POLICY)
+            enforcementError = error;
+        else if (error != ERROR_SUCCESS)
+            return error;
+    }
+    return enforcementError;
+}
+
+DWORD ServiceHost::WaitForBackendAcknowledgement(
+    ULONGLONG expectedSequence) noexcept
+{
+    if (expectedSequence == 0) return ERROR_INVALID_PARAMETER;
+    const ULONGLONG started = GetTickCount64();
+    const ULONGLONG timeout = policy_.Record.EvidenceAckTimeoutMilliseconds;
+    const ULONGLONG deadline = started > ~0ULL - timeout
+        ? ~0ULL
+        : started + timeout;
+    for (;;)
+    {
+        const ULONGLONG now = GetTickCount64();
+        const DWORD error = backend_.Poll(now);
+        if (error != ERROR_SUCCESS) return error;
+        const oac::BackendStatus status = backend_.Status();
+        if (status.AcknowledgedSequence >= expectedSequence &&
+            status.PendingEvidence == 0)
+        {
+            return backend_.AllowsLaunch(now)
+                ? ERROR_SUCCESS
+                : ERROR_ACCESS_DISABLED_BY_POLICY;
+        }
+        if (now >= deadline) return ERROR_TIMEOUT;
+        const DWORD remaining = static_cast<DWORD>((std::min<ULONGLONG>)(
+            deadline - now, 25));
+        const DWORD wait = WaitForSingleObject(stopEvent_, remaining);
+        if (wait == WAIT_OBJECT_0) return ERROR_OPERATION_ABORTED;
+        if (wait != WAIT_TIMEOUT)
+        {
+            const DWORD waitError = GetLastError();
+            return waitError == ERROR_SUCCESS ? ERROR_GEN_FAILURE : waitError;
+        }
+    }
+}
+
+DWORD ServiceHost::RunEndpointPreflight() noexcept
+{
+    oac::EndpointPreflightResult result{};
+    DWORD error = oac::CollectEndpointPreflight(
+        driver_,
+        driverSessionId_,
+        driverSessionGeneration_,
+        result);
+    if (error != ERROR_SUCCESS) return error;
+
+    DWORD enforcementError = PollEvidence();
+    if (enforcementError != ERROR_SUCCESS &&
+        enforcementError != ERROR_ACCESS_DISABLED_BY_POLICY)
+    {
+        return enforcementError;
+    }
+    for (auto& observation : result.Observations)
+    {
+        observation.ScanId = result.Scan.ScanId;
+        error = QueueEndpointObservation(observation);
+        if (error == ERROR_ACCESS_DISABLED_BY_POLICY)
+            enforcementError = error;
+        else if (error != ERROR_SUCCESS)
+            return error;
+        error = backend_.Poll(GetTickCount64());
+        if (error != ERROR_SUCCESS) return error;
+    }
+
+    const ULONGLONG expectedSequence = serviceEvidenceSequence_;
+    error = WaitForBackendAcknowledgement(expectedSequence);
+    if (error != ERROR_SUCCESS) return error;
+
+    const bool complete = result.Scan.State == OAC_ENDPOINT_SCAN_COMPLETE &&
+        result.Scan.CompletedFlags == OAC_ENDPOINT_SCAN_REQUIRED_FLAGS &&
+        result.Scan.FailureStatus == 0 && result.Scan.ScanId != 0 &&
+        result.ModuleSnapshotScanId == result.Scan.ScanId &&
+        result.ModulesInspected != 0;
+    if (!complete || enforcementError != ERROR_SUCCESS ||
+        InterlockedCompareExchange(&launchDenied_, FALSE, FALSE) != FALSE)
+    {
+        return ERROR_ACCESS_DISABLED_BY_POLICY;
+    }
+
+    OAC_V5_STATUS_RESPONSE status{};
+    error = ReadDriverStatus(
+        driver_,
+        driverSessionId_,
+        driverSessionGeneration_,
+        backend_.BindingSha256(),
+        status);
+    if (error != ERROR_SUCCESS) return error;
+    if (status.DriverGateTrips != 0)
+    {
+        const DWORD evidenceError = PollEvidence();
+        if (evidenceError != ERROR_SUCCESS &&
+            evidenceError != ERROR_ACCESS_DISABLED_BY_POLICY)
+        {
+            return evidenceError;
+        }
+        const ULONGLONG finalSequence = serviceEvidenceSequence_;
+        if (finalSequence > expectedSequence)
+        {
+            const DWORD acknowledgementError =
+                WaitForBackendAcknowledgement(finalSequence);
+            if (acknowledgementError != ERROR_SUCCESS)
+                return acknowledgementError;
+        }
+        return ERROR_ACCESS_DISABLED_BY_POLICY;
+    }
+    return status.State == OAC_V5_SESSION_CLAIMED &&
+            status.ConfigurationFlags == OAC_V5_CONFIG_FLAGS &&
+            status.LastCompletedScanId == result.Scan.ScanId &&
+            status.TargetProcessId == 0 &&
+            status.DriverGateTrips == 0
+        ? ERROR_SUCCESS
+        : ERROR_INVALID_STATE;
+}
+
 DWORD ServiceHost::PollEvidenceChannel(ULONG channel) noexcept
 {
     if (channel != OAC_EVIDENCE_CHANNEL_ALERT &&
@@ -1699,79 +2027,67 @@ DWORD ServiceHost::PollEvidenceChannel(ULONG channel) noexcept
     {
         return ERROR_INVALID_PARAMETER;
     }
-    alignas(OAC_EVIDENCE_READ_RESPONSE) EvidenceReadStorage storage{};
-    OAC_EVIDENCE_READ_RESPONSE* response = nullptr;
+    if (InterlockedCompareExchange(
+            &launchInProgress_, FALSE, FALSE) != FALSE)
+    {
+        return ERROR_SUCCESS;
+    }
     ULONGLONG& cursor = channel == OAC_EVIDENCE_CHANNEL_ALERT
         ? alertCursor_
         : eventCursor_;
-    const ULONGLONG acknowledgement = channel == OAC_EVIDENCE_CHANNEL_ALERT
-        ? backend_.Status().AlertAcknowledgedSequence
-        : 0;
-    const DWORD error = ReadEvidenceBatch(
-        driver_,
-        driverSessionId_,
-        driverSessionGeneration_,
-        channel,
-        cursor,
-        acknowledgement,
-        response,
-        storage);
-    if (error != ERROR_SUCCESS) return error;
-    if ((channel == OAC_EVIDENCE_CHANNEL_ALERT &&
-         response->LossLatched != 0) ||
-        (response->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0)
-    {
-        return ERROR_INVALID_DATA;
-    }
-    const ULONGLONG ingestionTime = CurrentSystemTime100ns();
     DWORD enforcementError = ERROR_SUCCESS;
-    for (ULONG index = 0; index < response->RecordCount; ++index)
+    for (ULONG page = 0; page != 1024; ++page)
     {
-        if (serviceEvidenceSequence_ == ~0ULL)
-            return ERROR_ARITHMETIC_OVERFLOW;
-        OAC_V5_EVENT_RECORD record = response->Records[index];
-        record.IngestionTimestamp100ns = ingestionTime >= record.Timestamp100ns
-            ? ingestionTime
-            : record.Timestamp100ns;
-        record.ServiceSequence = ++serviceEvidenceSequence_;
-        OAC_POLICY_DECISION decision{};
-        if (!OacPolicyEvaluateRules(
-                policy_.Record.Mode,
-                policy_.Record.Rules,
-                policy_.Record.RuleCount,
-                &record,
-                nullptr,
-                &decision) ||
-            !OacPolicyApplyDecision(&record, &decision) ||
-            OacV5ValidateEventRecord(&record, sizeof(record)) != OAC_V5_VALID)
+        alignas(OAC_EVIDENCE_READ_RESPONSE) EvidenceReadStorage storage{};
+        OAC_EVIDENCE_READ_RESPONSE* response = nullptr;
+        const ULONGLONG acknowledgement = channel == OAC_EVIDENCE_CHANNEL_ALERT
+            ? backend_.Status().AlertAcknowledgedSequence
+            : 0;
+        const DWORD error = ReadEvidenceBatch(
+            driver_,
+            driverSessionId_,
+            driverSessionGeneration_,
+            channel,
+            cursor,
+            acknowledgement,
+            response,
+            storage);
+        if (error != ERROR_SUCCESS) return error;
+        if ((channel == OAC_EVIDENCE_CHANNEL_ALERT &&
+             response->LossLatched != 0) ||
+            (response->Header.Flags & OAC_V5_RESPONSE_REVOKED) != 0)
         {
             return ERROR_INVALID_DATA;
         }
-        OAC_BACKEND_EVIDENCE_ITEM backendItem{};
-        backendItem.Record = record;
-        backendItem.Decision = decision;
-        backendItem.SourceChannel = channel;
-        const DWORD backendError = backend_.Enqueue(
-            backendItem, GetTickCount64());
+        for (ULONG index = 0; index < response->RecordCount; ++index)
+        {
+            OAC_V5_EVENT_RECORD record = response->Records[index];
+            const DWORD authorizationError = AuthorizeRuntimeModule(record);
+            if (authorizationError != ERROR_SUCCESS)
+                return authorizationError;
+            const DWORD queueError = EvaluateAndQueueEvidence(record, channel);
+            if (queueError == ERROR_ACCESS_DISABLED_BY_POLICY)
+                enforcementError = queueError;
+            else if (queueError != ERROR_SUCCESS)
+                return queueError;
+            cursor = response->Records[index].Sequence;
+        }
+        if ((response->Header.Flags & OAC_V5_RESPONSE_MORE_DATA) == 0)
+            return enforcementError;
+        const DWORD backendError = backend_.Poll(GetTickCount64());
         if (backendError != ERROR_SUCCESS) return backendError;
-        cursor = response->Records[index].Sequence;
-        if (decision.Action == OAC_POLICY_ACTION_DENY_LAUNCH)
-        {
-            InterlockedExchange(&launchDenied_, TRUE);
-        }
-        else if (decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION)
-        {
-            enforcementError = ERROR_ACCESS_DISABLED_BY_POLICY;
-        }
     }
-    return enforcementError;
+    return ERROR_MORE_DATA;
 }
 
 DWORD ServiceHost::PollEvidence() noexcept
 {
     DWORD error = PollEvidenceChannel(OAC_EVIDENCE_CHANNEL_ALERT);
-    if (error != ERROR_SUCCESS) return error;
-    return PollEvidenceChannel(OAC_EVIDENCE_CHANNEL_EVENT);
+    if (error != ERROR_SUCCESS && error != ERROR_ACCESS_DISABLED_BY_POLICY)
+        return error;
+    const DWORD eventError = PollEvidenceChannel(OAC_EVIDENCE_CHANNEL_EVENT);
+    if (eventError != ERROR_SUCCESS) return eventError;
+    return error;
 }
 
 DWORD ServiceHost::Wait() noexcept
@@ -1793,6 +2109,8 @@ DWORD ServiceHost::Wait() noexcept
         DWORD error = backend_.Poll(now);
         if (error != ERROR_SUCCESS) return error;
         error = PollEvidence();
+        if (error != ERROR_SUCCESS) return error;
+        error = PollTargetObservations();
         if (error != ERROR_SUCCESS) return error;
         return backend_.Poll(now);
     };
@@ -2014,6 +2332,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                 response.FailureStage = OAC_IPC_LAUNCH_STAGE_AUTHORIZE_CLIENT;
                 HANDLE launchedProcess = nullptr;
                 HANDLE launchedUserToken = nullptr;
+                oac::VerifiedGameManifest launchedManifest{};
                 if (authorization == ERROR_SUCCESS &&
                     InterlockedCompareExchange(
                         &launchDenied_, FALSE, FALSE) != FALSE)
@@ -2031,6 +2350,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                 {
                     bool driverSessionChanged = false;
                     DWORD targetProcessId = 0;
+                    InterlockedExchange(&launchInProgress_, TRUE);
                     try
                     {
                         response.Win32Error = LaunchTarget(
@@ -2047,6 +2367,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                             launchedProcess,
                             launchedUserToken,
                             targetProcessId,
+                            launchedManifest,
                             driverSessionChanged,
                             response.FailureStage,
                             response.FailureDetail);
@@ -2059,6 +2380,12 @@ DWORD ServiceHost::PipeLoop() noexcept
                     {
                         response.Win32Error = ERROR_UNHANDLED_EXCEPTION;
                     }
+                    if (response.Win32Error == ERROR_SUCCESS)
+                    {
+                        activeManifest_ = launchedManifest;
+                        InterlockedExchange(&activeManifestValid_, TRUE);
+                    }
+                    InterlockedExchange(&launchInProgress_, FALSE);
                     if (client.revertFailed)
                     {
                         CloseHandle(pipe);
@@ -2159,6 +2486,12 @@ DWORD ServiceHost::PipeLoop() noexcept
                                 driverStatus.SessionLossSequence;
                             response.LastSessionLossReason =
                                 driverStatus.LastSessionLossReason;
+                            response.EndpointConfigurationFlags =
+                                driverStatus.ConfigurationFlags;
+                            response.DriverGateTrips =
+                                driverStatus.DriverGateTrips;
+                            response.EndpointScanId =
+                                driverStatus.LastCompletedScanId;
                             const oac::BackendStatus backendStatus =
                                 backend_.Status();
                             response.Backend.LeaseState =

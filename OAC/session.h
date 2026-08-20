@@ -26,6 +26,8 @@ typedef struct OAC_SESSION_SNAPSHOT_TAG
     ULONGLONG SessionLossSequence;
     ULONG LastSessionLossReason;
     ULONG Mode;
+    ULONG ConfigurationFlags;
+    OAC_V5_SCAN_ID LastCompletedScanId;
     UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
     UCHAR BackendBindingSha256[OAC_V5_BACKEND_BINDING_DIGEST_SIZE];
 } OAC_SESSION_SNAPSHOT, *POAC_SESSION_SNAPSHOT;
@@ -105,6 +107,20 @@ NTSTATUS OacSessionSnapshot(
     _In_ const OAC_SESSION_LEASE* Lease,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot);
 
+NTSTATUS OacSessionBeginEndpointScan(
+    _In_ const OAC_SESSION_LEASE* Lease);
+
+NTSTATUS OacSessionFinishEndpointScan(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ OAC_V5_SCAN_ID ScanId,
+    _In_ BOOLEAN Complete,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
+NTSTATUS OacSessionConfigureEndpoint(
+    _In_ const OAC_SESSION_LEASE* Lease,
+    _In_ ULONG ConfigurationFlags,
+    _Out_ POAC_SESSION_SNAPSHOT Snapshot);
+
 NTSTATUS OacSessionRevoke(
     _In_ const OAC_SESSION_LEASE* Lease,
     _In_ OAC_V5_REVOKE_REASON RevokeReason,
@@ -151,6 +167,8 @@ OAC_SESSION_PROCESS_CREATE_RESULT OacSessionNotifyProcessCreate(
 BOOLEAN OacSessionIsControllerProcess(_In_ PEPROCESS Process);
 
 BOOLEAN OacSessionIsTargetProcess(_In_ PEPROCESS Process);
+
+ULONG OacSessionConfigurationFlags(VOID);
 
 BOOLEAN OacSessionCaptureEvidenceIdentity(
     _Out_ POAC_V5_SESSION_ID SessionId,

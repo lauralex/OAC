@@ -53,6 +53,11 @@ static_assert(sizeof(OAC_CONFIRM_TARGET_REQUEST) == 72);
 static_assert(sizeof(OAC_CONFIRM_TARGET_RESPONSE) == 72);
 static_assert(sizeof(OAC_REVOKE_SESSION_REQUEST) == 56);
 static_assert(sizeof(OAC_REVOKE_SESSION_RESPONSE) == 80);
+static_assert(sizeof(OAC_ENDPOINT_CONFIG_REQUEST) == 56);
+static_assert(sizeof(OAC_ENDPOINT_CONFIG_RESPONSE) == 64);
+static_assert(sizeof(OAC_ENDPOINT_SCAN_REQUEST) == 56);
+static_assert(sizeof(OAC_ENDPOINT_SCAN_RESPONSE) == 104);
+static_assert(sizeof(OAC_V5_STATUS_RESPONSE) == 208);
 static_assert(sizeof(OAC_EVIDENCE_READ_REQUEST) == 80);
 static_assert(offsetof(OAC_EVIDENCE_READ_RESPONSE, Records) == 136);
 static_assert(sizeof(OAC_SNAPSHOT_RECORD) == 560);
@@ -62,7 +67,11 @@ static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
 static_assert(sizeof(OAC_IPC_SCAN_METRICS) == 184);
 static_assert(offsetof(OAC_IPC_SCAN_METRICS, State) == 168);
 static_assert(sizeof(OAC_IPC_BACKEND_STATUS) == 32);
-static_assert(sizeof(OAC_IPC_RESPONSE) == 288);
+static_assert(sizeof(OAC_IPC_RESPONSE) == 304);
+static_assert(offsetof(
+    OAC_IPC_RESPONSE, EndpointConfigurationFlags) == 68);
+static_assert(offsetof(OAC_IPC_RESPONSE, DriverGateTrips) == 72);
+static_assert(offsetof(OAC_IPC_RESPONSE, EndpointScanId) == 80);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
 static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
@@ -75,15 +84,15 @@ static_assert(sizeof(OAC_POLICY_RULE) == 56);
 static_assert(sizeof(OAC_POLICY_DECISION) == 16);
 static_assert(std::is_standard_layout_v<OAC_GAME_MANIFEST>);
 static_assert(std::is_trivially_copyable_v<OAC_MANIFEST_ROLLBACK_STATE>);
-static_assert(sizeof(OAC_GAME_MANIFEST) == 512);
+static_assert(sizeof(OAC_GAME_MANIFEST) == 960);
 static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableSha256) == 120);
 static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableName) == 184);
 static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96);
 static_assert(std::is_standard_layout_v<OAC_SIGNED_POLICY>);
 static_assert(std::is_trivially_copyable_v<OAC_POLICY_CACHE_STATE>);
-static_assert(sizeof(OAC_SIGNED_POLICY) == 1024);
+static_assert(sizeof(OAC_SIGNED_POLICY) == 2480);
 static_assert(offsetof(OAC_SIGNED_POLICY, Rules) == 216);
-static_assert(offsetof(OAC_SIGNED_POLICY, BackendLeaseMilliseconds) == 1000);
+static_assert(offsetof(OAC_SIGNED_POLICY, BackendLeaseMilliseconds) == 2456);
 static_assert(sizeof(OAC_POLICY_CACHE_STATE) == 160);
 static_assert(sizeof(OAC_BACKEND_REQUEST_HEADER) == 88);
 static_assert(sizeof(OAC_BACKEND_OPEN_REQUEST) == 184);
@@ -351,6 +360,57 @@ OAC_V5_CLAIM_RESPONSE ValidClaimResponse()
     return response;
 }
 
+OAC_ENDPOINT_CONFIG_REQUEST ValidEndpointConfigRequest()
+{
+    OAC_ENDPOINT_CONFIG_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_SET_CONFIG);
+    request.ConfigurationFlags = OAC_V5_CONFIG_FLAGS;
+    return request;
+}
+
+OAC_ENDPOINT_CONFIG_RESPONSE ValidEndpointConfigResponse()
+{
+    OAC_ENDPOINT_CONFIG_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_SET_CONFIG);
+    response.State = OAC_V5_SESSION_CLAIMED;
+    response.ConfigurationFlags = OAC_V5_CONFIG_FLAGS;
+    return response;
+}
+
+OAC_ENDPOINT_SCAN_REQUEST ValidEndpointScanRequest()
+{
+    OAC_ENDPOINT_SCAN_REQUEST request{};
+    FillSessionHeader(
+        request.Header,
+        sizeof(request),
+        OAC_V5_MESSAGE_RUN_SCAN);
+    request.RequestedFlags = OAC_ENDPOINT_SCAN_REQUIRED_FLAGS;
+    return request;
+}
+
+OAC_ENDPOINT_SCAN_RESPONSE ValidEndpointScanResponse()
+{
+    OAC_ENDPOINT_SCAN_RESPONSE response{};
+    FillSessionHeader(
+        response.Header,
+        sizeof(response),
+        OAC_V5_MESSAGE_RUN_SCAN);
+    response.ScanId = 7;
+    response.StartedTimestamp100ns = 100;
+    response.CompletedTimestamp100ns = 200;
+    response.RequestedFlags = OAC_ENDPOINT_SCAN_REQUIRED_FLAGS;
+    response.CompletedFlags = OAC_ENDPOINT_SCAN_REQUIRED_FLAGS;
+    response.EvidenceRecordCount = 2;
+    response.State = OAC_ENDPOINT_SCAN_COMPLETE;
+    return response;
+}
+
 OAC_V5_STATUS_RESPONSE ValidStatusResponse()
 {
     OAC_V5_STATUS_RESPONSE response{};
@@ -361,10 +421,11 @@ OAC_V5_STATUS_RESPONSE ValidStatusResponse()
     response.State = OAC_V5_SESSION_CLAIMED;
     response.Capabilities = OAC_V5_CAP_SESSION_CONTROL |
         OAC_V5_CAP_DRIVER_GATE;
-    response.ConfigurationFlags = OAC_V5_CONFIG_DRIVER_GATE;
+    response.ConfigurationFlags = OAC_V5_CONFIG_FLAGS;
     response.RevokeReason = OAC_V5_REVOKE_NONE;
     response.ServiceProcessId = 100;
     response.SessionMode = OAC_V5_SESSION_PRODUCTION;
+    response.LastCompletedScanId = 7;
     std::fill(
         std::begin(response.BackendBindingSha256),
         std::end(response.BackendBindingSha256),
@@ -731,9 +792,9 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050006UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050007UL);
     log.Expect("launcher-service protocol exact revision",
-        OAC_IPC_PROTOCOL_REVISION == 0x00010006u);
+        OAC_IPC_PROTOCOL_REVISION == 0x00010007u);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -808,7 +869,8 @@ void TestServiceFailures(TestLog& log)
     log.Expect("service failure zero stage", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_NONE, ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure unknown stage", OacEncodeServiceFailure(
-        OAC_SERVICE_STAGE_BACKEND + 1, ERROR_ACCESS_DENIED) == 0);
+        OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT + 1,
+        ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure zero error", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_IDENTITY, ERROR_SUCCESS) == 0);
     log.Expect("service failure oversized error", OacEncodeServiceFailure(
@@ -827,7 +889,7 @@ void TestServiceFailures(TestLog& log)
         OAC_SERVICE_FAILURE_ERROR_MASK
     };
     for (uint32_t expectedStage = OAC_SERVICE_STAGE_BOOTSTRAP;
-         expectedStage <= OAC_SERVICE_STAGE_BACKEND;
+         expectedStage <= OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT;
          ++expectedStage)
     {
         for (const uint32_t expectedError : errors)
@@ -852,7 +914,7 @@ void TestServiceFailures(TestLog& log)
             (OAC_SERVICE_STAGE_DRIVER_OPEN <<
                 OAC_SERVICE_FAILURE_STAGE_SHIFT),
         OAC_SERVICE_FAILURE_MAGIC |
-            ((OAC_SERVICE_STAGE_BACKEND + 1u) <<
+            ((OAC_SERVICE_STAGE_ENDPOINT_PREFLIGHT + 1u) <<
                 OAC_SERVICE_FAILURE_STAGE_SHIFT) |
             ERROR_ACCESS_DENIED,
         OAC_SERVICE_FAILURE_MAGIC |
@@ -1120,6 +1182,91 @@ void TestServiceScanMetrics(TestLog& log)
     log.Expect("scan deadline is bounded",
         !oac::CanInspectMemory(budget, progress, budget.deadline100ns) &&
         !oac::CanInspectThread(budget, progress, budget.deadline100ns));
+
+    constexpr std::array<std::byte, 14> syscallBytes{
+        std::byte{0x90}, std::byte{0x4C}, std::byte{0x8B}, std::byte{0xD1},
+        std::byte{0xB8}, std::byte{0x34}, std::byte{0x12}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x0F}, std::byte{0x05}, std::byte{0xC3},
+        std::byte{0x90}, std::byte{0x90}
+    };
+    log.Expect("direct system-call stub is located exactly",
+        oac::FindDirectSyscallStub(
+            syscallBytes.data(), syscallBytes.size()) == 1);
+    auto ordinaryBytes = syscallBytes;
+    ordinaryBytes[10] = std::byte{0x04};
+    log.Expect("ordinary executable bytes are not a system-call stub",
+        oac::FindDirectSyscallStub(
+            ordinaryBytes.data(), ordinaryBytes.size()) ==
+                oac::kDirectSyscallStubNotFound);
+    log.Expect("null system-call sample is rejected",
+        oac::FindDirectSyscallStub(nullptr, syscallBytes.size()) ==
+            oac::kDirectSyscallStubNotFound);
+
+    std::array<std::byte, 96> portableExecutable{};
+    portableExecutable[0] = std::byte{'M'};
+    portableExecutable[1] = std::byte{'Z'};
+    portableExecutable[0x3c] = std::byte{0x40};
+    portableExecutable[0x40] = std::byte{'P'};
+    portableExecutable[0x41] = std::byte{'E'};
+    log.Expect("unbacked PE signature is recognized",
+        oac::ContainsPortableExecutable(
+            portableExecutable.data(), portableExecutable.size()));
+    portableExecutable[0x41] = std::byte{'X'};
+    log.Expect("ordinary private executable bytes are not a PE image",
+        !oac::ContainsPortableExecutable(
+            portableExecutable.data(), portableExecutable.size()));
+    log.Expect("truncated PE sample is rejected",
+        !oac::ContainsPortableExecutable(portableExecutable.data(), 0x40) &&
+        !oac::ContainsPortableExecutable(nullptr, portableExecutable.size()));
+
+    log.Expect("committed private writable stack is expected",
+        oac::IsExpectedThreadStackRegion(
+            MEM_COMMIT, MEM_PRIVATE, PAGE_READWRITE | PAGE_GUARD));
+    log.Expect("mapped stack region is suspicious",
+        !oac::IsExpectedThreadStackRegion(
+            MEM_COMMIT, MEM_MAPPED, PAGE_READWRITE));
+    log.Expect("executable stack region is suspicious",
+        !oac::IsExpectedThreadStackRegion(
+            MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READWRITE));
+    log.Expect("writable executable protections include copy-on-write",
+        oac::IsWritableExecutableProtection(PAGE_EXECUTE_READWRITE) &&
+        oac::IsWritableExecutableProtection(PAGE_EXECUTE_WRITECOPY) &&
+        !oac::IsWritableExecutableProtection(PAGE_EXECUTE_READ));
+}
+
+void TestServiceEndpointStatus(TestLog& log)
+{
+    OAC_IPC_RESPONSE response{};
+    log.Expect("zero endpoint status", OacIpcEndpointStatusAreZero(
+        &response) != 0);
+    log.Expect("zero endpoint status is not admitted",
+        OacIpcEndpointStatusValid(&response) == 0);
+
+    response.EndpointConfigurationFlags = OAC_V5_CONFIG_FLAGS;
+    response.EndpointScanId = 1;
+    log.Expect("completed endpoint preflight status",
+        OacIpcEndpointStatusValid(&response) != 0);
+    log.Expect("completed endpoint status is not empty",
+        OacIpcEndpointStatusAreZero(&response) == 0);
+
+    auto invalid = response;
+    invalid.EndpointScanId = 0;
+    log.Expect("endpoint status requires a completed scan",
+        OacIpcEndpointStatusValid(&invalid) == 0);
+    invalid = response;
+    invalid.DriverGateTrips = 1;
+    log.Expect("endpoint status rejects a tripped driver gate",
+        OacIpcEndpointStatusValid(&invalid) == 0);
+    invalid = response;
+    invalid.EndpointConfigurationFlags = OAC_V5_CONFIG_DRIVER_GATE;
+    log.Expect("endpoint status requires the exact production configuration",
+        OacIpcEndpointStatusValid(&invalid) == 0);
+    invalid.EndpointConfigurationFlags = OAC_V5_CONFIG_FLAGS | 0x80000000u;
+    log.Expect("endpoint status rejects unknown configuration flags",
+        OacIpcEndpointStatusValid(&invalid) == 0);
+    log.Expect("null endpoint status is invalid",
+        OacIpcEndpointStatusAreZero(nullptr) == 0 &&
+        OacIpcEndpointStatusValid(nullptr) == 0);
 }
 
 void TestServiceBackendStatus(TestLog& log)
@@ -1355,6 +1502,116 @@ void TestClaimAndStatusRequests(TestLog& log)
         &status, sizeof(status)) == OAC_V5_INVALID_MESSAGE_TYPE);
     log.Expect("status oversized", OacV5ValidateStatusRequest(
         &status, sizeof(status) + 8) == OAC_V5_INVALID_LENGTH);
+}
+
+void TestEndpointPreflightMessages(TestLog& log)
+{
+    auto configuration = ValidEndpointConfigRequest();
+    log.Expect("valid endpoint configuration request",
+        OacValidateEndpointConfigRequest(
+            &configuration, sizeof(configuration)) == OAC_V5_VALID);
+    configuration.ConfigurationFlags = 0;
+    log.Expect("endpoint configuration requires a flag",
+        OacValidateEndpointConfigRequest(
+            &configuration, sizeof(configuration)) == OAC_V5_INVALID_FLAGS);
+    configuration = ValidEndpointConfigRequest();
+    configuration.ConfigurationFlags = 0x80000000UL;
+    log.Expect("endpoint configuration rejects unknown flags",
+        OacValidateEndpointConfigRequest(
+            &configuration, sizeof(configuration)) == OAC_V5_INVALID_FLAGS);
+    configuration = ValidEndpointConfigRequest();
+    configuration.Reserved = 1;
+    log.Expect("endpoint configuration rejects reserved data",
+        OacValidateEndpointConfigRequest(
+            &configuration, sizeof(configuration)) == OAC_V5_INVALID_RESERVED);
+    configuration = ValidEndpointConfigRequest();
+    configuration.Header.MessageType = OAC_V5_MESSAGE_RUN_SCAN;
+    log.Expect("endpoint configuration binds message type",
+        OacValidateEndpointConfigRequest(
+            &configuration, sizeof(configuration)) ==
+                OAC_V5_INVALID_MESSAGE_TYPE);
+
+    auto scan = ValidEndpointScanRequest();
+    log.Expect("valid endpoint scan request", OacValidateEndpointScanRequest(
+        &scan, sizeof(scan)) == OAC_V5_VALID);
+    scan.RequestedFlags = 0;
+    log.Expect("endpoint scan requires a check", OacValidateEndpointScanRequest(
+        &scan, sizeof(scan)) == OAC_V5_INVALID_FLAGS);
+    scan = ValidEndpointScanRequest();
+    scan.RequestedFlags |= 0x80000000UL;
+    log.Expect("endpoint scan rejects unknown checks",
+        OacValidateEndpointScanRequest(
+            &scan, sizeof(scan)) == OAC_V5_INVALID_FLAGS);
+    scan = ValidEndpointScanRequest();
+    scan.Reserved = 1;
+    log.Expect("endpoint scan rejects reserved data",
+        OacValidateEndpointScanRequest(
+            &scan, sizeof(scan)) == OAC_V5_INVALID_RESERVED);
+    log.Expect("endpoint scan rejects truncated input",
+        OacValidateEndpointScanRequest(
+            &scan, sizeof(scan) - 1) == OAC_V5_INVALID_LENGTH);
+
+    auto configured = ValidEndpointConfigResponse();
+    log.Expect("valid endpoint configuration response",
+        OacValidateEndpointConfigResponse(
+            &configured, sizeof(configured)) == OAC_V5_VALID);
+    configured.State = OAC_V5_SESSION_MONITORING;
+    log.Expect("configuration response requires claimed state",
+        OacValidateEndpointConfigResponse(
+            &configured, sizeof(configured)) == OAC_V5_INVALID_VALUE);
+    configured = ValidEndpointConfigResponse();
+    configured.ConfigurationFlags = 0;
+    log.Expect("configuration response requires enabled state",
+        OacValidateEndpointConfigResponse(
+            &configured, sizeof(configured)) == OAC_V5_INVALID_VALUE);
+
+    auto scanned = ValidEndpointScanResponse();
+    log.Expect("valid complete endpoint scan response",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_VALID);
+    scanned.CompletedFlags &= ~OAC_ENDPOINT_SCAN_PLATFORM_STATE;
+    scanned.State = OAC_ENDPOINT_SCAN_INCOMPLETE;
+    scanned.FailureStatus = static_cast<LONG>(0xC0000001UL);
+    log.Expect("valid incomplete endpoint scan response",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_VALID);
+    scanned = ValidEndpointScanResponse();
+    scanned.ScanId = 0;
+    log.Expect("endpoint scan response requires identity",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_INVALID_VALUE);
+    scanned = ValidEndpointScanResponse();
+    scanned.CompletedTimestamp100ns = scanned.StartedTimestamp100ns - 1;
+    log.Expect("endpoint scan response rejects reversed time",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_INVALID_VALUE);
+    scanned = ValidEndpointScanResponse();
+    scanned.CompletedFlags &= ~OAC_ENDPOINT_SCAN_PLATFORM_STATE;
+    log.Expect("endpoint scan response rejects false completeness",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_INVALID_VALUE);
+    scanned = ValidEndpointScanResponse();
+    scanned.State = OAC_ENDPOINT_SCAN_INCOMPLETE;
+    scanned.FailureStatus = static_cast<LONG>(0xC0000001UL);
+    log.Expect("endpoint scan response rejects complete flags on failure",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_INVALID_VALUE);
+    scanned = ValidEndpointScanResponse();
+    scanned.EvidenceRecordCount = 0;
+    log.Expect("endpoint scan response requires evidence provenance",
+        OacValidateEndpointScanResponse(
+            &scanned, sizeof(scanned)) == OAC_V5_INVALID_VALUE);
+
+    configuration = ValidEndpointConfigRequest();
+    configured = ValidEndpointConfigResponse();
+    log.Expect("endpoint configuration response correlates",
+        OacV5ValidateCorrelation(
+            &configuration.Header, &configured.Header) == OAC_V5_VALID);
+    scan = ValidEndpointScanRequest();
+    scanned = ValidEndpointScanResponse();
+    log.Expect("endpoint scan response correlates",
+        OacV5ValidateCorrelation(
+            &scan.Header, &scanned.Header) == OAC_V5_VALID);
 }
 
 void TestRevokeMessages(TestLog& log)
@@ -1779,6 +2036,16 @@ void TestResponses(TestLog& log)
     log.Expect("status unknown config flag", OacV5ValidateStatusResponse(
         &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status = ValidStatusResponse();
+    status.LastCompletedScanId = 0;
+    log.Expect("claimed status permits an armed preflight before its scan",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
+    status = ValidStatusResponse();
+    status.ConfigurationFlags = 0;
+    log.Expect("completed preflight status requires active monitoring",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
     status.EventsDropped = status.EventsWritten + 1;
     log.Expect("status drop count cannot exceed published events",
         OacV5ValidateStatusResponse(
@@ -1876,6 +2143,8 @@ void TestResponses(TestLog& log)
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status = ValidStatusResponse();
     status.SessionMode = OAC_V5_SESSION_DIAGNOSTIC;
+    status.ConfigurationFlags = 0;
+    status.LastCompletedScanId = 0;
     std::fill(
         std::begin(status.BackendBindingSha256),
         std::end(status.BackendBindingSha256),
@@ -2838,7 +3107,7 @@ void TestPolicyCatalog(TestLog& log)
         rules != nullptr && rules[0].RuleId == OAC_V5_RULE_SESSION_CLAIMED);
     log.Expect("policy catalog stable last rule",
         rules != nullptr &&
-        rules[count - 1].RuleId == OAC_V5_RULE_VIRTUALIZATION);
+        rules[count - 1].RuleId == OAC_V5_RULE_PLATFORM_PREFLIGHT);
 
     log.Expect("policy deployment modes",
         OacPolicyModeValid(OAC_POLICY_MODE_OBSERVE) != 0 &&
@@ -2948,8 +3217,130 @@ void TestPolicyEvaluation(TestLog& log)
             OAC_POLICY_MODE_STRICT, &gate, nullptr, &decision) != 0 &&
         decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
 
+    constexpr ULONGLONG serviceSignatureEvidence =
+        OAC_V5_EVIDENCE_SERVICE_SOURCE |
+        OAC_V5_EVIDENCE_SIGNATURE_CHECKED;
+    auto driverReview = PolicyObservation(
+        OAC_V5_RULE_DRIVER_REVIEW_REQUIRED,
+        OAC_V5_CATEGORY_DRIVER,
+        OAC_V5_OBSERVATION_HIGH,
+        serviceSignatureEvidence);
+    log.Expect("enforce mode requests review for a policy-review driver",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &driverReview,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+    auto deniedFamily = PolicyObservation(
+        OAC_V5_RULE_DRIVER_FAMILY_DENIED,
+        OAC_V5_CATEGORY_DRIVER,
+        OAC_V5_OBSERVATION_CRITICAL,
+        serviceSignatureEvidence);
+    log.Expect("enforce mode denies a blocked driver family",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &deniedFamily,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_DENY_LAUNCH);
+    deniedFamily.EvidenceFlags = OAC_V5_EVIDENCE_SERVICE_SOURCE;
+    log.Expect("driver policy requires signature-check provenance",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &deniedFamily,
+            nullptr,
+            &decision) == 0);
+
+    auto executablePrivateMemory = PolicyObservation(
+        OAC_V5_RULE_EXECUTABLE_NONIMAGE_MEMORY,
+        OAC_V5_CATEGORY_MEMORY,
+        OAC_V5_OBSERVATION_HIGH,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode requests review for executable private memory",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &executablePrivateMemory,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+    auto writableExecutableMemory = PolicyObservation(
+        OAC_V5_RULE_WRITABLE_EXECUTABLE_MEMORY,
+        OAC_V5_CATEGORY_MEMORY,
+        OAC_V5_OBSERVATION_CRITICAL,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode revokes writable executable memory",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &writableExecutableMemory,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
+    auto directSyscall = PolicyObservation(
+        OAC_V5_RULE_DIRECT_SYSCALL_STUB,
+        OAC_V5_CATEGORY_MEMORY,
+        OAC_V5_OBSERVATION_HIGH,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode reviews an unbacked direct system-call stub",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &directSyscall,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+    auto stackAnomaly = PolicyObservation(
+        OAC_V5_RULE_THREAD_STACK_ANOMALY,
+        OAC_V5_CATEGORY_THREAD,
+        OAC_V5_OBSERVATION_HIGH,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode reviews anomalous target stack ownership",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &stackAnomaly,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+    auto instrumentation = PolicyObservation(
+        OAC_V5_RULE_INSTRUMENTATION_CALLBACK,
+        OAC_V5_CATEGORY_DEBUGGER,
+        OAC_V5_OBSERVATION_HIGH,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode reviews an unbacked instrumentation callback",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &instrumentation,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW);
+    auto runtimeModule = PolicyObservation(
+        OAC_V5_RULE_RUNTIME_MODULE_DENIED,
+        OAC_V5_CATEGORY_MODULE,
+        OAC_V5_OBSERVATION_CRITICAL,
+        callbackEvidence | OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode revokes an unauthorized runtime module",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &runtimeModule,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
+    auto debugRegisters = PolicyObservation(
+        OAC_V5_RULE_THREAD_DEBUG_REGISTERS,
+        OAC_V5_CATEGORY_DEBUGGER,
+        OAC_V5_OBSERVATION_CRITICAL,
+        OAC_V5_EVIDENCE_SERVICE_SOURCE);
+    log.Expect("enforce mode revokes target hardware breakpoints",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_ENFORCE,
+            &debugRegisters,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_REVOKE_SESSION);
+
     auto evaluated = gate;
     log.Expect("policy decision enriches observation",
+        OacPolicyEvaluate(
+            OAC_POLICY_MODE_STRICT, &gate, nullptr, &decision) != 0 &&
         OacPolicyApplyDecision(&evaluated, &decision) != 0 &&
         evaluated.EventType == OAC_V5_EVENT_POLICY_VIOLATION &&
         evaluated.PolicySeverity == OAC_V5_POLICY_CRITICAL &&
@@ -3194,6 +3585,7 @@ OAC_GAME_MANIFEST ValidGameManifest()
     std::copy(magic.begin(), magic.end(), manifest.Magic);
     manifest.SchemaVersion = OAC_MANIFEST_SCHEMA;
     manifest.Size = sizeof(manifest);
+    manifest.Flags = OAC_MANIFEST_ALLOW_TRUSTED_WINDOWS_MODULES;
     manifest.ExecutableNameLength =
         static_cast<uint32_t>(std::size(executableName) - 1);
     for (size_t index = 0; index != OAC_MANIFEST_ID_SIZE; ++index)
@@ -3273,7 +3665,7 @@ void TestGameManifest(TestLog& log)
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
             OAC_MANIFEST_INVALID_SCHEMA);
     invalid = manifest;
-    invalid.Flags = 1;
+    invalid.Flags = OAC_MANIFEST_FLAGS << 1;
     log.Expect("manifest flags", OacManifestValidate(
         &invalid, sizeof(invalid), now, OAC_V5_VERSION,
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
@@ -3285,8 +3677,8 @@ void TestGameManifest(TestLog& log)
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
             OAC_MANIFEST_INVALID_RESERVED);
     invalid = manifest;
-    invalid.Reserved[71] = 1;
-    log.Expect("manifest reserved tail", OacManifestValidate(
+    invalid.Reserved1 = 1;
+    log.Expect("manifest second reserved field", OacManifestValidate(
         &invalid, sizeof(invalid), now, OAC_V5_VERSION,
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
             OAC_MANIFEST_INVALID_RESERVED);
@@ -3442,6 +3834,71 @@ void TestGameManifest(TestLog& log)
             manifest.ExecutableSize,
             manifest.ExecutableSha256,
             wrongSigner.data()) == 0);
+
+    auto approvedModule = std::array<uint8_t, OAC_MANIFEST_HASH_SIZE>{};
+    auto laterModule = std::array<uint8_t, OAC_MANIFEST_HASH_SIZE>{};
+    approvedModule.fill(uint8_t{0x22});
+    laterModule.fill(uint8_t{0x44});
+    std::copy(
+        approvedModule.begin(),
+        approvedModule.end(),
+        std::begin(manifest.ModuleSha256[0]));
+    std::copy(
+        laterModule.begin(),
+        laterModule.end(),
+        std::begin(manifest.ModuleSha256[1]));
+    manifest.ModuleHashCount = 2;
+    log.Expect("manifest accepts an exact runtime module hash",
+        OacManifestRuntimeModuleAllowed(
+            &manifest, approvedModule.data(), 0) != 0);
+    log.Expect("manifest accepts the authorized main image as a module",
+        OacManifestRuntimeModuleAllowed(
+            &manifest, manifest.ExecutableSha256, 0) != 0);
+    auto unknownModule = approvedModule;
+    unknownModule[0] = 0x33;
+    log.Expect("manifest rejects an unknown runtime module",
+        OacManifestRuntimeModuleAllowed(
+            &manifest, unknownModule.data(), 0) == 0);
+    log.Expect("manifest explicitly permits trusted Windows modules",
+        OacManifestRuntimeModuleAllowed(
+            &manifest, unknownModule.data(), 1) != 0);
+    invalid = manifest;
+    invalid.Flags = 0;
+    log.Expect("manifest can require exact hashes for every runtime module",
+        OacManifestRuntimeModuleAllowed(
+            &invalid, unknownModule.data(), 1) == 0);
+    invalid = manifest;
+    invalid.Flags |= 0x80000000u;
+    log.Expect("runtime module policy rejects unknown manifest flags",
+        OacManifestRuntimeModuleAllowed(
+            &invalid, unknownModule.data(), 1) == 0);
+    invalid = manifest;
+    invalid.ModuleHashCount = OAC_MANIFEST_MODULE_HASH_CAPACITY + 1;
+    log.Expect("manifest bounds the runtime module policy",
+        OacManifestValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+                OAC_MANIFEST_INVALID_MODULE_POLICY);
+    invalid = manifest;
+    std::copy(
+        approvedModule.begin(),
+        approvedModule.end(),
+        std::begin(invalid.ModuleSha256[1]));
+    log.Expect("manifest runtime module hashes are unique",
+        OacManifestValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+                OAC_MANIFEST_INVALID_MODULE_POLICY);
+    invalid = manifest;
+    std::fill(
+        std::begin(invalid.ModuleSha256[2]),
+        std::end(invalid.ModuleSha256[2]),
+        uint8_t{0x55});
+    log.Expect("manifest unused runtime module slots are zero",
+        OacManifestValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+                OAC_MANIFEST_INVALID_MODULE_POLICY);
 
     std::array<uint8_t, OAC_MANIFEST_HASH_SIZE> digest{};
     std::fill(digest.begin(), digest.end(), uint8_t{0xA5});
@@ -4238,6 +4695,12 @@ void TestSignedPolicy(TestLog& log)
         &invalid, sizeof(invalid), now, OAC_V5_VERSION,
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
              OAC_SIGNED_POLICY_INVALID_RULES);
+    invalid = policy;
+    invalid.Rules[OAC_POLICY_RULE_COUNT - 1].Reserved = 1;
+    log.Expect("signed policy rule reserved field", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_RULES);
 
     invalid = policy;
     invalid.BackendLeaseMilliseconds =
@@ -4307,7 +4770,11 @@ void TestSignedPolicy(TestLog& log)
             nullptr,
             &decision) != 0 &&
         decision.Action == OAC_POLICY_ACTION_WARN);
+}
 
+void TestSignedPolicyUpdates(TestLog& log)
+{
+    auto policy = ValidSignedPolicy();
     std::array<uint8_t, OAC_POLICY_HASH_SIZE> firstDigest{};
     std::fill(firstDigest.begin(), firstDigest.end(), uint8_t{0xA1});
     OAC_POLICY_CACHE_STATE first{};
@@ -4925,12 +5392,14 @@ int main()
     TestBasicHelpers(log);
     TestServiceFailures(log);
     TestServiceLaunchMessages(log);
+    TestServiceEndpointStatus(log);
     TestServiceScanMetrics(log);
     TestServiceBackendStatus(log);
     TestThreadSuspension(log);
     TestRanges(log);
     TestNegotiateRequest(log);
     TestClaimAndStatusRequests(log);
+    TestEndpointPreflightMessages(log);
     TestRevokeMessages(log);
     TestLaunchRequests(log);
     TestLaunchResponses(log);
@@ -4949,6 +5418,7 @@ int main()
     TestGameManifest(log);
     TestGameIntegration(log);
     TestSignedPolicy(log);
+    TestSignedPolicyUpdates(log);
     TestBackendSession(log);
     return log.ExitCode();
 }

@@ -204,19 +204,21 @@ static BOOLEAN OacSystemModuleContainsBase(
     return FALSE;
 }
 
-VOID OacScanKernelModules(
+BOOLEAN OacScanKernelModules(
     _In_reads_(ModuleCount) PAUX_MODULE_EXTENDED_INFO Modules,
     _In_ ULONG ModuleCount)
 {
     PVOID systemBuffer = NULL;
     ULONG systemLength = 0;
     NTSTATUS status;
+    BOOLEAN complete;
     ULONG i;
 
     status = OacQuerySystemInformation(
         OAC_SYSTEM_MODULE_INFORMATION_CLASS,
         &systemBuffer,
         &systemLength);
+    complete = NT_SUCCESS(status);
 
     for (i = 0; i < ModuleCount; ++i)
     {
@@ -273,8 +275,20 @@ VOID OacScanKernelModules(
             L"Secondary kernel-module view failed: 0x%08X",
             status);
     }
-    else if (systemLength >=
+    else if (systemLength <
         (ULONG)FIELD_OFFSET(OAC_SYSTEM_MODULE_INFORMATION, Modules))
+    {
+        complete = FALSE;
+        OacReportFinding(
+            OacSeverityHigh,
+            OacCategoryIntegrity,
+            NULL,
+            NULL,
+            NULL,
+            systemLength,
+            L"Secondary kernel-module view was shorter than its fixed header");
+    }
+    else
     {
         POAC_SYSTEM_MODULE_INFORMATION systemModules =
             (POAC_SYSTEM_MODULE_INFORMATION)systemBuffer;
@@ -282,6 +296,20 @@ VOID OacScanKernelModules(
             (systemLength - FIELD_OFFSET(OAC_SYSTEM_MODULE_INFORMATION, Modules)) /
             sizeof(OAC_SYSTEM_MODULE_ENTRY);
         ULONG count = min(systemModules->NumberOfModules, maximum);
+        if (systemModules->NumberOfModules > maximum)
+        {
+            complete = FALSE;
+            OacReportFinding(
+                OacSeverityHigh,
+                OacCategoryIntegrity,
+                NULL,
+                NULL,
+                NULL,
+                systemModules->NumberOfModules,
+                L"Secondary kernel-module view was truncated; available=%lu reported=%lu",
+                maximum,
+                systemModules->NumberOfModules);
+        }
         for (i = 0; i < count; ++i)
         {
             POAC_SYSTEM_MODULE_ENTRY entry = &systemModules->Modules[i];
@@ -308,6 +336,7 @@ VOID OacScanKernelModules(
 
     if (systemBuffer != NULL)
         ExFreePoolWithTag(systemBuffer, OAC_SCAN_TAG);
+    return complete;
 }
 
 NTSTATUS OacCaptureKernelModuleSnapshot(

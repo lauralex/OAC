@@ -81,7 +81,7 @@ void WINAPI ServiceMain(DWORD argumentCount, wchar_t** arguments) noexcept
     g_Status = {};
     g_Status.dwCheckPoint = 0;
     InterlockedExchange(&g_StopRequested, FALSE);
-    ReportStatus(SERVICE_START_PENDING, ERROR_SUCCESS, 0, 10000);
+    ReportStatus(SERVICE_START_PENDING, ERROR_SUCCESS, 0, 60000);
 
     DWORD result = ERROR_SUCCESS;
     OAC_SERVICE_FAILURE_STAGE failureStage = OAC_SERVICE_STAGE_BOOTSTRAP;

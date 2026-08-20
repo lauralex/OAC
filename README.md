@@ -22,8 +22,8 @@ mode, while the kernel retains only the responsibilities that genuinely require 
 
 | Boundary | Design |
 |---|---|
-| **Kernel** | Narrow session authority, creation-time target binding, callbacks, bounded snapshots, and retained alerts |
-| **Service** | Signed authorization, backend lease, suspended launch, target-job ownership, policy, and evidence delivery |
+| **Kernel** | Narrow session authority, creation-time target binding, callbacks, bounded endpoint scans, snapshots, and retained alerts |
+| **Service** | Signed authorization, endpoint trust admission, backend lease, suspended launch, target-job ownership, policy, and evidence delivery |
 | **Game server** | Canonical authoritative events, replay-safe state, and explainable reference rules |
 | **Release** | Exact public/lab allowlists, deterministic metadata, SPDX SBOM, checksums, and private-symbol separation |
 
@@ -44,6 +44,7 @@ flowchart LR
     Backend["Backend session contract"] -->|"lease"| Service
     Service -->|"typed evidence"| Backend
     Service -->|"one-use ticket"| Driver["Demand-start OAC driver"]
+    Driver -->|"bounded preflight and frozen module inventory"| Service
     Service -->|"create suspended"| Target["Protected process tree"]
     Driver -->|"bind at creation"| Target
     Service -->|"assign before resume"| Job["Kill-on-close job"]
@@ -72,6 +73,10 @@ server-side rules.
   it does not infer authority later from a reusable process identifier.
 - **Authenticated inputs.** Canonical game manifests and policy records use detached signatures,
   protected signer pins, explicit scope and expiry, and persistent rollback state.
+- **Fail-closed endpoint admission.** Before accepting launch requests, the service arms the
+  production load gate, requires a complete current-state kernel scan, verifies every reported
+  loaded driver against trust and vulnerable-driver policy, uploads the resulting evidence, and
+  waits for acknowledgement.
 - **Deterministic lifetime.** The target tree belongs to an unnamed kill-on-close job. Service
   failure, graceful revocation, handle cleanup, and a live-target tombstone have explicit outcomes.
 - **Bounded kernel work.** Callbacks and processor sampling remain allocation-conscious and
@@ -92,6 +97,13 @@ The current source includes:
   and snapshot messages;
 - identity-checked launcher IPC and one serialized caller-token launch transaction;
 - signed game-build authorization with exact executable hash and signer checks;
+- production endpoint admission with explicit scan completeness, a frozen loaded-driver snapshot,
+  embedded-or-catalog trust checks, exact vulnerable-driver hashes, conservative family policy,
+  and an armed post-start load gate;
+- runtime module authorization against the signed manifest, plus typed target findings for
+  executable non-image and writable-executable memory, unbacked PE images, direct system-call
+  stubs, thread start and instruction ownership, hardware debug registers, stack backing, and
+  instrumentation callbacks;
 - signed rule policy with deployment mode, build and channel scope, bounded validity, component
   compatibility, replay protection, explicit rollback authorization, and emergency revocation;
 - a transport-independent backend session with nonce replay rejection, bounded leases, monotonic
@@ -102,7 +114,8 @@ The current source includes:
   process-tree containment;
 - retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
 - deterministic Observe, Enforce, and Strict policy evaluation with typed confidence and actions;
-- a cancellation-aware service worker for bounded memory-region and thread sampling;
+- a cancellation-aware service worker for bounded memory-region and thread sampling, typed
+  observations, deduplication, explicit skipped-work metrics, and fail-closed queue exhaustion;
 - a fail-closed disposable-VM installer, package validator, protocol suite, and Driver Verifier
   campaign; and
 - an unsigned release-candidate pipeline with exact artifact boundaries, source/toolchain metadata,
@@ -127,7 +140,9 @@ includes:
 - a production game-engine adapter, authenticated event ingestion, durable replay storage, and
   game-specific detectors beyond the included reference movement invariant;
 - manifest signer rotation and revocation metadata;
-- approved module, middleware, overlay, child-process, and runtime rules for a real game;
+- a tuned module, middleware, overlay, child-process, and approved-JIT policy for a real game; the
+  current manifest supports exact module hashes and an explicit trusted-Windows-module class;
+- create-time job assignment and complete file-identity binding for the launch transaction;
 - Microsoft driver certification, protected production signing, an authenticated release/update
   service, approved privacy operations, and a representative platform certification matrix.
 

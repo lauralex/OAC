@@ -380,6 +380,9 @@ static VOID OacThreadNotify(
 {
     if (ProcessId == OacProtectedProcessId())
     {
+        OAC_V5_SESSION_ID sessionId = { 0 };
+        ULONGLONG generation = 0;
+
         OacReportFinding(
             OacSeverityInfo,
             OacCategoryThread,
@@ -388,6 +391,28 @@ static VOID OacThreadNotify(
             NULL,
             Create ? 1 : 0,
             Create ? L"Protected-process thread created" : L"Protected-process thread exited");
+        if (OacSessionCaptureTargetEvidenceIdentity(
+                NULL,
+                ProcessId,
+                &sessionId,
+                &generation))
+        {
+            OacEvidencePublish(
+                &sessionId,
+                generation,
+                OAC_V5_RULE_TARGET_THREAD_LIFECYCLE,
+                OAC_V5_EVENT_OBSERVATION,
+                OAC_V5_OBSERVATION_INFO,
+                OAC_V5_POLICY_NOT_EVALUATED,
+                OAC_V5_CONFIDENCE_HIGH,
+                OAC_V5_CATEGORY_THREAD,
+                ProcessId,
+                ThreadId,
+                NULL,
+                Create ? 1 : 0,
+                OAC_V5_EVIDENCE_KERNEL_SOURCE |
+                    OAC_V5_EVIDENCE_CALLBACK_SOURCE);
+        }
     }
 }
 
@@ -531,12 +556,6 @@ static VOID OacImageNotify(
         OacSuspiciousUserImageName(FullImageName))
     {
         severity = OacSeverityHigh;
-        if (!evidenceIdentityCaptured)
-        {
-            evidenceIdentityCaptured = OacSessionCaptureEvidenceIdentity(
-                &evidenceSessionId,
-                &evidenceGeneration);
-        }
     }
 
     if (ProcessId == NULL || severity >= OacSeverityHigh ||
@@ -560,9 +579,10 @@ static VOID OacImageNotify(
             name);
         if (evidenceIdentityCaptured)
         {
-            OacEvidencePublish(
+            (VOID)OacEvidencePublishForScan(
                 &evidenceSessionId,
                 evidenceGeneration,
+                0,
                 ProcessId == NULL
                     ? (gateArmed
                         ? OAC_V5_RULE_DRIVER_GATE_TRIP
@@ -584,7 +604,8 @@ static VOID OacImageNotify(
                 ImageInfo != NULL ? ImageInfo->ImageBase : NULL,
                 ImageInfo != NULL ? ImageInfo->ImageSize : 0,
                 OAC_V5_EVIDENCE_KERNEL_SOURCE |
-                    OAC_V5_EVIDENCE_CALLBACK_SOURCE);
+                    OAC_V5_EVIDENCE_CALLBACK_SOURCE,
+                name);
         }
     }
 }
@@ -870,7 +891,8 @@ VOID OacProtectionRevokeController(_In_ PEPROCESS Controller)
 
 ULONG OacConfigurationFlags(VOID)
 {
-    return (ULONG)InterlockedCompareExchange(&g_ConfigurationFlags, 0, 0);
+    return (ULONG)InterlockedCompareExchange(&g_ConfigurationFlags, 0, 0) |
+        OacSessionConfigurationFlags();
 }
 
 ULONGLONG OacPostStartLoads(VOID)

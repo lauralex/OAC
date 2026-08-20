@@ -9,7 +9,8 @@
 - Source code and the shared protocol headers define implemented behavior. `README.md` summarizes
   it. `docs/hardening-plan.md` is proposed work, not proof of implementation.
 - `shared/protocol/oac_v5.h` is the current production-control ABI header. It defines strict typed
-  negotiation, claim, status, launch-ticket, evidence-read, and snapshot messages over a session
+  negotiation, claim, endpoint configuration/scan, status, launch-ticket, evidence-read, and
+  snapshot messages over a session
   bound to one file object, one referenced service process, and a nonzero backend binding for
   production claims. `shared/oac_protocol.h` is the diagnostic compatibility ABI.
 - The restricted service owns one serialized launch transaction: authenticate a local interactive
@@ -36,9 +37,14 @@
   The release-engineering milestone adds a checked-in release profile, exact unsigned public/lab/
   private-symbol bundles, deterministic source and toolchain metadata, an SPDX 2.3 SBOM, hostile
   candidate validation, and documented signing, update, support, privacy, and incident boundaries.
+  The current endpoint-trust milestone adds one fail-closed, identity-correlated production scan,
+  loaded-driver signature/hash/family policy, signed runtime-module authorization, and bounded typed
+  target memory/thread/lifecycle observations. Its source and driver-free coverage are present; the
+  exact signed-package, disposable-VM, and Driver Verifier acceptance run is still required.
   A production network transport, backend service, durable remote and replay storage, real game
-  adapter, manifest-key rotation, remote policy delivery, Microsoft certification, protected
-  production signing, and an approved platform rollout are not implemented.
+  adapter, stable mapped-file identity, create-time job assignment, manifest-key rotation, remote
+  policy delivery, Microsoft certification, protected production signing, representative
+  middleware/JIT tuning, and an approved platform rollout are not implemented.
 
 ## Repository map
 
@@ -46,7 +52,7 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the backend and driver sessions, typed policy enforcement, evidence queue, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
+| `OAC-Service/` | Restricted production controller; owns endpoint admission, backend and driver sessions, typed policy enforcement, evidence queue, target job, one serialized suspended-launch transaction, runtime-module authorization, and bounded target observation |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
@@ -63,7 +69,7 @@
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
 | `docs/` | Public technical references, current procedures, reviewed research, and separated maintainer records |
 
-`OAC-Client/driver_hash_policy.inc` is generated. Never edit it by hand.
+`shared/oac_driver_hash_policy.hpp` is generated. Never edit it by hand.
 
 ## Engineering workflow
 

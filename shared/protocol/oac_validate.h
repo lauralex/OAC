@@ -623,6 +623,12 @@ static __inline BOOLEAN OacSnapshotStateValid(ULONG State)
         State <= OAC_SNAPSHOT_STATE_CLOSED;
 }
 
+static __inline BOOLEAN OacEndpointScanStateValid(ULONG State)
+{
+    return State == OAC_ENDPOINT_SCAN_COMPLETE ||
+        State == OAC_ENDPOINT_SCAN_INCOMPLETE;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateEventPayload(
     const OAC_V5_EVENT_RECORD* Record)
 {
@@ -1161,6 +1167,46 @@ static __inline OAC_V5_VALIDATION OacV5ValidateClaimRequest(
     return OAC_V5_VALID;
 }
 
+static __inline OAC_V5_VALIDATION OacValidateEndpointConfigRequest(
+    const OAC_ENDPOINT_CONFIG_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_V5_MESSAGE_SET_CONFIG, 0);
+    if (result != OAC_V5_VALID) return result;
+    if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
+    if (Request->ConfigurationFlags == 0 ||
+        OacV5ValidateFlags(Request->ConfigurationFlags,
+            OAC_V5_CONFIG_FLAGS) != OAC_V5_VALID)
+    {
+        return OAC_V5_INVALID_FLAGS;
+    }
+    return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateEndpointScanRequest(
+    const OAC_ENDPOINT_SCAN_REQUEST* Request,
+    ULONG InputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Request == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateSessionRequest(&Request->Header, InputLength,
+        sizeof(*Request), OAC_V5_MESSAGE_RUN_SCAN, 0);
+    if (result != OAC_V5_VALID) return result;
+    if (Request->Reserved != 0) return OAC_V5_INVALID_RESERVED;
+    if (Request->RequestedFlags == 0 ||
+        OacV5ValidateFlags(Request->RequestedFlags,
+            OAC_ENDPOINT_SCAN_FLAGS) != OAC_V5_VALID)
+    {
+        return OAC_V5_INVALID_FLAGS;
+    }
+    return OAC_V5_VALID;
+}
+
 static __inline OAC_V5_VALIDATION OacV5ValidateStatusRequest(
     const OAC_V5_STATUS_REQUEST* Request,
     ULONG InputLength)
@@ -1295,6 +1341,60 @@ static __inline OAC_V5_VALIDATION OacV5ValidateClaimResponse(
     return OAC_V5_VALID;
 }
 
+static __inline OAC_V5_VALIDATION OacValidateEndpointConfigResponse(
+    const OAC_ENDPOINT_CONFIG_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_V5_MESSAGE_SET_CONFIG, 0,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->State != OAC_V5_SESSION_CLAIMED ||
+        Response->ConfigurationFlags == 0 ||
+        OacV5ValidateFlags(Response->ConfigurationFlags,
+            OAC_V5_CONFIG_FLAGS) != OAC_V5_VALID)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OAC_V5_VALID;
+}
+
+static __inline OAC_V5_VALIDATION OacValidateEndpointScanResponse(
+    const OAC_ENDPOINT_SCAN_RESPONSE* Response,
+    ULONG OutputLength)
+{
+    OAC_V5_VALIDATION result;
+    BOOLEAN complete;
+
+    if (Response == NULL) return OAC_V5_INVALID_POINTER;
+    result = OacV5ValidateResponseHeader(&Response->Header, OutputLength,
+        sizeof(*Response), OAC_V5_MESSAGE_RUN_SCAN, 0,
+        OAC_V5_ID_REQUIRED);
+    if (result != OAC_V5_VALID) return result;
+    if (Response->ScanId == 0 || Response->StartedTimestamp100ns == 0 ||
+        Response->CompletedTimestamp100ns < Response->StartedTimestamp100ns ||
+        Response->RequestedFlags == 0 ||
+        OacV5ValidateFlags(Response->RequestedFlags,
+            OAC_ENDPOINT_SCAN_FLAGS) != OAC_V5_VALID ||
+        (Response->CompletedFlags & ~Response->RequestedFlags) != 0 ||
+        Response->EvidenceRecordCount == 0 ||
+        !OacEndpointScanStateValid(Response->State) ||
+        Response->Reserved != 0)
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    complete = Response->CompletedFlags == Response->RequestedFlags;
+    if ((Response->State == OAC_ENDPOINT_SCAN_COMPLETE) != complete ||
+        (complete != (Response->FailureStatus == 0)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OAC_V5_VALID;
+}
+
 static __inline OAC_V5_VALIDATION OacValidateArmLaunchResponse(
     const OAC_ARM_LAUNCH_RESPONSE* Response,
     ULONG OutputLength)
@@ -1410,6 +1510,16 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     {
         return OAC_V5_INVALID_VALUE;
     }
+    if ((Response->LastCompletedScanId != 0 &&
+         Response->ConfigurationFlags != OAC_V5_CONFIG_FLAGS) ||
+        ((Response->State == OAC_V5_SESSION_LAUNCH_PENDING ||
+          Response->State == OAC_V5_SESSION_TARGET_BOUND ||
+          Response->State == OAC_V5_SESSION_MONITORING) &&
+         (Response->LastCompletedScanId == 0 ||
+          Response->ConfigurationFlags != OAC_V5_CONFIG_FLAGS)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
     if ((Response->State < OAC_V5_SESSION_REVOKED) !=
         (Response->RevokeReason == OAC_V5_REVOKE_NONE) ||
         ((Response->State >= OAC_V5_SESSION_REVOKED) !=
@@ -1444,7 +1554,10 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
         ((Response->SessionMode == OAC_V5_SESSION_PRODUCTION) !=
          !OacV5BufferIsZero(
              Response->BackendBindingSha256,
-             sizeof(Response->BackendBindingSha256))))
+             sizeof(Response->BackendBindingSha256))) ||
+        (Response->SessionMode == OAC_V5_SESSION_DIAGNOSTIC &&
+         (Response->ConfigurationFlags != 0 ||
+          Response->LastCompletedScanId != 0)))
     {
         return OAC_V5_INVALID_VALUE;
     }

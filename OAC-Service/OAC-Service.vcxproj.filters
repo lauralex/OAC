@@ -4,6 +4,9 @@
     <ClCompile Include="backend.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="endpoint_preflight.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4fc737f1-c7a5-4376-a066-2a32d752a2ff}</UniqueIdentifier>
       <Extensions>cpp;c</Extensions>
@@ -24,6 +27,9 @@
     <ClCompile Include="manifest.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="runtime_module.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="policy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -34,6 +40,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="target_scanner.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\shared\oac_driver_trust.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\shared\oac_backend.c">
@@ -53,7 +62,13 @@
     <ClInclude Include="backend.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="endpoint_preflight.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="manifest.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="runtime_module.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="policy.hpp">
@@ -69,6 +84,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_driver_hash_policy.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_driver_trust.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_backend.h">

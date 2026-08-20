@@ -9,7 +9,7 @@ param(
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
     [string]$ExpectedZipSha256,
 
-    [string]$OutputPath = (Join-Path $PSScriptRoot '..\OAC-Client\driver_hash_policy.inc')
+    [string]$OutputPath = (Join-Path $PSScriptRoot '..\shared\oac_driver_hash_policy.hpp')
 )
 
 $ErrorActionPreference = 'Stop'
