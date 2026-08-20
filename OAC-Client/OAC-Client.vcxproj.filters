@@ -9,6 +9,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="client_options.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="driver_client.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="hardware_identity.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="OAC-Client.cpp"><Filter>Source Files</Filter></ClCompile>
@@ -18,10 +19,12 @@
     <ClCompile Include="system_scanner.cpp"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="client_options.hpp"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="driver_hash_policy.inc"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="scanner.hpp"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_protocol.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_thread_suspension.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="..\shared\oac_windows.hpp"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

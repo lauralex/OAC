@@ -20,10 +20,8 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
-#include <cwctype>
 #include <fstream>
 #include <iomanip>
-#include <memory>
 #include <map>
 #include <set>
 #include <sstream>
@@ -39,6 +37,9 @@
 
 namespace
 {
+using oac::UniqueHandle;
+using oac::UniqueServiceHandle;
+
 #include "driver_hash_policy.inc"
 
 using NtQuerySystemInformationFn = LONG(NTAPI*)(ULONG, PVOID, ULONG, PULONG);
@@ -114,41 +115,6 @@ enum class ProcessLiveness : unsigned char
     Unknown
 };
 
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueHandle() { if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept { return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE; }
-
-private:
-    HANDLE handle_;
-};
-
-class UniqueServiceHandle
-{
-public:
-    explicit UniqueServiceHandle(SC_HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueServiceHandle() { if (handle_ != nullptr) CloseServiceHandle(handle_); }
-    UniqueServiceHandle(const UniqueServiceHandle&) = delete;
-    UniqueServiceHandle& operator=(const UniqueServiceHandle&) = delete;
-    SC_HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept { return handle_ != nullptr; }
-
-private:
-    SC_HANDLE handle_;
-};
-
-std::wstring Lower(std::wstring value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-        [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
-    return value;
-}
-
 std::wstring CsvEscape(const std::wstring& value)
 {
     std::wstring result = L"\"";
@@ -161,39 +127,9 @@ std::wstring CsvEscape(const std::wstring& value)
     return result;
 }
 
-std::string Utf8(const std::wstring& value)
-{
-    if (value.empty()) return {};
-    const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-        value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-    if (length <= 0) return {};
-    std::string result(static_cast<size_t>(length), '\0');
-    (void)WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
-        value.data(), static_cast<int>(value.size()), result.data(), length, nullptr, nullptr);
-    return result;
-}
-
-bool EnablePrivilege(const wchar_t* name)
-{
-    HANDLE rawToken = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &rawToken))
-        return false;
-    UniqueHandle token(rawToken);
-    LUID luid{};
-    if (!LookupPrivilegeValueW(nullptr, name, &luid)) return false;
-    TOKEN_PRIVILEGES privileges{};
-    privileges.PrivilegeCount = 1;
-    privileges.Privileges[0].Luid = luid;
-    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    SetLastError(ERROR_SUCCESS);
-    if (!AdjustTokenPrivileges(token.get(), FALSE, &privileges, sizeof(privileges), nullptr, nullptr))
-        return false;
-    return GetLastError() == ERROR_SUCCESS;
-}
-
 NtQuerySystemInformationFn NativeQuery()
 {
-    static const auto function = ResolveFunction<NtQuerySystemInformationFn>(
+    static const auto function = oac::ResolveFunction<NtQuerySystemInformationFn>(
         GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation");
     return function;
 }
@@ -372,7 +308,7 @@ void ReportOperatingSystem(Reporter& reporter)
 {
     RTL_OSVERSIONINFOW version{};
     version.dwOSVersionInfoSize = sizeof(version);
-    const auto getVersion = ResolveFunction<RtlGetVersionFn>(
+    const auto getVersion = oac::ResolveFunction<RtlGetVersionFn>(
         GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
     SYSTEM_INFO systemInfo{};
     GetNativeSystemInfo(&systemInfo);
@@ -408,9 +344,9 @@ bool IsTrustedWindowsImage(const std::wstring& path)
     std::vector<wchar_t> windows(32768);
     if (GetWindowsDirectoryW(windows.data(), static_cast<UINT>(windows.size())) == 0)
         return false;
-    std::wstring prefix = Lower(windows.data());
+    std::wstring prefix = oac::Lowercase(windows.data());
     if (!prefix.ends_with(L'\\')) prefix += L'\\';
-    const std::wstring lowerPath = Lower(path);
+    const std::wstring lowerPath = oac::Lowercase(path);
     return lowerPath.starts_with(prefix) && VerifyFileTrust(path) == ERROR_SUCCESS;
 }
 
@@ -567,9 +503,9 @@ LONG VerifyCatalogTrust(const std::wstring& path)
         PCCERT_STRONG_SIGN_PARA, DWORD);
     using CalculateHash2Fn = BOOL(WINAPI*)(HCATADMIN, HANDLE, DWORD*, BYTE*, DWORD);
     const HMODULE wintrust = GetModuleHandleW(L"wintrust.dll");
-    const auto acquireContext2 = ResolveFunction<AcquireContext2Fn>(
+    const auto acquireContext2 = oac::ResolveFunction<AcquireContext2Fn>(
         wintrust, "CryptCATAdminAcquireContext2");
-    const auto calculateHash2 = ResolveFunction<CalculateHash2Fn>(
+    const auto calculateHash2 = oac::ResolveFunction<CalculateHash2Fn>(
         wintrust, "CryptCATAdminCalcHashFromFileHandle2");
     HCATADMIN administrator = nullptr;
     bool modernCatalogApi = acquireContext2 != nullptr && calculateHash2 != nullptr;
@@ -692,9 +628,9 @@ std::string CalculateAuthenticodeSha256(const std::wstring& path)
         PCCERT_STRONG_SIGN_PARA, DWORD);
     using CalculateHash2Fn = BOOL(WINAPI*)(HCATADMIN, HANDLE, DWORD*, BYTE*, DWORD);
     const HMODULE wintrust = GetModuleHandleW(L"wintrust.dll");
-    const auto acquireContext2 = ResolveFunction<AcquireContext2Fn>(
+    const auto acquireContext2 = oac::ResolveFunction<AcquireContext2Fn>(
         wintrust, "CryptCATAdminAcquireContext2");
-    const auto calculateHash2 = ResolveFunction<CalculateHash2Fn>(
+    const auto calculateHash2 = oac::ResolveFunction<CalculateHash2Fn>(
         wintrust, "CryptCATAdminCalcHashFromFileHandle2");
     if (acquireContext2 == nullptr || calculateHash2 == nullptr) return {};
 
@@ -741,7 +677,7 @@ void ScanLoadedDrivers(
     Reporter& reporter,
     bool includeInventory)
 {
-    (void)EnablePrivilege(SE_DEBUG_NAME);
+    (void)oac::EnablePrivilege(SE_DEBUG_NAME);
     std::vector<LPVOID> drivers(2048);
     DWORD needed = 0;
     if (!EnumDeviceDrivers(drivers.data(), static_cast<DWORD>(drivers.size() * sizeof(LPVOID)), &needed))
@@ -780,10 +716,10 @@ void ScanLoadedDrivers(
         }
         ++checked;
         const std::wstring normalized = NormalizeDriverPath(path.data());
-        const std::wstring baseName = Lower(
+        const std::wstring baseName = oac::Lowercase(
             std::filesystem::path(normalized).filename().wstring());
         std::wostringstream instance;
-        instance << Lower(normalized) << L'@' << std::hex
+        instance << oac::Lowercase(normalized) << L'@' << std::hex
                  << reinterpret_cast<ULONG_PTR>(drivers[i]);
         const bool firstEvaluation = evaluatedInstances.insert(instance.str()).second;
         if (!includeInventory && !firstEvaluation) continue;
@@ -930,8 +866,8 @@ void ScanServices(const ScanOptions& options, Reporter& reporter)
             std::wstring combined = services[i].lpServiceName;
             combined += L' ';
             combined += path;
-            const std::wstring lowerName = Lower(services[i].lpServiceName);
-            const std::wstring lowerPath = Lower(path);
+            const std::wstring lowerName = oac::Lowercase(services[i].lpServiceName);
+            const std::wstring lowerPath = oac::Lowercase(path);
             const bool suspicious =
                 std::ranges::find(highServiceNames, lowerName) !=
                     std::end(highServiceNames) ||
@@ -949,7 +885,7 @@ void ScanServices(const ScanOptions& options, Reporter& reporter)
                     std::to_wstring(services[i].ServiceStatusProcess.dwCurrentState) + L"," +
                     std::to_wstring(services[i].ServiceStatusProcess.dwProcessId) + L"," +
                     CsvEscape(path) + L"\r\n";
-                csv << Utf8(line);
+                csv << oac::Utf8(line);
             }
             if (suspicious)
             {
@@ -1087,8 +1023,8 @@ void ScanDevicesAndDisks(Reporter& reporter)
                 L"iqvw64e", L"gdrv", L"gdrv2", L"rtcore64",
                 L"mhyprot", L"mhyprot2", L"mhyprot3"
             };
-            const std::wstring lowerService = Lower(service);
-            const std::wstring lowerName = Lower(name);
+            const std::wstring lowerService = oac::Lowercase(service);
+            const std::wstring lowerName = oac::Lowercase(name);
             const bool highConfidence =
                 std::ranges::find(highServices, lowerService) !=
                     std::end(highServices) ||
@@ -1134,7 +1070,7 @@ void ScanDevicesAndDisks(Reporter& reporter)
                 L"winio", L"winio64", L"dbk", L"dbk64", L"dbkkernel",
                 L"nal", L"gdrv", L"gdrv2", L"rtcore64", L"global\\rtcore64"
             };
-            const std::wstring lowerName = Lower(name);
+            const std::wstring lowerName = oac::Lowercase(name);
             if (std::ranges::find(highNames, lowerName) != std::end(highNames))
                 reporter.Add(FindingSeverity::High, L"devices", L"Suspicious DOS device: " +
                     std::wstring(name));
@@ -1193,7 +1129,7 @@ bool IsTrustedWindowsImagePath(const std::wstring& path)
 
 void RunSystemScan(const ScanOptions& options, Reporter& reporter)
 {
-    (void)EnablePrivilege(SE_DEBUG_NAME);
+    (void)oac::EnablePrivilege(SE_DEBUG_NAME);
     ReportOperatingSystem(reporter);
     ScanProcessCrossView(reporter);
     ScanHandles(options, reporter);
@@ -1212,6 +1148,6 @@ void ScanLoadedDriverPolicy(const ScanOptions& options, Reporter& reporter)
 
 void ScanTargetHandlePolicy(const ScanOptions& options, Reporter& reporter)
 {
-    (void)EnablePrivilege(SE_DEBUG_NAME);
+    (void)oac::EnablePrivilege(SE_DEBUG_NAME);
     ScanHandles(options, reporter);
 }

@@ -7,8 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cwctype>
-#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -103,21 +101,6 @@ struct CpuidState
     std::array<char, 13> cpuVendor{};
 };
 
-bool EnablePrivilege(const wchar_t* name)
-{
-    HANDLE raw = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &raw))
-        return false;
-    std::unique_ptr<std::remove_pointer_t<HANDLE>, decltype(&CloseHandle)> token(raw, CloseHandle);
-    TOKEN_PRIVILEGES privileges{};
-    privileges.PrivilegeCount = 1;
-    if (!LookupPrivilegeValueW(nullptr, name, &privileges.Privileges[0].Luid)) return false;
-    privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    SetLastError(ERROR_SUCCESS);
-    return AdjustTokenPrivileges(token.get(), FALSE, &privileges, sizeof(privileges),
-        nullptr, nullptr) && GetLastError() == ERROR_SUCCESS;
-}
-
 std::optional<DWORD> RegistryDword(
     HKEY root,
     const wchar_t* path,
@@ -149,16 +132,6 @@ std::wstring RegistryText(HKEY root, const wchar_t* path, const wchar_t* name)
     return value.data();
 }
 
-std::wstring Lower(std::wstring value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-        [](wchar_t character)
-        {
-            return static_cast<wchar_t>(std::towlower(character));
-        });
-    return value;
-}
-
 bool ContainsVirtualFirmwareIndicator(std::wstring_view text)
 {
     static constexpr std::wstring_view indicators[] =
@@ -166,7 +139,7 @@ bool ContainsVirtualFirmwareIndicator(std::wstring_view text)
         L"vmware", L"virtualbox", L"qemu", L"kvm", L"xen", L"parallels",
         L"bochs", L"bhyve", L"hyper-v", L"virtual machine", L"hvm domu"
     };
-    const std::wstring lower = Lower(std::wstring(text));
+    const std::wstring lower = oac::Lowercase(std::wstring(text));
     return std::ranges::any_of(indicators,
         [&lower](std::wstring_view indicator)
         {
@@ -443,7 +416,7 @@ void ScanCodeIntegrity(
 
 void ScanSecureBoot(const ScanOptions& options, Reporter& reporter)
 {
-    (void)EnablePrivilege(SE_SYSTEM_ENVIRONMENT_NAME);
+    (void)oac::EnablePrivilege(SE_SYSTEM_ENVIRONMENT_NAME);
     constexpr const wchar_t* globalNamespace =
         L"{8BE4DF61-93CA-11d2-AA0D-00E098032B8C}";
     BYTE secureBoot = 0;
@@ -597,7 +570,7 @@ void ScanCpuidAndTiming(
 void ScanPlatformSecurity(const ScanOptions& options, Reporter& reporter)
 {
     const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    const auto query = ResolveFunction<NtQuerySystemInformationFn>(
+    const auto query = oac::ResolveFunction<NtQuerySystemInformationFn>(
         ntdll, "NtQuerySystemInformation");
 
     ULONG codeIntegrityOptions = 0;

@@ -30,6 +30,15 @@ The current production path intentionally supports one target and no command-lin
 Approved-module policy, manifest-key rotation, a deployable authenticated backend transport,
 durable remote storage, and target-session reuse remain planned work.
 
+## Scanner organization
+
+The scanner is divided by responsibility without changing its security semantics. Kernel-module
+inventory and frozen snapshots, process/thread/handle cross-views, and kernel-integrity orchestration
+live in focused implementation files behind one scanner interface. User-mode components share
+move-only Windows resource wrappers and small text and optional-API helpers, while the diagnostic
+client's option parser is tested without loading the driver. The capability matrix and evidence
+thresholds below are unchanged.
+
 ## Lab scanner matrix
 
 The following broad diagnostic capabilities belong to `OAC-Client` and require explicit

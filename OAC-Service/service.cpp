@@ -18,11 +18,14 @@
 
 #include "..\shared\oac_ipc.h"
 #include "..\shared\oac_policy.h"
+#include "..\shared\oac_windows.hpp"
 #include "..\shared\protocol\oac_v5.h"
 #include "..\shared\protocol\oac_validate.h"
 
 namespace
 {
+using oac::UniqueHandle;
+
 constexpr wchar_t kDevicePath[] = L"\\\\.\\OAC";
 constexpr DWORD kPipeIoTimeoutMs = 5000;
 constexpr DWORD kEvidencePollIntervalMs = 250;
@@ -37,45 +40,6 @@ constexpr wchar_t kPipeSddl[] =
 using EvidenceReadStorage = std::array<std::byte,
     FIELD_OFFSET(OAC_EVIDENCE_READ_RESPONSE, Records) +
     OAC_EVIDENCE_MAX_RECORDS_PER_PAGE * sizeof(OAC_V5_EVENT_RECORD)>;
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueHandle() { reset(); }
-
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : handle_(other.release()) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept
-    {
-        if (this != &other) reset(other.release());
-        return *this;
-    }
-
-    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-
-    HANDLE release() noexcept
-    {
-        const HANDLE result = handle_;
-        handle_ = nullptr;
-        return result;
-    }
-
-    void reset(HANDLE handle = nullptr) noexcept
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
-            CloseHandle(handle_);
-        handle_ = handle;
-    }
-
-private:
-    HANDLE handle_;
-};
 
 class LocalBuffer
 {

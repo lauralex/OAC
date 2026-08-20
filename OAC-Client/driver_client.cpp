@@ -8,34 +8,9 @@
 
 namespace
 {
+using oac::UniqueHandle;
+
 constexpr size_t kMaximumCpuSnapshotBytes = size_t{1024} * 1024;
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = INVALID_HANDLE_VALUE) noexcept : handle_(handle) {}
-    ~UniqueHandle()
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
-    }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-
-    void reset(HANDLE handle = INVALID_HANDLE_VALUE) noexcept
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
-            CloseHandle(handle_);
-        handle_ = handle;
-    }
-
-private:
-    HANDLE handle_;
-};
 
 UniqueHandle g_DiagnosticDevice;
 

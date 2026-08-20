@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <initializer_list>
 #include <iterator>
 #include <set>
 #include <string>
@@ -24,6 +25,7 @@
 #include "../../shared/protocol/oac_test.h"
 #include "../../OAC-Service/backend.hpp"
 #include "../../OAC-Service/target_scanner.hpp"
+#include "../../OAC-Client/client_options.hpp"
 
 extern "C" int OacV5CProbe(void);
 
@@ -115,6 +117,104 @@ private:
     unsigned total_ = 0;
     unsigned passed_ = 0;
 };
+
+struct ParsedClientOptions
+{
+    bool valid = false;
+    ScanOptions options;
+};
+
+ParsedClientOptions ParseClientArguments(
+    std::initializer_list<std::wstring_view> arguments)
+{
+    ParsedClientOptions result;
+    result.valid = oac::client::ParseOptions(
+        std::span<const std::wstring_view>(arguments.begin(), arguments.size()),
+        result.options);
+    return result;
+}
+
+void TestClientOptions(TestLog& log)
+{
+    const auto defaults = ParseClientArguments({});
+    log.Expect("client accepts interactive defaults",
+        defaults.valid && defaults.options.targetProcessId == 0 &&
+        defaults.options.deploymentMode == DeploymentMode::Audit &&
+        defaults.options.failureThreshold == FindingSeverity::Medium);
+
+    const auto preflight = ParseClientArguments(
+        {L"--preflight", L"--mode", L"test", L"--fail-on", L"high",
+         L"--require-hvci", L"--no-private-kernel-traces",
+         L"--output", L"reports"});
+    log.Expect("client parses a bounded preflight",
+        preflight.valid && preflight.options.preflightOnly &&
+        preflight.options.deploymentMode == DeploymentMode::Test &&
+        preflight.options.failureThreshold == FindingSeverity::High &&
+        preflight.options.requireHvci && !preflight.options.privateKernelTraces &&
+        preflight.options.outputDirectory == L"reports");
+
+    const auto monitor = ParseClientArguments(
+        {L"--pid", L"4294967295", L"--monitor",
+         L"--monitor-interval-ms", L"60000", L"--verbose-handles"});
+    log.Expect("client parses the maximum process identifier and interval",
+        monitor.valid && monitor.options.targetProcessId == MAXDWORD &&
+        monitor.options.monitor && monitor.options.monitorIntervalMs == 60000 &&
+        monitor.options.verboseHandles);
+
+    const auto launch = ParseClientArguments(
+        {L"--launch", L"game.exe", L"--launch-args", L"--safe",
+         L"--apply-hardening", L"--challenge",
+         L"0123456789abcdef0123456789ABCDEF"});
+    log.Expect("client launch enables monitoring and validates its challenge",
+        launch.valid && launch.options.launchExecutable == L"game.exe" &&
+        launch.options.launchArguments == L"--safe" &&
+        launch.options.monitor && launch.options.applyHardening &&
+        launch.options.challenge.size() == 32);
+
+    log.Expect("client rejects preflight target conflicts",
+        !ParseClientArguments({L"--preflight", L"--pid", L"7"}).valid &&
+        !ParseClientArguments({L"--preflight", L"--monitor"}).valid);
+    log.Expect("client rejects conflicting launch inputs",
+        !ParseClientArguments(
+            {L"--launch", L"game.exe", L"--pid", L"7"}).valid &&
+        !ParseClientArguments({L"--launch-args", L"--safe"}).valid);
+    log.Expect("client rejects an unbound monitor",
+        !ParseClientArguments({L"--monitor"}).valid);
+    log.Expect("client rejects invalid monitor intervals",
+        !ParseClientArguments(
+            {L"--pid", L"7", L"--monitor-interval-ms", L"249"}).valid &&
+        !ParseClientArguments(
+            {L"--pid", L"7", L"--monitor-interval-ms", L"60001"}).valid);
+    log.Expect("client rejects invalid modes and severities",
+        !ParseClientArguments({L"--mode", L"live"}).valid &&
+        !ParseClientArguments({L"--fail-on", L"warning"}).valid);
+    log.Expect("client rejects malformed challenges",
+        !ParseClientArguments({L"--challenge", L"0123"}).valid &&
+        !ParseClientArguments(
+            {L"--challenge", L"0123456789abcdef0123456789abcdeg"}).valid);
+    log.Expect("client rejects missing values and unknown options",
+        !ParseClientArguments({L"--pid"}).valid &&
+        !ParseClientArguments({L"--unknown"}).valid &&
+        !ParseClientArguments({L"--output", L""}).valid);
+
+    DWORD number = 99;
+    log.Expect("client parses positive decimal DWORD values",
+        oac::client::ParsePositiveDword(L"1", number) && number == 1 &&
+        oac::client::ParsePositiveDword(L"4294967295", number) &&
+        number == MAXDWORD);
+    log.Expect("client rejects zero, signs, and DWORD overflow",
+        !oac::client::ParsePositiveDword(L"0", number) &&
+        !oac::client::ParsePositiveDword(L"+1", number) &&
+        !oac::client::ParsePositiveDword(L"4294967296", number));
+    log.Expect("client deployment labels are stable",
+        oac::client::DeploymentModeName(DeploymentMode::Audit) == L"audit" &&
+        oac::client::DeploymentModeName(DeploymentMode::Test) == L"test" &&
+        oac::client::DeploymentModeName(DeploymentMode::Production) ==
+            L"production");
+    log.Expect("shared text helpers preserve Unicode and normalize case",
+        oac::Lowercase(L"OaC-TEST") == L"oac-test" &&
+        oac::Utf8(L"caf\u00e9") == "caf\xC3\xA9");
+}
 
 void FillOpenHeader(
     OAC_V5_REQUEST_HEADER& header,
@@ -4220,6 +4320,7 @@ void TestBackendSession(TestLog& log)
 int main()
 {
     TestLog log;
+    TestClientOptions(log);
     TestCodes(log);
     TestBasicHelpers(log);
     TestServiceFailures(log);

@@ -85,6 +85,7 @@
     <ClInclude Include="..\shared\oac_policy.h" />
     <ClInclude Include="..\shared\oac_signed_policy.h" />
     <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
+    <ClInclude Include="..\shared\oac_windows.hpp" />
     <ClInclude Include="..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\shared\protocol\oac_validate.h" />
   </ItemGroup>

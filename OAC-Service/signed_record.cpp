@@ -1,4 +1,5 @@
 #include "signed_record.hpp"
+#include "..\shared\oac_windows.hpp"
 
 #include <bcrypt.h>
 #include <wincrypt.h>
@@ -10,62 +11,15 @@
 
 namespace
 {
+using oac::RegistryKey;
+using oac::UniqueHandle;
+
 constexpr wchar_t kTrustPath[] = L"SOFTWARE\\OAC";
 constexpr DWORD kMaximumSignatureBytes = 64u * 1024u;
 constexpr ULONGLONG kWindowsToUnixEpoch100ns = 116444736000000000ULL;
 // Signed-record authentication failures cross the SCM status boundary. Keep
 // them in the Win32 error domain so the launcher retains the failure stage.
 constexpr DWORD kInvalidSignatureError = ERROR_ACCESS_DISABLED_BY_POLICY;
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE value = INVALID_HANDLE_VALUE) noexcept
-        : value_(value) {}
-    ~UniqueHandle()
-    {
-        if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE)
-            CloseHandle(value_);
-    }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : value_(other.value_)
-    {
-        other.value_ = INVALID_HANDLE_VALUE;
-    }
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept
-    {
-        if (this != &other)
-        {
-            if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE)
-                CloseHandle(value_);
-            value_ = other.value_;
-            other.value_ = INVALID_HANDLE_VALUE;
-        }
-        return *this;
-    }
-    [[nodiscard]] HANDLE get() const noexcept { return value_; }
-
-private:
-    HANDLE value_;
-};
-
-class RegistryKey
-{
-public:
-    ~RegistryKey()
-    {
-        if (value_ != nullptr) RegCloseKey(value_);
-    }
-    RegistryKey(const RegistryKey&) = delete;
-    RegistryKey& operator=(const RegistryKey&) = delete;
-    RegistryKey() = default;
-    HKEY* put() noexcept { return &value_; }
-    [[nodiscard]] HKEY get() const noexcept { return value_; }
-
-private:
-    HKEY value_ = nullptr;
-};
 
 class CertificateContext
 {

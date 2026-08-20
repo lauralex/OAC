@@ -85,6 +85,9 @@
     <ClInclude Include="..\shared\oac_thread_suspension.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\oac_windows.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\shared\protocol\oac_v5.h">
       <Filter>Header Files</Filter>
     </ClInclude>

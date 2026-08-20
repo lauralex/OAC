@@ -67,6 +67,7 @@
   <ItemGroup>
     <ClCompile Include="OAC-Protocol-Unit-C.c" />
     <ClCompile Include="OAC-Protocol-Unit.cpp" />
+    <ClCompile Include="..\..\OAC-Client\client_options.cpp" />
     <ClCompile Include="..\..\OAC-Service\backend.cpp" />
     <ClCompile Include="..\..\shared\oac_backend.c" />
     <ClCompile Include="..\..\shared\oac_manifest.c" />
@@ -78,6 +79,7 @@
     <ClInclude Include="..\..\shared\oac_lease.h" />
     <ClInclude Include="..\..\shared\oac_protocol.h" />
     <ClInclude Include="..\..\shared\oac_thread_suspension.hpp" />
+    <ClInclude Include="..\..\shared\oac_windows.hpp" />
     <ClInclude Include="..\..\shared\oac_manifest.h" />
     <ClInclude Include="..\..\shared\oac_policy.h" />
     <ClInclude Include="..\..\shared\oac_signed_policy.h" />
@@ -86,6 +88,7 @@
     <ClInclude Include="..\..\shared\protocol\oac_test.h" />
     <ClInclude Include="..\..\OAC-Service\target_scanner.hpp" />
     <ClInclude Include="..\..\OAC-Service\backend.hpp" />
+    <ClInclude Include="..\..\OAC-Client\client_options.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

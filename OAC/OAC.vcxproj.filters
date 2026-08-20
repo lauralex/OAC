@@ -18,6 +18,8 @@
     <ClCompile Include="main.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="protection.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="scanner.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="scanner_modules.c"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="scanner_process.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="session.c"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="telemetry.c"><Filter>Source Files</Filter></ClCompile>
   </ItemGroup>
@@ -28,6 +30,7 @@
     <ClInclude Include="evidence.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="protection.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="scanner.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="scanner_internal.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="session.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="telemetry.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="..\shared\oac_driver_policy.h"><Filter>Header Files</Filter></ClInclude>

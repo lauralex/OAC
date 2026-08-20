@@ -1,7 +1,8 @@
 # OAC test matrix
 
-**Status:** WP-01 through WP-11 tested at implementation commit
-`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 build 26100.
+**Status:** WP-01 through WP-12 tested locally and in the disposable-VM campaign at implementation
+commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
+passed.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -17,13 +18,13 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `608/608`; PR #13 previously passed `428/428` |
-| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
+| `Debug|x64` solution build | Workflow matrix configured | Local and PR #18 hosted builds passed with zero warnings/errors |
+| `Release|x64` solution build | Workflow matrix configured | Local and PR #18 hosted builds passed with zero warnings/errors |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Local and PR #18 Debug/Release runs passed `623/623`, including the diagnostic-client parser and shared helpers |
+| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #18 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
-| Clang-Tidy | Required for scanner changes | Service and diagnostic scanner projects passed with warnings treated as errors at the accepted WP-07 baseline; WP-11 changes no scanner source |
+| Clang-Tidy | Required for scanner changes | Current `OAC-Client` analysis passed across all eight translation units with warnings treated as errors; the four changed service translation units passed targeted analysis |
 | Driver PREfast | Required for driver/lifetime changes | Current local `DriverMinimumRules` run passed with zero warnings/errors |
 | Secret scan | GitGuardian branch check configured | Required repository check |
 
@@ -98,7 +99,7 @@ driver-gate coverage plus these production cases:
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
 standard Driver Verifier run passed at implementation commit
-`47c04005e66f1fd61ae9fe9a35260f19ee447dd1`.
+`67d3f616cdb13f1ac10877d067da1b54cca5e51c`.
 Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
@@ -146,21 +147,21 @@ negative effective-service-right and reboot-persistence cases remain pending.
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `47c0400`; 41 exact formal results, overall pass, Secure Boot disabled |
-| Standard Driver Verifier on `OAC.sys` | Tested at `47c0400`; reset and inactive at completion, zero crashes/dumps |
-| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `47c0400`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `67d3f61`; 41 exact formal results, overall pass, Secure Boot disabled |
+| Standard Driver Verifier on `OAC.sys` | Tested at `67d3f61`; three loads and unloads, reset and inactive at completion, zero crashes/dumps |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `67d3f61`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| Production per-file cleanup/close and concurrent status teardown | Tested at `47c0400` in baseline and Verifier protocol executions |
-| Live-target tombstone and later retirement | Tested at `47c0400` in the driver-backed lifecycle suite |
-| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `47c0400` |
-| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `47c0400`; both process trees terminated and SCM recovery completed |
-| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `47c0400`; four driver-backed executions passed |
-| Independent health loop and bounded target worker | Tested at `47c0400`; 36 slices, eight sweeps, 360 ms maximum health delay, 55.677 ms maximum slice duration, 5.219 ms maximum suspension |
-| Typed policy rules and service evaluation | Current driver-free tests pass `608/608`; integrated signed-policy service execution passed at `47c0400` |
-| Signed main-executable manifest authorization | Tested at `47c0400`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
-| Signed policy selection and update state | Tested at `47c0400`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
-| Backend session, lease, replay, and acknowledgement failure | Tested at `47c0400`; replay was rejected, withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
-| Renamed, signed normal post-start driver image | Tested at `47c0400`; armed callback and persistent latch both observed |
+| Production per-file cleanup/close and concurrent status teardown | Tested at `67d3f61` in baseline and Verifier protocol executions |
+| Live-target tombstone and later retirement | Tested at `67d3f61` in the driver-backed lifecycle suite |
+| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `67d3f61` |
+| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `67d3f61`; both process trees terminated and SCM recovery completed |
+| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `67d3f61`; four driver-backed executions passed |
+| Independent health loop and bounded target worker | Tested at `67d3f61`; 35 slices, seven sweeps, 437 ms maximum health delay, 43.498 ms maximum slice duration, 5.166 ms maximum suspension |
+| Typed policy rules and service evaluation | Current driver-free tests pass `623/623`; integrated signed-policy service execution passed at `67d3f61` |
+| Signed main-executable manifest authorization | Tested at `67d3f61`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
+| Signed policy selection and update state | Tested at `67d3f61`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
+| Backend session, lease, replay, and acknowledgement failure | Tested at `67d3f61`; replay was rejected, withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
+| Renamed, signed normal post-start driver image | Tested at `67d3f61`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
 | Secure Boot production signing path | Planned |
@@ -169,28 +170,30 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Corresponding supported Windows Server releases | Planned |
 | x86, ARM64, Windows XP/historical releases | Unsupported |
 
-The root README separates this current exact-commit result from older historical campaigns. Neither
-is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
+The public README points to these maintainer records instead of embedding campaign bookkeeping.
+Neither the current result nor historical campaigns provide universal Windows, hardware, HVCI/VBS,
+or game-compatibility evidence.
 
 ## Hardening acceptance matrix
 
 | Work package | Required evidence | State |
 |---|---|---|
 | WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Local and VM-tested foundation; hosted CI required at merge |
-| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `47c0400` |
-| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `47c0400`; broader negative matrix remains |
-| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `47c0400`; literal numeric PID reuse remains unforced |
-| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `47c0400` |
-| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `47c0400` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `608/608`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `47c0400` |
-| WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy baseline, restricted-service metrics, and Driver Verifier passed at `47c0400` |
-| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `608/608`, static analysis, repository checks, and integrated VM/Verifier execution passed at `47c0400` |
-| WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
-| WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
-| WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
+| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `67d3f61` |
+| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `67d3f61`; broader negative matrix remains |
+| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `67d3f61`; literal numeric PID reuse remains unforced |
+| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `67d3f61` |
+| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `67d3f61` |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `623/623`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `67d3f61` |
+| WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy baseline, restricted-service metrics, and Driver Verifier passed at `67d3f61` |
+| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `623/623`, static analysis, repository checks, and integrated VM/Verifier execution passed at `67d3f61` |
+| WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
+| WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
+| WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
+| WP-12 scanner modularization | Coherent kernel scanner responsibilities, common user-mode ownership helpers, parser/helper units, no behavioral regression | Debug/Release `623/623`, driver PREfast, scanner Clang-Tidy, repository checks, VM/Verifier acceptance at `67d3f61`, and PR #18 hosted checks passed |
 
-WP-02 through WP-11 acceptance is recorded only for the exact implementation commit and environment
-above.
+WP-02 through WP-12 acceptance is recorded only for the exact implementation commit and environment
+above. PR #18 supplies the corresponding hosted build and repository-validation evidence.
 
 ## Exact host commands
 

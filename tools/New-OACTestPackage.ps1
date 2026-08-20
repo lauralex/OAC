@@ -365,7 +365,10 @@ function New-SignedPolicyBytes(
             $writer.Write([uint32]$rule[10])
             $writer.Write([uint32]0)
         }
-        $writer.Write([uint32]6000)
+        # Task Scheduler starts the standard-user launcher during the VM test.
+        # Keep the disposable policy lease long enough for that bounded handoff;
+        # the lease-loss scenario still stops renewals and proves termination.
+        $writer.Write([uint32]20000)
         $writer.Write([uint32]2000)
         $writer.Write([uint32]1000)
         $writer.Write([uint32]5000)

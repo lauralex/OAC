@@ -16,10 +16,13 @@
 #include <vector>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\oac_windows.hpp"
 #include "..\shared\protocol\oac_v5.h"
 
 namespace
 {
+using oac::RegistryKey;
+
 static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE);
 constexpr wchar_t kManifestSuffix[] = L".oac-manifest";
 constexpr wchar_t kSignatureSuffix[] = L".p7s";
@@ -36,24 +39,6 @@ DWORD BcryptError(NTSTATUS status) noexcept
         ? ERROR_SUCCESS
         : static_cast<DWORD>(HRESULT_FROM_NT(status));
 }
-
-class RegistryKey
-{
-public:
-    ~RegistryKey()
-    {
-        if (value_ != nullptr) RegCloseKey(value_);
-    }
-    RegistryKey(const RegistryKey&) = delete;
-    RegistryKey& operator=(const RegistryKey&) = delete;
-    RegistryKey() = default;
-    HKEY* put() noexcept { return &value_; }
-    [[nodiscard]] HKEY get() const noexcept { return value_; }
-
-private:
-    HKEY value_ = nullptr;
-};
-
 
 class HashProvider
 {
@@ -160,7 +145,7 @@ DWORD HashFile(
 
     HashProvider hash;
     DWORD error = hash.Initialize();
-    std::vector<unsigned char> buffer(64u * 1024u);
+    std::vector<unsigned char> buffer(size_t{64} * 1024);
     ULONGLONG total = 0;
     while (error == ERROR_SUCCESS && total < static_cast<ULONGLONG>(size.QuadPart))
     {
