@@ -89,5 +89,8 @@
     <ClInclude Include="..\shared\protocol\oac_v5.h" />
     <ClInclude Include="..\shared\protocol\oac_validate.h" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="OAC-Service.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

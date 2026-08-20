@@ -20,6 +20,8 @@ product guarantees.
 |---|---|
 | [`../BASELINE.md`](../BASELINE.md) | Frozen pre-hardening source and evidence snapshot |
 | [`../test-signing.md`](../test-signing.md) | Disposable-VM packaging, signing, containment, and cleanup procedure |
+| [`../RELEASE.md`](../RELEASE.md) | Release candidate, signing/certification, symbol, rotation, and update procedure |
+| [`../OPERATIONS.md`](../OPERATIONS.md) | Deployment, rollback, outage, compromise, and incident runbooks |
 | [`../../AGENTS.md`](../../AGENTS.md) | Repository invariants and workflow instructions for coding agents and maintainers |
 | [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) | Toolchain, validation, and pull-request requirements |
 

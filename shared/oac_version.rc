@@ -1,0 +1,51 @@
+#include <windows.h>
+#include "oac_version.h"
+
+#ifndef OAC_FILE_DESCRIPTION
+#error OAC_FILE_DESCRIPTION must be defined before including this resource.
+#endif
+#ifndef OAC_INTERNAL_NAME
+#error OAC_INTERNAL_NAME must be defined before including this resource.
+#endif
+#ifndef OAC_ORIGINAL_FILENAME
+#error OAC_ORIGINAL_FILENAME must be defined before including this resource.
+#endif
+#ifndef OAC_FILE_TYPE
+#define OAC_FILE_TYPE VFT_APP
+#endif
+#ifndef OAC_FILE_SUBTYPE
+#define OAC_FILE_SUBTYPE VFT2_UNKNOWN
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION OAC_RELEASE_VERSION_TUPLE
+ PRODUCTVERSION OAC_RELEASE_VERSION_TUPLE
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+ FILEFLAGS VS_FF_DEBUG
+#else
+ FILEFLAGS 0
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE OAC_FILE_TYPE
+ FILESUBTYPE OAC_FILE_SUBTYPE
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "OAC contributors\0"
+            VALUE "FileDescription", OAC_FILE_DESCRIPTION "\0"
+            VALUE "FileVersion", OAC_RELEASE_VERSION_STRING "\0"
+            VALUE "InternalName", OAC_INTERNAL_NAME "\0"
+            VALUE "LegalCopyright", "Copyright (c) OAC contributors\0"
+            VALUE "OriginalFilename", OAC_ORIGINAL_FILENAME "\0"
+            VALUE "ProductName", "OAC\0"
+            VALUE "ProductVersion", OAC_RELEASE_VERSION_STRING "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

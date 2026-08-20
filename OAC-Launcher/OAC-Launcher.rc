@@ -1,0 +1,4 @@
+#define OAC_FILE_DESCRIPTION "OAC launcher"
+#define OAC_INTERNAL_NAME "OAC-Launcher"
+#define OAC_ORIGINAL_FILENAME "OAC-Launcher.exe"
+#include "../shared/oac_version.rc"

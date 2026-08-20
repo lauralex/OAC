@@ -256,3 +256,23 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   reviewed adjudication process. Driver-free tests cover canonical construction, hostile records
   and rules, identity and replay rejection, gaps, exact movement bounds, corrections, coordinate
   extremes, risk combination, and saturation.
+
+## ADR-018: Separate the unsigned candidate from production promotion
+
+- **Status:** Accepted; source implemented and locally tested
+- **Date:** 2026-08-20
+- **Decision:** Keep one checked-in release profile that binds the release and driver versions,
+  compatibility constants, SDK, platform, and exact artifact mappings to source. Build three
+  disjoint trees: unsigned production components, private full symbols, and isolated lab tools.
+  Emit canonical source/toolchain metadata, SHA-256 allowlists, and an SPDX 2.3 public-file
+  inventory. Preserve the reviewed INF date/version, embed only PDB leaf names, and verify each
+  binary against its full PDB before separation. Public CI may upload the public and lab trees but
+  never the private symbols. Microsoft certification, production signatures, final signed
+  manifests, support admission, and staged publication remain a separate controlled operation.
+- **Consequence:** A green pull-request build produces a reviewable, hostile-tested unsigned
+  candidate without pretending that CI has release credentials or publication authority. Exact
+  metadata can be reconstructed from a clean checkout and source commit; this does not claim that
+  arbitrary MSVC/WDK environments produce bit-identical binaries. Full symbols remain available to
+  authorized incident responders without leaking private type/path information through public
+  artifacts. Production signing keys, Hardware Dev Center credentials, lab tools, PDBs, and test
+  evidence remain outside the public package.

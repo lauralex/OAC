@@ -40,6 +40,9 @@ If Visual Studio is installed in another edition or location, use `vswhere.exe` 
   archive hash, upstream policy version, rule count, and generated diff.
 - Keep current behavior and planned behavior clearly labeled. A single VM result is not a universal
   Windows compatibility claim.
+- Keep [`config/release-profile.json`](config/release-profile.json) synchronized with the INF,
+  compatibility headers, SDK, and exact public/lab artifact boundary. Release outputs belong
+  outside the repository.
 - Do not include raw HWIDs, private reports, dumps, signing keys, binaries, or VM artifacts.
 
 Run the checks appropriate to the change:
@@ -51,7 +54,26 @@ Run the checks appropriate to the change:
 | Driver, shared ABI, callbacks, or synchronization | PREfast, protocol tests, and Driver Verifier in a disposable VM |
 | Client scanners | Clang-Tidy and an elevated VM smoke scan |
 | INF, signing, or packaging | `InfVerif /w`, catalog/signature checks, and manifest verification |
+| Release profile, artifacts, or symbols | Candidate creation/validation, five hostile mutations, SPDX schema validation, and public/private/lab allowlist review |
 | Driver policy | Pinned regeneration and manual generated-diff review |
+
+After a clean Release build, the local candidate checks are:
+
+```powershell
+$candidate = Join-Path $env:TEMP 'oac-candidate'
+
+.\tools\New-OACReleaseCandidate.ps1 `
+  -BuildDirectory .\x64\Release `
+  -OutputDirectory $candidate
+
+.\tools\Test-OACReleaseCandidate.ps1 `
+  -BuildDirectory .\x64\Release `
+  -CandidateDirectory $candidate
+```
+
+The public candidate is unsigned. Never add a production private key or broadly available signing
+credential to a pull-request workflow. Follow [`docs/RELEASE.md`](docs/RELEASE.md) for the separate
+certification, signing, symbol-retention, and promotion boundary.
 
 Never enable test signing, disable Secure Boot, install the test driver, or run Driver Verifier on
 a workstation you need to preserve. Follow `docs/test-signing.md` in an isolated disposable VM.

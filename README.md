@@ -8,7 +8,10 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#building-oac)
 
-Demand-start kernel protection · Restricted service authority · Reproducible isolated validation
+Demand-start kernel protection · Restricted service authority · Source-bound release metadata
+
+[Architecture](docs/ARCHITECTURE.md) · [Security](docs/SECURITY_MODEL.md) ·
+[Capabilities](docs/CAPABILITIES.md) · [Build](#building-oac) · [Contribute](CONTRIBUTING.md)
 
 </div>
 
@@ -16,6 +19,13 @@ OAC combines a Windows kernel driver, a restricted control service, and a standa
 It explores how much useful protection can be achieved without turning the driver into a second
 operating system: identity, signatures, policy, reporting, and blocking operations remain in user
 mode, while the kernel retains only the responsibilities that genuinely require kernel authority.
+
+| Boundary | Design |
+|---|---|
+| **Kernel** | Narrow session authority, creation-time target binding, callbacks, bounded snapshots, and retained alerts |
+| **Service** | Signed authorization, backend lease, suspended launch, target-job ownership, policy, and evidence delivery |
+| **Game server** | Canonical authoritative events, replay-safe state, and explainable reference rules |
+| **Release** | Exact public/lab allowlists, deterministic metadata, SPDX SBOM, checksums, and private-symbol separation |
 
 > [!IMPORTANT]
 > OAC is an engineering reference, **not a production-ready anti-cheat release**. The repository
@@ -92,9 +102,11 @@ The current source includes:
   process-tree containment;
 - retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
 - deterministic Observe, Enforce, and Strict policy evaluation with typed confidence and actions;
-- a cancellation-aware service worker for bounded memory-region and thread sampling; and
+- a cancellation-aware service worker for bounded memory-region and thread sampling;
 - a fail-closed disposable-VM installer, package validator, protocol suite, and Driver Verifier
-  campaign.
+  campaign; and
+- an unsigned release-candidate pipeline with exact artifact boundaries, source/toolchain metadata,
+  SPDX 2.3 inventory, hostile validation, and private-symbol separation.
 
 The separate **OAC Client** is an elevated laboratory scanner. It covers process, module, driver,
 handle, memory, thread, stack, service, callback, hardware-identity, debugger, virtualization, and
@@ -116,7 +128,8 @@ includes:
   game-specific detectors beyond the included reference movement invariant;
 - manifest signer rotation and revocation metadata;
 - approved module, middleware, overlay, child-process, and runtime rules for a real game;
-- production signing, release engineering, privacy and retention policy, and platform certification.
+- Microsoft driver certification, protected production signing, an authenticated release/update
+  service, approved privacy operations, and a representative platform certification matrix.
 
 The [hardening plan](docs/hardening-plan.md) describes those work packages. Roadmap text is a design
 target, not evidence that a feature already exists.
@@ -130,6 +143,7 @@ target, not evidence that a feature already exists.
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated laboratory scanner and diagnostic reports |
 | [`shared/`](shared/) | Wire contracts, game/server records, policy rules, strict validators, and common Windows support |
+| [`config/release-profile.json`](config/release-profile.json) | Release, driver, compatibility, SDK, and exact artifact contract |
 | [`tests/unit/`](tests/unit/) | Driver-free layout, validation, transition, and policy regression tests |
 | [`tools/`](tools/) | Integration tests, packaging, installation, and repository checks |
 | [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance workflow |
@@ -143,6 +157,10 @@ target, not evidence that a feature already exists.
 | [Production protocol](docs/PROTOCOL.md) | Typed messages, session states, correlation, evidence, and snapshots |
 | [Game integration](docs/GAME_INTEGRATION.md) | Authoritative events, replay state, movement rules, and risk decisions |
 | [Capabilities](docs/CAPABILITIES.md) | Production controls and the detailed laboratory-scanner matrix |
+| [Release engineering](docs/RELEASE.md) | Candidate format, metadata, SBOM, symbols, certification, signing, updates, and rotation |
+| [Support scope](docs/SUPPORT.md) | Tested configurations, unsupported platforms, and admission criteria |
+| [Privacy](docs/PRIVACY.md) | Data minimization, retention, access, deletion, and appeal requirements |
+| [Operations](docs/OPERATIONS.md) | Promotion, rollback, outage, key-compromise, and incident runbooks |
 
 Exact campaign hashes, work-package bookkeeping, historical baselines, and maintainer decisions are
 kept separately in the [development records](docs/development/README.md).
@@ -162,6 +180,10 @@ msbuild .\OAC.sln /m /t:Rebuild `
 The build intentionally produces an unsigned driver. **Do not weaken a development workstation to
 load it and do not use a vulnerable-driver mapper.** Use an authorized production signing pipeline,
 or follow the [disposable-VM guide](docs/test-signing.md) for isolated development testing.
+
+The Release job also constructs an exact unsigned candidate. Its public, private-symbol, and lab
+boundaries are documented in [release engineering](docs/RELEASE.md); public CI never uploads the
+private symbols.
 
 The full contributor build, analysis, and change-specific gates are documented in
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -185,7 +207,9 @@ admission service.
 
 The current accepted implementation has passed clean Debug and Release builds, driver-free
 regression tests, PREfast, solution-wide static analysis, package and signing checks, and a
-networkless Windows 11 build 26100 campaign under standard Driver Verifier. Runtime claims are
+networkless Windows 11 build 26100 campaign under standard Driver Verifier. The release profile,
+candidate reconstruction, SPDX schema, and hostile artifact mutations have separate validation.
+Runtime claims are
 limited to the exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
 are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification. The portable
 game/server contract is covered by the driver-free suite and does not extend that Windows runtime

@@ -49,6 +49,22 @@ authenticated transport, durable state and replay storage, a real game adapter, 
 rules, additional gameplay detectors, and an adjudication workflow. See the
 [game integration guide](GAME_INTEGRATION.md) for the contract and example.
 
+## Release boundary
+
+| Capability | Current behavior |
+|---|---|
+| Release identity | A checked-in profile binds the release and driver versions, source compatibility constants, SDK, platform, and exact artifact mappings. |
+| Candidate integrity | A clean source commit, toolchain versions, file sizes, and SHA-256 hashes are recorded in canonical metadata and checksum files. |
+| SBOM | The public candidate carries a schema-valid SPDX 2.3 file inventory and package verification code. |
+| Artifact separation | Public production components, private full symbols, and isolated lab tools have disjoint exact allowlists. Public CI uploads no PDBs. |
+| Symbol privacy | Release binaries embed only the PDB leaf name; CodeView identity is bound to the retained full PDB in a private manifest. |
+| Hostile validation | Payload, metadata, symbol, extra-file, and missing-lab-marker mutations must all be rejected. |
+
+The repository produces an **unsigned** candidate. Microsoft driver certification, production
+signing identities, final signed manifests, an updater, staged rollout, privacy operations, and
+platform admission remain deployment controls. See [release engineering](RELEASE.md),
+[support scope](SUPPORT.md), and [operations](OPERATIONS.md).
+
 ## Scanner organization
 
 The scanner is divided by responsibility without changing its security semantics. Kernel-module
@@ -156,6 +172,10 @@ handler, or unload while returning through the driver's own code.
 - [Security model](SECURITY_MODEL.md)
 - [Protocol reference](PROTOCOL.md)
 - [Game and server integration](GAME_INTEGRATION.md)
+- [Release engineering](RELEASE.md)
+- [Support scope](SUPPORT.md)
+- [Privacy and data handling](PRIVACY.md)
+- [Operations and incident runbooks](OPERATIONS.md)
 - [Driver-load research](driver-load-review.md)
 - [Hardware-identity research](hwid-review.md)
 - [Microsoft `ObRegisterCallbacks`](https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obregistercallbacks)
