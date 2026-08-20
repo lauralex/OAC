@@ -1,8 +1,8 @@
 # OAC architecture
 
 **Status:** WP-01 through WP-12 accepted locally and in the disposable-VM campaign at implementation
-commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. Hosted acceptance checks
-remain required before merge.
+commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
+passed.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 

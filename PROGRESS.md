@@ -14,7 +14,7 @@ distinguishes source, evidence, and the remaining production-hardening work pack
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
-| WP-00 Baseline, docs, tests | Tested foundation | Baseline recorded; Debug/Release builds and units, repository validation, packaging, and the current VM campaign passed; PR #13 hosted checks passed |
+| WP-00 Baseline, docs, tests | Tested foundation | Baseline recorded; Debug/Release builds and units, repository validation, packaging, and the current VM campaign passed; PR #18 hosted checks passed |
 | WP-01 Production protocol foundations | Tested foundation | Production ABI, explicit message types, validators, stable IDs, event schema, pure units, driver dispatch, and driver-backed protocol execution passed on the named campaign |
 | WP-02 Service and device identity | VM-tested foundation | Restricted service, identity-checked launcher IPC, production device ACL, exact install/remove, standard-user status, and direct-open denials passed on the named campaign |
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
@@ -26,7 +26,7 @@ distinguishes source, evidence, and the remaining production-hardening work pack
 | WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
 | WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
 | WP-11 Backend session abstraction | Implemented; VM tested | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, target-tree failure policy, and fresh recovery passed on the named campaign |
-| WP-12 Scanner modularization | Implemented; VM tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, and Driver Verifier gates passed; hosted checks remain |
+| WP-12 Scanner modularization | Implemented; tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, Driver Verifier, and PR #18 hosted gates passed |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
 
@@ -181,8 +181,8 @@ bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
 - Hosted Debug/Release build, unit, and repository-validation checks remain required for each merge.
 - A real online admission boundary still requires a production authenticated transport, backend
   service, credential lifecycle, and durable evidence storage behind the implemented interface.
-- WP-12 scanner modularization has commit-bound runtime acceptance; hosted checks remain required
-  before merge. The refactor does not add or relax a scanner capability.
+- WP-12 scanner modularization has commit-bound runtime acceptance and PR #18 hosted acceptance.
+  The refactor does not add or relax a scanner capability.
 - WP-13 game/server integration is the next product milestone.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
