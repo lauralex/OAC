@@ -4,9 +4,10 @@
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
 the complete runtime suite most recently passed at implementation commit
-`67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100 under standard Driver
-Verifier, including signed-manifest and signed-policy authorization, backend failure/recovery,
-job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a` on Windows 11 build 26100 under standard Driver
+Verifier, including endpoint admission, loaded-driver trust, signed-manifest and signed-policy
+authorization, backend failure/recovery, job/liveness, typed evidence, bounded service scheduling,
+and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -346,8 +347,8 @@ Verifier phases.
 
 The endpoint-admission source adds malformed and authorization checks for the configuration and
 scan messages, status invariants, current-state evidence correlation, loaded-driver trust, runtime
-module policy, and target memory/thread observations. These changes require a new commit-bound
-Windows 11 and Driver Verifier campaign before they extend the recorded runtime evidence above.
+module policy, and target memory/thread observations. The exact `974d2c4` package passed those paths
+in the Windows 11 build 26100 and standard Driver Verifier campaign.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
@@ -367,6 +368,7 @@ rollback state, accepted one explicitly authorized rollback, and persisted emerg
 before refusing startup. The current VM harness additionally contains bounded backend replay,
 withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; all passed
 in the named campaign.
-The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 437 ms maximum
-health-loop delay, a 43.498 ms maximum slice duration, and no failed or cancelled slice.
+The current campaign required bounded scheduler coverage, health latency, slice duration, and
+thread-resume metrics. It accepted 37 completed slices, eight completed sweeps, a 406 ms maximum
+health-loop delay, a 107.878 ms maximum slice duration, a 1.750 ms maximum thread suspension, and no
+failed or cancelled slice.

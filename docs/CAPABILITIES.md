@@ -34,8 +34,9 @@ Implementation does not imply universal detection, prevention, or platform compa
 The current production path intentionally supports one target and no command-line arguments.
 Create-time job assignment, complete mapped-file identity binding, manifest-key rotation, a tuned
 game-specific module/JIT catalog, a deployable authenticated backend transport, durable remote
-storage, and target-session reuse remain planned work. The endpoint-trust additions require a fresh
-commit-bound VM and Driver Verifier campaign before they become recorded runtime evidence.
+storage, and target-session reuse remain planned work. The endpoint-trust boundary passed its exact
+commit-bound Windows 11 build 26100 and standard Driver Verifier campaign at `974d2c4`; that result
+does not extend the supported-platform or workload-compatibility matrix.
 
 ## Game and server integration
 

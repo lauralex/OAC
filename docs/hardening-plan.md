@@ -1618,11 +1618,10 @@ Production readiness additionally requires:
 
 The next implementation sequence is:
 
-1. Complete `WP-15` with one exact signed-package and VM/Driver Verifier acceptance run.
-2. Implement `WP-16` behind the existing backend and game contracts.
-3. Close the atomic launch, stable file-identity, evidence-recovery, and key-rotation gaps in
+1. Implement `WP-16` behind the existing backend and game contracts.
+2. Close the atomic launch, stable file-identity, evidence-recovery, and key-rotation gaps in
    `WP-17`.
-4. Evaluate `WP-18` only after the production surface and deployment model are stable enough to
+3. Evaluate `WP-18` only after the production surface and deployment model are stable enough to
    justify a second driver package.
 
 Prefer one coherent capability change and one attributable acceptance run. Do not expand the test

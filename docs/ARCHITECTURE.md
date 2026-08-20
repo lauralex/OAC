@@ -4,10 +4,11 @@
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
 passed. WP-13's portable game-event contract and reference server detector passed local and PR #19
 hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`. WP-14 adds the
-source-bound unsigned release boundary. The current WP-15 source adds fail-closed endpoint
-admission, loaded-driver trust, runtime-module authorization, and typed target observations; its
-commit-bound VM and Driver Verifier acceptance is pending. Production game/backend deployment,
-certification, and signing remain external work.
+source-bound unsigned release boundary. WP-15's fail-closed endpoint admission, loaded-driver trust,
+runtime-module authorization, and typed target observations passed the exact signed-package,
+networkless Windows 11 build 26100, and standard Driver Verifier campaign at
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. Production game/backend deployment, certification, and
+signing remain external work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 

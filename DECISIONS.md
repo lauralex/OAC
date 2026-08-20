@@ -281,7 +281,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-019: Require endpoint admission before launcher IPC
 
-- **Status:** Accepted; source implemented, runtime acceptance pending
+- **Status:** Accepted; source and runtime tested
 - **Date:** 2026-08-20
 - **Decision:** After the restricted service claims one production driver session, arm the
   driver-load gate and run one exact current-state scan before creating launcher IPC. Require
@@ -298,6 +298,6 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   production uses the same bounded kernel inventory primitives without exposing diagnostic display
   strings as policy. The gate can fail after observing a load but cannot prevent the image from
   mapping before `DriverEntry`. Current path/content/trust checks do not yet provide mapped-file
-  identity, and broad middleware/JIT compatibility requires workload tuning. The source therefore
-  needs one exact signed-package, disposable-VM, and Driver Verifier campaign before this decision is
-  recorded as runtime-tested.
+  identity, and broad middleware/JIT compatibility requires workload tuning. Implementation commit
+  `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact signed-package, networkless Windows 11
+  build 26100, and standard Driver Verifier campaign with zero crashes or dumps.

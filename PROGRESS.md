@@ -13,6 +13,9 @@ detector. WP-14 adds a source-bound unsigned release candidate, deterministic me
 private-symbol separation, support/privacy policy, and operational promotion controls. WP-15 adds a
 fail-closed production endpoint admission gate, loaded-driver trust, signed runtime-module policy,
 and bounded typed target observations.
+Endpoint-trust implementation commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact
+signed-package, networkless Windows 11 build 26100, and standard Driver Verifier campaign described
+below.
 Windows-runtime implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c`
 passed the commit-bound disposable-VM and standard Driver Verifier campaign described below.
 Portable game-integration implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`
@@ -36,7 +39,7 @@ remaining production-hardening work.
 | WP-12 Scanner modularization | Implemented; tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, Driver Verifier, and PR #18 hosted gates passed |
 | WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
 | WP-14 Production release engineering | Implemented; local acceptance | Exact unsigned public/lab/private-symbol bundles, source and toolchain metadata, SPDX SBOM, hostile candidate validation, CI artifact separation, and reviewed signing, update, support, privacy, and operations contracts are present; production certification/signing and deployed operations remain external gates |
-| WP-15 Production endpoint trust | Implemented; local acceptance | Exact production scan/configuration, explicit completeness, frozen loaded-driver inventory, trust/hash/family policy, runtime-module authorization, typed memory/thread/lifecycle observations, and fail-closed evidence handling pass the complete local build, unit, and analysis gates; signed-package VM and Driver Verifier acceptance remains |
+| WP-15 Production endpoint trust | Implemented; VM tested | Exact production scan/configuration, explicit completeness, frozen loaded-driver inventory, trust/hash/family policy, runtime-module authorization, typed memory/thread/lifecycle observations, and fail-closed evidence handling passed the complete local and Windows 11/Driver Verifier acceptance gates at `974d2c4` |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
 certification or production readiness.
@@ -151,7 +154,7 @@ identity rather than parsing signatures.
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `726/726` in each configuration, including endpoint-scan completeness and correlation, loaded-driver trust policy, runtime-module authorization, typed target observations, canonical game events, backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `727/727` in each configuration, including endpoint-scan completeness and correlation, loaded-driver trust policy, runtime-module authorization, typed target observations, canonical game events, backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Current Clang-Tidy | All nine `OAC-Client` and all fourteen `OAC-Service` translation units passed with warnings treated as errors |
@@ -199,7 +202,35 @@ changes no driver, service, installer, or privileged Windows runtime behavior. R
 disposable VM would add no meaningful evidence for this portable server-side slice, so the existing
 WP-01 through WP-12 VM/Verifier evidence remains unchanged and no new VM campaign was run.
 
-## Current scanner-modularization validation
+## Current endpoint-trust validation
+
+Implementation commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed on Microsoft Windows
+11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
+and Secure Boot disabled. The host accepted 41 exact formal result records: five protocol-related
+executions and thirteen client, launcher, and preflight executions. Every formal and auxiliary
+result set matched. Production endpoint admission, frozen loaded-driver trust evaluation, runtime
+module authorization, the armed driver gate, signed build/policy boundaries, backend replay and
+failure recovery, exact remove/reinstall, kernel provenance, and target-tree containment all passed.
+
+The bounded target worker completed 37 of 37 queued slices and eight full sweeps, inspecting 1,424
+memory regions and 24 threads with no failed, cancelled, or skipped thread work. Maximum measured
+health-loop delay was 406 ms, scan-slice duration 107.878 ms, and thread suspension 1.750 ms. Driver
+Verifier reported three OAC loads and three unloads, then reset and finished inactive. Both OAC
+services were stopped, the VM was Off with zero network adapters, and there were zero crash events
+and zero minidumps.
+
+The exact package-manifest and seed-ISO SHA-256 values were
+`9B6224EC4CFE71F960DB59A0E5F29CF00E747A9CEBDCA2A37D87567BBFB55BEA` and
+`FB00EC1084AE705D921F49B214B5D42F99A91AA2E0A8663DE1976719289D9F20`. The validated result ZIP,
+final status, host manifest, and host log SHA-256 values were
+`89241D005E2A16CA4CBC3A0F1C658E128E2DB3D7C5B7E91010751A3242182EC2`,
+`93CCB5582AFDE9917429627B89FD3BE23E71179FDCC98E252E8F491DBC46ABAA`,
+`6CD0FD5F09DF2745FB298D63A4141CB64EF4A520A41EE8DDA7291F828AFA8A74`, and
+`7633DE4B615DFC307FD37BE455DCE12EE44E0D10DF3DEBE2B518D5D01E1A9D3F`.
+After recording those results, the disposable VM, checkpoint, VHD/AVHDX, package, seed, and full
+campaign directory were deleted as test artifacts.
+
+## Previous scanner-modularization validation
 
 Implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
@@ -224,16 +255,16 @@ The exact final-status, host-manifest, and host-log SHA-256 values are
 `FAC52438BD12AE222816E0BD9D5493F47B666BBC311C745BEBB1A205133454A0`,
 `F37FC3AAD2E0D359768265A07216F7B8307251C9E1FBDE4D960154EF32618F35`, and
 `4AD8029C94FF7E203769F875C43D8FBA41816502D9A0D29110AFFB2677A2839B`.
-The compact evidence bundle is stored outside the repository at
-`C:\OAC-VM\evidence\20260820-67d3f61-scanner-modules`. After preserving and verifying it, the exact
-disposable VM, checkpoint, VHD/AVHDX, package, seed, and full campaign directory were deleted.
+The compact evidence bundle was verified outside the repository before later workspace cleanup. Its
+hashes above remain the durable record; the exact disposable VM, checkpoint, VHD/AVHDX, package,
+seed, full campaign directory, and compact bundle were deleted.
 
 ### Previous backend-foundation campaign
 
 Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` previously passed the same
 Windows build and containment model for WP-01 through WP-11. Its validated result ZIP SHA-256 was
-`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`; the compact historical
-bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
+`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`; its compact historical bundle
+was also removed during the requested workspace cleanup.
 
 ## Current pending gates
 
@@ -249,11 +280,11 @@ bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
 - WP-14 source controls and operating contracts are implemented; hosted candidate generation and
   repository checks must pass before merge, while real certification/signing and operational
   approval remain deployment gates.
-- WP-15 source passes the complete local build, unit, analysis, release-profile, and hostile
-  candidate gates. An exact signed test package and one fresh C-backed Windows 11 campaign under
-  standard Driver Verifier must still pass before runtime acceptance.
-- Production transport/backend persistence, create-time job assignment, stable mapped-file identity,
-  manifest-key rotation, and representative module/JIT tuning remain later milestones.
+- WP-15 passed the complete local build, unit, analysis, release-profile, hostile-candidate,
+  signed-package, Windows 11, and standard Driver Verifier gates at `974d2c4`.
+- WP-16 production transport/backend persistence is next. Create-time job assignment, stable
+  mapped-file identity, manifest-key rotation, and representative module/JIT tuning remain later
+  milestones.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation

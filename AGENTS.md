@@ -37,10 +37,11 @@
   The release-engineering milestone adds a checked-in release profile, exact unsigned public/lab/
   private-symbol bundles, deterministic source and toolchain metadata, an SPDX 2.3 SBOM, hostile
   candidate validation, and documented signing, update, support, privacy, and incident boundaries.
-  The current endpoint-trust milestone adds one fail-closed, identity-correlated production scan,
-  loaded-driver signature/hash/family policy, signed runtime-module authorization, and bounded typed
-  target memory/thread/lifecycle observations. Its source and driver-free coverage are present; the
-  exact signed-package, disposable-VM, and Driver Verifier acceptance run is still required.
+  The endpoint-trust implementation at commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a`
+  adds one fail-closed, identity-correlated production scan, loaded-driver signature/hash/family
+  policy, signed runtime-module authorization, and bounded typed target memory/thread/lifecycle
+  observations. It passed the exact signed-package, networkless Windows 11 build 26100, and standard
+  Driver Verifier campaign with 41 formal results and zero crashes or dumps.
   A production network transport, backend service, durable remote and replay storage, real game
   adapter, stable mapped-file identity, create-time job assignment, manifest-key rotation, remote
   policy delivery, Microsoft certification, protected production signing, representative
