@@ -2,7 +2,8 @@
 
 **Status:** WP-01 through WP-12 controls and organization accepted locally and in the disposable-VM
 campaign at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build
-26100. PR #18 hosted checks also passed.
+26100. PR #18 hosted checks also passed. WP-13's portable game/server records and reference movement
+detector are covered by the driver-free suite; they are not a deployed game backend.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -16,6 +17,7 @@ trust boundaries, adversaries, and failure behavior.
 - Authority to configure and query the OAC driver.
 - Kernel observations and their source sequence, time, and completeness.
 - Game-build, rule, policy, and component identity.
+- Authoritative match state, replay correlation, and server-side detector integrity.
 - Player and hardware-identity privacy.
 - Signing material, backend credentials, and revocation state.
 
@@ -40,6 +42,7 @@ trust boundaries, adversaries, and failure behavior.
 | Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the driver-free suite covers the record and decision rules |
 | Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Driver-free, signed-package, restricted-service, and Driver Verifier acceptance passed at the named commit |
 | Backend session | The service requires a correlated session before claiming the driver, binds a digest of the session and nonces into driver status, applies signed lease/renewal/acknowledgement bounds, and stops on replay, expiry, revocation, queue exhaustion, or acknowledgement timeout | Driver-free and Windows 11 VM/Verifier cases passed replay rejection, acknowledgement-loss and lease-loss target-tree containment, and fresh-session recovery; the included transport remains a protected test double rather than a production network service |
+| Game/server behavior | Portable canonical records bind authoritative movement to game, build, backend session, match, player pseudonym, replay, sequence, and server tick; a deterministic detector enforces replay ordering, movement and velocity bounds, and typed risk | Driver-free C/C++ coverage exercises hostile records and rules, replay, identity, gaps, exact bounds, server corrections, coordinate extremes, and combined behavior/endpoint risk; no production transport or game deployment is implied |
 
 ## Production authority
 
@@ -143,6 +146,12 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   provenance through the authenticated policy's canonical rule set. Source confidence and
   provenance remain unchanged; the policy action and policy confidence are separate typed results.
   Display text is not an input.
+- The game/server interface accepts only exact canonical records. Sequence, server tick, and replay
+  offset are monotonic within one complete identity scope; replay, reordering, foreign scope,
+  malformed input, and corrupt persistent state do not advance the detector. Server-authoritative
+  movement and velocity findings remain distinct from the separately supplied endpoint-risk input,
+  endpoint-only risk remains observational, and all risk arithmetic saturates at the documented
+  bound.
 - The signed Observe, Enforce, or Strict mode can retain warnings and review requests or stop the
   service runtime so ordinary cleanup revokes the driver session and closes the target job. The
   service also supports a deny-launch action for later game-specific rules. Manifest or policy-scope
@@ -158,13 +167,15 @@ current driver-backed production, service installation, lifecycle, race, job/liv
 evidence, signed-policy, signed-manifest, backend-session, snapshot, and standard Driver Verifier
 campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That result does not
 replace the broader supported-platform, effective-right, compatibility, or production-deployment
-matrix.
+matrix. WP-13 changes only portable shared code and driver-free tests, so it does not extend the
+recorded Windows runtime claim.
 
 ## Planned controls
 
 - Manifest and policy signer rotation and revocation metadata, approved
   module/middleware/child-process scope, remote policy delivery, production authenticated network
-  transport, durable evidence storage, and backend operations.
+  transport, durable evidence and replay storage, a production game adapter, broader game-specific
+  detectors, and backend operations.
 
 ## Evidence and enforcement
 

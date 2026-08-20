@@ -30,6 +30,25 @@ The current production path intentionally supports one target and no command-lin
 Approved-module policy, manifest-key rotation, a deployable authenticated backend transport,
 durable remote storage, and target-session reuse remain planned work.
 
+## Game and server integration
+
+The portable interface in `shared/oac_game.*` is a server-side integration contract, not another
+privileged endpoint channel.
+
+| Capability | Current behavior |
+|---|---|
+| Authoritative event construction | A strict C builder emits one canonical 256-byte movement record from server-owned position, velocity, tick, and replay state. Failure leaves sequence state and output unchanged. |
+| Identity scope | Every event binds the game, build, backend session, match, player pseudonym, replay digest, sequence, server tick, and replay offset. Raw account identifiers are not part of the record. |
+| Replay handling | Sequence, tick, and replay offset must increase. Replayed, reordered, foreign-scope, malformed, and corrupt-state input cannot advance detector state. Forward gaps remain typed findings. |
+| Movement invariant | A deterministic reference detector checks each authoritative horizontal and vertical displacement against configured tick-scaled speed and tolerance bounds, and separately checks reported velocity. Server corrections bypass only the position envelope. |
+| Risk integration | Typed behavior findings accumulate in bounded state. A separate endpoint-risk input contributes to a saturated combined score while remaining distinguishable in the result. Endpoint-only risk remains observational; Review or Reject requires server-side behavior risk. Decisions are Accept, Observe, Review, Reject, Replay, or Invalid. |
+| Test boundary | Driver-free C/C++ tests cover exact layouts, hostile records and rules, replay, identity, gaps, movement, velocity, correction, coordinate extremes, combined risk, and saturation. |
+
+The record's server-authority flag is provenance, not authentication. A deployment still needs an
+authenticated transport, durable state and replay storage, a real game adapter, signed per-build
+rules, additional gameplay detectors, and an adjudication workflow. See the
+[game integration guide](GAME_INTEGRATION.md) for the contract and example.
+
 ## Scanner organization
 
 The scanner is divided by responsibility without changing its security semantics. Kernel-module
@@ -136,6 +155,7 @@ handler, or unload while returning through the driver's own code.
 - [Architecture](ARCHITECTURE.md)
 - [Security model](SECURITY_MODEL.md)
 - [Protocol reference](PROTOCOL.md)
+- [Game and server integration](GAME_INTEGRATION.md)
 - [Driver-load research](driver-load-review.md)
 - [Hardware-identity research](hwid-review.md)
 - [Microsoft `ObRegisterCallbacks`](https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-obregistercallbacks)

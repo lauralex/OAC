@@ -28,8 +28,11 @@
   user-mode Windows ownership helpers and a driver-free client-option parser remove duplicated
   infrastructure without changing scanner policy. The backend milestone provides a strict transport
   interface, protected deterministic test backend, bounded leases, fixed evidence queuing,
-  acknowledgement, and driver-session binding. A production network transport, backend service,
-  durable remote storage, manifest-key rotation, and remote policy delivery are not implemented.
+  acknowledgement, and driver-session binding. The portable game/server interface provides
+  canonical authoritative movement records, replay-safe detector state, one bounded movement and
+  velocity invariant, and explainable behavior/endpoint risk decisions. A production network
+  transport, backend service, durable remote and replay storage, real game adapter, manifest-key
+  rotation, and remote policy delivery are not implemented.
 
 ## Repository map
 
@@ -46,6 +49,7 @@
 | `shared/oac_signed_policy.*` | Canonical signed policy, update decision, and persistent cache-state contracts |
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `shared/oac_backend.*` | Canonical backend-session, lease, evidence, acknowledgement, replay, and failure-state contracts |
+| `shared/oac_game.*` | Portable authoritative game-event construction, replay-safe detector state, bounded movement rules, and risk decisions |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |

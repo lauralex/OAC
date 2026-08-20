@@ -13,6 +13,7 @@ research notes provide context, not proof that a capability is available or acce
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Component boundaries, production launch flow, session lifetime, and planned architecture |
 | [`SECURITY_MODEL.md`](SECURITY_MODEL.md) | Assets, adversaries, trust boundaries, failure behavior, and unsupported guarantees |
 | [`PROTOCOL.md`](PROTOCOL.md) | Production and diagnostic wire contracts, validation, authority, and state transitions |
+| [`GAME_INTEGRATION.md`](GAME_INTEGRATION.md) | Authoritative game events, replay state, movement rules, risk decisions, and deployment boundary |
 | [`CAPABILITIES.md`](CAPABILITIES.md) | Production-control scope, detailed lab scanner matrix, evidence semantics, and limitations |
 | [`driver-load-review.md`](driver-load-review.md) | Exact-image research into the normal Windows driver-load path and its design consequences |
 | [`hwid-review.md`](hwid-review.md) | Hardware-identity source review, privacy rules, and stability constraints |

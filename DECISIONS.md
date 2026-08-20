@@ -235,3 +235,24 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed driver-free validation and the complete
   Windows 11 build 26100 disposable-VM and Driver Verifier campaign, including nonce replay,
   withheld-acknowledgement and lease-loss containment, and fresh-session recovery.
+
+## ADR-017: Keep gameplay truth server-authoritative
+
+- **Status:** Accepted; source implemented and driver-free tested
+- **Date:** 2026-08-20
+- **Decision:** Define a portable canonical event interface for authoritative game servers rather
+  than treating endpoint telemetry as gameplay truth. Bind each movement observation to the exact
+  game, build, backend session, match, player pseudonym, replay digest, monotonic sequence, server
+  tick, and replay offset. Keep one bounded detector state per complete identity scope. Reject
+  replay, reordering, malformed data, foreign scope, and corrupt state without mutation. Demonstrate
+  the boundary with a tick-scaled movement and reported-velocity detector whose typed behavior risk
+  remains distinct from a separately supplied endpoint-risk input. Endpoint-only risk remains
+  observational; Review or Reject requires a server-side behavior finding.
+- **Consequence:** OAC now has a small game/server integration contract and one explainable
+  behavioral detector without adding game, network, storage, or account dependencies to the local
+  Windows controller. The server-authority flag records provenance but does not authenticate an
+  untrusted transport. Production use still requires an authenticated game adapter, durable
+  partitioned state and replay storage, signed per-build rules, additional domain detectors, and a
+  reviewed adjudication process. Driver-free tests cover canonical construction, hostile records
+  and rules, identity and replay rejection, gaps, exact movement bounds, corrections, coordinate
+  extremes, risk combination, and saturation.
