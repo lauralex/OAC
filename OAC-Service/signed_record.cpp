@@ -13,8 +13,9 @@ namespace
 constexpr wchar_t kTrustPath[] = L"SOFTWARE\\OAC";
 constexpr DWORD kMaximumSignatureBytes = 64u * 1024u;
 constexpr ULONGLONG kWindowsToUnixEpoch100ns = 116444736000000000ULL;
-constexpr DWORD kInvalidSignatureError =
-    static_cast<DWORD>(TRUST_E_BAD_DIGEST);
+// Signed-record authentication failures cross the SCM status boundary. Keep
+// them in the Win32 error domain so the launcher retains the failure stage.
+constexpr DWORD kInvalidSignatureError = ERROR_ACCESS_DISABLED_BY_POLICY;
 
 class UniqueHandle
 {

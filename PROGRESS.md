@@ -114,7 +114,7 @@ the verified manifest digest as correlated session identity rather than parsing 
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `543/543` in each configuration, including signed-policy schema, rule-set, scope, expiry, replay, rollback, and emergency-revocation coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `544/544` in each configuration, including signed-policy schema, rule-set, scope, expiry, replay, rollback, emergency-revocation, and staged policy-denial coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |

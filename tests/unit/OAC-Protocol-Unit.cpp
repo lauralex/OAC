@@ -670,6 +670,10 @@ void TestServiceFailures(TestLog& log)
         ERROR_ACCESS_DENIED;
     log.Expect("service failure encoding", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_DRIVER_OPEN, ERROR_ACCESS_DENIED) == encoded);
+    log.Expect("service policy denial retains startup stage",
+        OacEncodeServiceFailure(
+            OAC_SERVICE_STAGE_BOOTSTRAP,
+            ERROR_ACCESS_DISABLED_BY_POLICY) != 0);
 
     uint32_t stage = 0;
     uint32_t error = 0;

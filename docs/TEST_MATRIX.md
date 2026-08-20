@@ -19,7 +19,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `543/543`; PR #13 previously passed `428/428` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `544/544`; PR #13 previously passed `428/428` |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -149,7 +149,7 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `535730c`; both process trees terminated and SCM recovery completed |
 | Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `535730c`; four driver-backed executions passed `130/130` |
 | Independent health loop and bounded target worker | Tested at `535730c`; 27 slices, six sweeps, 391 ms maximum health delay, 80.048 ms maximum slice duration, 0.172 ms maximum suspension, no failed/cancelled slice |
-| Typed policy rules and service evaluation | Current driver-free tests pass `543/543`; the earlier fixed-policy service path completed baseline and Verifier execution at `535730c`, while signed-policy runtime acceptance is pending |
+| Typed policy rules and service evaluation | Current driver-free tests pass `544/544`; the earlier fixed-policy service path completed baseline and Verifier execution at `535730c`, while signed-policy runtime acceptance is pending |
 | Signed main-executable manifest authorization | Tested at `535730c`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
 | Signed policy selection and update state | Driver-free coverage complete; restricted-service package and VM acceptance pending |
 | Renamed, signed normal post-start driver image | Tested at `535730c`; armed callback and persistent latch both observed |
