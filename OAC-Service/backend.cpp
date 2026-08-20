@@ -357,8 +357,15 @@ DWORD MockBackendTransport::SubmitEvidence(
         OAC_BACKEND_RESULT_ACCEPTED,
         sessionId_.data(),
         nonceDigest.data());
-    if (scenario_ != BackendScenario::HoldAcknowledgement)
+    // The acknowledgement-loss scenario starts after the service has
+    // established its endpoint gate. Acknowledge that bootstrap batch, then
+    // leave subsequent evidence pending so the health loop must contain the
+    // active target when the acknowledgement deadline expires.
+    if (scenario_ != BackendScenario::HoldAcknowledgement ||
+        acknowledgement_ == 0)
+    {
         acknowledgement_ = metadata.LastServiceSequence;
+    }
     uploadResponse_.AcknowledgedThrough = acknowledgement_;
     uploadReady_ = true;
     return ERROR_SUCCESS;

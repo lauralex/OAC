@@ -5336,14 +5336,24 @@ void TestBackendSession(TestLog& log)
     if (error == ERROR_SUCCESS)
         error = missingAcknowledgement->Enqueue(evidence, now);
     if (error == ERROR_SUCCESS) error = missingAcknowledgement->Poll(now);
+    log.Expect("acknowledgement-loss scenario accepts bootstrap evidence",
+        error == ERROR_SUCCESS &&
+        missingAcknowledgement->Status().PendingEvidence == 0 &&
+        missingAcknowledgement->Status().AcknowledgedSequence == 1);
+    const auto heldEvidence = ValidBackendEvidenceItem(policy.Record, 2);
+    const ULONGLONG heldAt = now + 1;
+    if (error == ERROR_SUCCESS)
+        error = missingAcknowledgement->Enqueue(heldEvidence, heldAt);
+    if (error == ERROR_SUCCESS) error = missingAcknowledgement->Poll(heldAt);
     if (error == ERROR_SUCCESS)
     {
         error = missingAcknowledgement->Poll(
-            now + policy.Record.EvidenceAckTimeoutMilliseconds);
+            heldAt + policy.Record.EvidenceAckTimeoutMilliseconds);
     }
-    log.Expect("unacknowledged evidence terminates the backend session",
+    log.Expect("subsequent unacknowledged evidence terminates the backend session",
         error == ERROR_TIMEOUT && !missingAcknowledgement->AllowsLaunch(now) &&
-        missingAcknowledgement->Status().PendingEvidence == 1);
+        missingAcknowledgement->Status().PendingEvidence == 1 &&
+        missingAcknowledgement->Status().AcknowledgedSequence == 1);
 
     auto lostLease = std::make_unique<oac::BackendSession>();
     error = lostLease->Start(
