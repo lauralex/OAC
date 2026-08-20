@@ -20,8 +20,8 @@ mode, while the kernel retains only the responsibilities that genuinely require 
 > [!IMPORTANT]
 > OAC is an engineering reference, **not a production-ready anti-cheat release**. The repository
 > does not provide production driver signing, a supported hardware and Windows compatibility
-> matrix, authenticated backend admission, or a finished game-integration SDK. Never install the
-> disposable test package on a workstation or production system.
+> matrix, authenticated backend admission, or a production game adapter and adjudication service.
+> Never install the disposable test package on a workstation or production system.
 
 ## How it works
 
@@ -39,12 +39,19 @@ flowchart LR
     Service -->|"assign before resume"| Job["Kill-on-close job"]
     Job --> Target
     Driver -->|"retained alerts and events"| Service
+    Game["Authoritative game server"] -->|"canonical movement events"| Detector["Reference behavior detector"]
+    Replay["Replay identity and offset"] --> Detector
+    Backend -.->|"endpoint risk"| Detector
+    Detector -->|"typed risk decision"| GamePolicy["Game policy and adjudication"]
 ```
 
 A launch is deliberately serialized. The service authenticates the local client, locks and verifies
 the requested executable, checks its signed manifest and the active signed policy, arms a bounded
 driver ticket, creates the process suspended under the caller's token, confirms the exact process
 handle, assigns the process tree to a service-owned job, and only then resumes the first thread.
+Separately, the portable game interface lets an authoritative server bind movement observations to
+one build, backend session, match, player pseudonym, and replay before applying deterministic
+server-side rules.
 
 ## Security properties
 
@@ -63,6 +70,9 @@ handle, assigns the process tree to a service-owned job, and only then resumes t
 - **Evidence with provenance.** High-priority alerts are retained until acknowledged, operational
   event gaps are counted, inventories use immutable paged snapshots, and policy decisions consume
   typed fields rather than display strings.
+- **Server-authoritative behavior.** Canonical movement records carry monotonic server ticks,
+  sequence, and replay identity. The reference detector rejects replay and combines explicit
+  movement findings with, but does not replace them by, endpoint risk.
 
 ## What is implemented
 
@@ -76,6 +86,8 @@ The current source includes:
   compatibility, replay protection, explicit rollback authorization, and emergency revocation;
 - a transport-independent backend session with nonce replay rejection, bounded leases, monotonic
   evidence acknowledgement, a fixed service queue, and a test-only authenticated mock transport;
+- a portable game/server interface with canonical movement events, replay-safe state, a bounded
+  movement and velocity invariant, and explainable risk decisions;
 - creation-time target binding, exact-handle confirmation, pre-resume job assignment, and target
   process-tree containment;
 - retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
@@ -100,6 +112,8 @@ includes:
 
 - a production authenticated network transport, backend admission service, and durable remote
   evidence storage—the repository currently provides the strict transport contract and test mock;
+- a production game-engine adapter, authenticated event ingestion, durable replay storage, and
+  game-specific detectors beyond the included reference movement invariant;
 - manifest signer rotation and revocation metadata;
 - approved module, middleware, overlay, child-process, and runtime rules for a real game;
 - production signing, release engineering, privacy and retention policy, and platform certification.
@@ -115,7 +129,7 @@ target, not evidence that a feature already exists.
 | [`OAC-Service/`](OAC-Service/) | Restricted controller, signed authorization, launch ownership, and scheduling |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated laboratory scanner and diagnostic reports |
-| [`shared/`](shared/) | Wire contracts, canonical records, policy rules, strict validators, and common Windows support |
+| [`shared/`](shared/) | Wire contracts, game/server records, policy rules, strict validators, and common Windows support |
 | [`tests/unit/`](tests/unit/) | Driver-free layout, validation, transition, and policy regression tests |
 | [`tools/`](tools/) | Integration tests, packaging, installation, and repository checks |
 | [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance workflow |
@@ -127,6 +141,7 @@ target, not evidence that a feature already exists.
 | [Architecture](docs/ARCHITECTURE.md) | Components, trust boundaries, launch ownership, and scanner organization |
 | [Security model](docs/SECURITY_MODEL.md) | Threat assumptions, enforced invariants, and deliberate limitations |
 | [Production protocol](docs/PROTOCOL.md) | Typed messages, session states, correlation, evidence, and snapshots |
+| [Game integration](docs/GAME_INTEGRATION.md) | Authoritative events, replay state, movement rules, and risk decisions |
 | [Capabilities](docs/CAPABILITIES.md) | Production controls and the detailed laboratory-scanner matrix |
 
 Exact campaign hashes, work-package bookkeeping, historical baselines, and maintainer decisions are
@@ -172,7 +187,9 @@ The current accepted implementation has passed clean Debug and Release builds, d
 regression tests, PREfast, solution-wide static analysis, package and signing checks, and a
 networkless Windows 11 build 26100 campaign under standard Driver Verifier. Runtime claims are
 limited to the exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
-are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification.
+are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification. The portable
+game/server contract is covered by the driver-free suite and does not extend that Windows runtime
+claim.
 
 ## Responsible use
 

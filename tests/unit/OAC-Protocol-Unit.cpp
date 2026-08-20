@@ -8,12 +8,14 @@
 #include <iostream>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <set>
 #include <string>
 #include <type_traits>
 
 #include "../../shared/oac_protocol.h"
 #include "../../shared/oac_backend.h"
+#include "../../shared/oac_game.h"
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_lease.h"
 #include "../../shared/oac_manifest.h"
@@ -87,6 +89,11 @@ static_assert(sizeof(OAC_BACKEND_REQUEST_HEADER) == 88);
 static_assert(sizeof(OAC_BACKEND_OPEN_REQUEST) == 184);
 static_assert(sizeof(OAC_BACKEND_OPEN_RESPONSE) == 144);
 static_assert(sizeof(OAC_BACKEND_EVIDENCE_ITEM) == 584);
+static_assert(std::is_standard_layout_v<OAC_GAME_MOVEMENT_EVENT>);
+static_assert(std::is_trivially_copyable_v<OAC_GAME_DETECTOR_STATE>);
+static_assert(sizeof(OAC_GAME_MOVEMENT_EVENT) == 256);
+static_assert(offsetof(OAC_GAME_MOVEMENT_EVENT, PositionMillimeters) == 168);
+static_assert(sizeof(OAC_GAME_DETECTOR_RESULT) == 96);
 
 namespace
 {
@@ -3501,6 +3508,599 @@ void TestGameManifest(TestLog& log)
             &next) == OAC_MANIFEST_ROLLBACK_INVALID_STATE);
 }
 
+template <size_t Size>
+std::array<uint8_t, Size> GameIdentity(uint8_t seed)
+{
+    std::array<uint8_t, Size> identity{};
+    for (size_t index = 0; index != identity.size(); ++index)
+    {
+        identity[index] = static_cast<uint8_t>(seed + index);
+    }
+    return identity;
+}
+
+struct GameIntegrationFixture
+{
+    OAC_GAME_SESSION_CONTEXT Session{};
+    OAC_GAME_MOVEMENT_RULES Rules{};
+};
+
+GameIntegrationFixture ValidGameIntegrationFixture()
+{
+    GameIntegrationFixture fixture;
+    const auto gameId = GameIdentity<OAC_GAME_ID_SIZE>(0x10);
+    const auto buildId = GameIdentity<OAC_GAME_ID_SIZE>(0x30);
+    const auto backendSessionId = GameIdentity<OAC_GAME_ID_SIZE>(0x50);
+    const auto matchId = GameIdentity<OAC_GAME_ID_SIZE>(0x70);
+    const auto player = GameIdentity<OAC_GAME_PLAYER_ID_SIZE>(0x90);
+    const auto replay = GameIdentity<OAC_GAME_REPLAY_DIGEST_SIZE>(0xB0);
+
+    (void)OacGameInitializeSession(
+        &fixture.Session,
+        gameId.data(),
+        buildId.data(),
+        backendSessionId.data(),
+        matchId.data(),
+        player.data(),
+        replay.data());
+    fixture.Rules.SchemaVersion = OAC_GAME_SCHEMA;
+    fixture.Rules.Size = sizeof(fixture.Rules);
+    fixture.Rules.ServerTicksPerSecond = 20;
+    std::copy(gameId.begin(), gameId.end(), fixture.Rules.GameId);
+    std::copy(buildId.begin(), buildId.end(), fixture.Rules.BuildId);
+    fixture.Rules.MaximumHorizontalSpeedMmPerSecond = 10000;
+    fixture.Rules.MaximumVerticalSpeedMmPerSecond = 5000;
+    fixture.Rules.PositionToleranceMillimeters = 100;
+    fixture.Rules.MaximumTickGap = 100;
+    fixture.Rules.SequenceGapRisk = 50;
+    fixture.Rules.TickGapRisk = 80;
+    fixture.Rules.MovementRisk = 400;
+    fixture.Rules.VelocityRisk = 300;
+    fixture.Rules.ReviewThreshold = 300;
+    fixture.Rules.RejectThreshold = 700;
+    return fixture;
+}
+
+OAC_GAME_MOVEMENT_EVENT CreateMovementEvent(
+    OAC_GAME_SESSION_CONTEXT& session,
+    uint64_t serverTick,
+    uint64_t replayOffset,
+    const std::array<int64_t, 3>& position,
+    const std::array<int32_t, 3>& velocity,
+    OAC_GAME_MOVEMENT_FLAGS flags = 0)
+{
+    OAC_GAME_MOVEMENT_EVENT event{};
+    (void)OacGameCreateMovementEvent(
+        &session,
+        serverTick,
+        replayOffset,
+        position.data(),
+        velocity.data(),
+        flags,
+        &event);
+    return event;
+}
+
+void TestGameEventContract(TestLog& log)
+{
+    auto fixture = ValidGameIntegrationFixture();
+    const std::array<int64_t, 3> origin{};
+    const std::array<int32_t, 3> stopped{};
+
+    log.Expect("game session uses canonical server identities",
+        fixture.Session.SchemaVersion == OAC_GAME_SCHEMA &&
+        fixture.Session.Size == sizeof(fixture.Session) &&
+        fixture.Session.NextSequence == 1 &&
+        std::memcmp(
+            fixture.Session.Scope.GameId,
+            fixture.Rules.GameId,
+            OAC_GAME_ID_SIZE) == 0);
+    auto unchangedSession = fixture.Session;
+    unchangedSession.NextSequence = 19;
+    const auto sessionBefore = unchangedSession;
+    std::array<uint8_t, OAC_GAME_ID_SIZE> zeroId{};
+    log.Expect("game session rejects missing identity without mutation",
+        OacGameInitializeSession(
+            &unchangedSession,
+            zeroId.data(),
+            fixture.Session.Scope.BuildId,
+            fixture.Session.Scope.BackendSessionId,
+            fixture.Session.Scope.MatchId,
+            fixture.Session.Scope.PlayerPseudonym,
+            fixture.Session.Scope.ReplaySha256) == 0 &&
+        std::memcmp(
+            &unchangedSession, &sessionBefore, sizeof(unchangedSession)) == 0);
+    log.Expect("game session rejects a missing output",
+        OacGameInitializeSession(
+            nullptr,
+            fixture.Session.Scope.GameId,
+            fixture.Session.Scope.BuildId,
+            fixture.Session.Scope.BackendSessionId,
+            fixture.Session.Scope.MatchId,
+            fixture.Session.Scope.PlayerPseudonym,
+            fixture.Session.Scope.ReplaySha256) == 0);
+    auto aliasedSession = fixture.Session;
+    aliasedSession.NextSequence = 19;
+    log.Expect("game session can safely reuse its identity storage",
+        OacGameInitializeSession(
+            &aliasedSession,
+            aliasedSession.Scope.GameId,
+            aliasedSession.Scope.BuildId,
+            aliasedSession.Scope.BackendSessionId,
+            aliasedSession.Scope.MatchId,
+            aliasedSession.Scope.PlayerPseudonym,
+            aliasedSession.Scope.ReplaySha256) != 0 &&
+        aliasedSession.NextSequence == 1 &&
+        std::memcmp(
+            aliasedSession.Scope.GameId,
+            fixture.Session.Scope.GameId,
+            OAC_GAME_ID_SIZE) == 0);
+
+    OAC_GAME_MOVEMENT_EVENT first{};
+    log.Expect("game SDK creates a canonical movement event",
+        OacGameCreateMovementEvent(
+            &fixture.Session,
+            100,
+            1000,
+            origin.data(),
+            stopped.data(),
+            0,
+            &first) != 0 &&
+        first.Header.EventType == OAC_GAME_EVENT_MOVEMENT &&
+        first.Header.Flags == OAC_GAME_EVENT_SERVER_AUTHORITY &&
+        first.Header.Sequence == 1 && fixture.Session.NextSequence == 2 &&
+        OacGameValidateMovementEvent(&first, sizeof(first)) == OAC_GAME_VALID);
+
+    auto invalidSession = fixture.Session;
+    invalidSession.Reserved[0] = 1;
+    OAC_GAME_MOVEMENT_EVENT unchangedEvent;
+    std::memset(&unchangedEvent, 0xA5, sizeof(unchangedEvent));
+    const auto eventBefore = unchangedEvent;
+    const auto invalidSessionBefore = invalidSession;
+    log.Expect("game SDK rejects corrupt state without partial output",
+        OacGameCreateMovementEvent(
+            &invalidSession,
+            102,
+            1100,
+            origin.data(),
+            stopped.data(),
+            0,
+            &unchangedEvent) == 0 &&
+        std::memcmp(
+            &invalidSession, &invalidSessionBefore, sizeof(invalidSession)) == 0 &&
+        std::memcmp(&unchangedEvent, &eventBefore, sizeof(unchangedEvent)) == 0);
+    auto exhaustedSession = fixture.Session;
+    exhaustedSession.NextSequence = std::numeric_limits<uint64_t>::max();
+    unchangedEvent = eventBefore;
+    log.Expect("game SDK fails closed at sequence exhaustion",
+        OacGameCreateMovementEvent(
+            &exhaustedSession,
+            102,
+            1100,
+            origin.data(),
+            stopped.data(),
+            0,
+            &unchangedEvent) == 0 &&
+        exhaustedSession.NextSequence == std::numeric_limits<uint64_t>::max() &&
+        std::memcmp(&unchangedEvent, &eventBefore, sizeof(unchangedEvent)) == 0);
+    auto validSession = fixture.Session;
+    unchangedEvent = eventBefore;
+    log.Expect("game SDK rejects unknown movement flags",
+        OacGameCreateMovementEvent(
+            &validSession,
+            102,
+            1100,
+            origin.data(),
+            stopped.data(),
+            OAC_GAME_MOVEMENT_VALID_FLAGS + 1,
+            &unchangedEvent) == 0 &&
+        validSession.NextSequence == fixture.Session.NextSequence &&
+        std::memcmp(&unchangedEvent, &eventBefore, sizeof(unchangedEvent)) == 0);
+
+    log.Expect("game event requires an exact record",
+        OacGameValidateMovementEvent(nullptr, sizeof(first)) ==
+            OAC_GAME_INVALID_POINTER &&
+        OacGameValidateMovementEvent(&first, sizeof(first) - 1) ==
+            OAC_GAME_INVALID_LENGTH);
+    auto invalidEvent = first;
+    ++invalidEvent.Header.SchemaVersion;
+    log.Expect("game event rejects schema drift",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_SCHEMA);
+    invalidEvent = first;
+    --invalidEvent.Header.Size;
+    log.Expect("game event rejects stated-size drift",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_SCHEMA);
+    invalidEvent = first;
+    ++invalidEvent.Header.EventType;
+    log.Expect("game event rejects the wrong event type",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_EVENT_TYPE);
+    invalidEvent = first;
+    invalidEvent.Header.Flags = 0;
+    log.Expect("game event requires server authority",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_RESERVED);
+    invalidEvent = first;
+    invalidEvent.Reserved[0] = 1;
+    log.Expect("game event rejects reserved data",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_RESERVED);
+    invalidEvent = first;
+    invalidEvent.MovementFlags = OAC_GAME_MOVEMENT_VALID_FLAGS + 1;
+    log.Expect("game event rejects unknown movement semantics",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_MOVEMENT);
+    invalidEvent = first;
+    std::fill(
+        std::begin(invalidEvent.Header.Scope.GameId),
+        std::end(invalidEvent.Header.Scope.GameId),
+        uint8_t{});
+    log.Expect("game event requires scoped identities",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_IDENTITY);
+    invalidEvent = first;
+    invalidEvent.Header.Sequence = 0;
+    log.Expect("game event requires a sequence",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_SEQUENCE);
+    invalidEvent = first;
+    invalidEvent.Header.ServerTick = 0;
+    log.Expect("game event requires a server tick",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_TIME);
+    invalidEvent = first;
+    invalidEvent.Header.ReplayOffset = 0;
+    log.Expect("game event requires replay correlation",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_REPLAY);
+    invalidEvent = first;
+    std::fill(
+        std::begin(invalidEvent.Header.Scope.ReplaySha256),
+        std::end(invalidEvent.Header.Scope.ReplaySha256),
+        uint8_t{});
+    log.Expect("game event requires replay identity",
+        OacGameValidateMovementEvent(&invalidEvent, sizeof(invalidEvent)) ==
+            OAC_GAME_INVALID_REPLAY);
+}
+
+void TestGameMovementRules(TestLog& log)
+{
+    auto fixture = ValidGameIntegrationFixture();
+    log.Expect("movement rules accept bounded server policy",
+        OacGameMovementRulesValid(&fixture.Rules) != 0);
+    auto invalidRules = fixture.Rules;
+    invalidRules.ServerTicksPerSecond = 0;
+    bool rateBounds = OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.ServerTicksPerSecond = OAC_GAME_MAX_TICK_RATE + 1;
+    rateBounds = rateBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.MaximumHorizontalSpeedMmPerSecond =
+        OAC_GAME_MAX_SPEED_MM_PER_SECOND + 1;
+    rateBounds = rateBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.MaximumVerticalSpeedMmPerSecond = 0;
+    rateBounds = rateBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.PositionToleranceMillimeters =
+        OAC_GAME_MAX_POSITION_TOLERANCE_MM + 1;
+    rateBounds = rateBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    log.Expect("movement rules bound rates and speeds", rateBounds);
+    invalidRules = fixture.Rules;
+    invalidRules.MaximumTickGap = 0;
+    bool riskBounds = OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.MovementRisk = 0;
+    riskBounds = riskBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.VelocityRisk = OAC_GAME_RISK_MAX + 1;
+    riskBounds = riskBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.ReviewThreshold = invalidRules.RejectThreshold;
+    riskBounds = riskBounds && OacGameMovementRulesValid(&invalidRules) == 0;
+    log.Expect("movement rules require bounded ordered risk", riskBounds);
+    invalidRules = fixture.Rules;
+    std::fill(
+        std::begin(invalidRules.GameId),
+        std::end(invalidRules.GameId),
+        uint8_t{});
+    bool strictRules = OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.Flags = 1;
+    strictRules = strictRules && OacGameMovementRulesValid(&invalidRules) == 0;
+    invalidRules = fixture.Rules;
+    invalidRules.Reserved[0] = 1;
+    strictRules = strictRules && OacGameMovementRulesValid(&invalidRules) == 0;
+    log.Expect("movement rules reject foreign scope and reserved data",
+        strictRules);
+
+    OAC_GAME_DETECTOR_STATE state{};
+    log.Expect("movement detector binds the server session",
+        OacGameInitializeDetector(
+            &fixture.Rules, &fixture.Session, &state) != 0 &&
+        state.SchemaVersion == OAC_GAME_SCHEMA && state.HasPosition == 0 &&
+        std::memcmp(
+            state.Scope.BackendSessionId,
+            fixture.Session.Scope.BackendSessionId,
+            OAC_GAME_ID_SIZE) == 0);
+    OAC_GAME_DETECTOR_STATE unchangedState;
+    std::memset(&unchangedState, 0xA5, sizeof(unchangedState));
+    const auto stateBefore = unchangedState;
+    invalidRules = fixture.Rules;
+    invalidRules.BuildId[0] ^= 1;
+    log.Expect("movement detector rejects a mismatched build without mutation",
+        OacGameInitializeDetector(
+            &invalidRules, &fixture.Session, &unchangedState) == 0 &&
+        std::memcmp(&unchangedState, &stateBefore, sizeof(unchangedState)) == 0);
+}
+
+void TestGameMovementDetector(TestLog& log)
+{
+    auto fixture = ValidGameIntegrationFixture();
+    const std::array<int64_t, 3> origin{};
+    const std::array<int32_t, 3> stopped{};
+    OAC_GAME_DETECTOR_STATE state{};
+    (void)OacGameInitializeDetector(
+        &fixture.Rules, &fixture.Session, &state);
+    const auto first = CreateMovementEvent(
+        fixture.Session, 100, 1000, origin, stopped);
+    OAC_GAME_DETECTOR_RESULT result{};
+    log.Expect("movement detector accepts its first authoritative sample",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &first,
+            sizeof(first),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_ACCEPT &&
+        result.Reason == OAC_GAME_REASON_NONE && result.Findings == 0 &&
+        result.CombinedRisk == 0 && state.HasPosition == 1 &&
+        state.EventsEvaluated == 1 && state.AnomaliesObserved == 0);
+
+    const std::array<int64_t, 3> envelopeEdge{1100, -1100, 600};
+    const auto second = CreateMovementEvent(
+        fixture.Session, 102, 1100, envelopeEdge, stopped);
+    log.Expect("endpoint-only risk stays observational at the movement envelope",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &second,
+            sizeof(second),
+            700,
+            &state,
+            &result) == OAC_GAME_DECISION_OBSERVE &&
+        result.Findings == 0 && result.EndpointRisk == 700 &&
+        result.BehaviorRisk == 0 && result.CombinedRisk == 700 &&
+        result.AllowedHorizontalDeltaMillimeters == 1100 &&
+        result.AllowedVerticalDeltaMillimeters == 600 &&
+        state.EventsEvaluated == 2);
+
+    const auto stateAfterSecond = state;
+    log.Expect("movement detector rejects replay without advancing state",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &second,
+            sizeof(second),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_REPLAY &&
+        result.Reason == OAC_GAME_REASON_REPLAY &&
+        std::memcmp(&state, &stateAfterSecond, sizeof(state)) == 0);
+    auto invalidEvent = second;
+    ++invalidEvent.Header.Sequence;
+    invalidEvent.Header.ServerTick += 2;
+    invalidEvent.Header.ReplayOffset += 100;
+    invalidEvent.Header.Scope.MatchId[0] ^= 1;
+    log.Expect("movement detector rejects cross-match input without advancing",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &invalidEvent,
+            sizeof(invalidEvent),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_INVALID &&
+        result.Reason == OAC_GAME_REASON_IDENTITY_MISMATCH &&
+        std::memcmp(&state, &stateAfterSecond, sizeof(state)) == 0);
+    invalidEvent = second;
+    ++invalidEvent.Header.Sequence;
+    invalidEvent.Header.ServerTick += 2;
+    invalidEvent.Header.ReplayOffset += 100;
+    invalidEvent.Reserved[0] = 1;
+    log.Expect("movement detector rejects malformed input without advancing",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &invalidEvent,
+            sizeof(invalidEvent),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_INVALID &&
+        result.Reason == OAC_GAME_REASON_MALFORMED_EVENT &&
+        std::memcmp(&state, &stateAfterSecond, sizeof(state)) == 0);
+    auto nextEvent = second;
+    ++nextEvent.Header.Sequence;
+    nextEvent.Header.ServerTick += 2;
+    nextEvent.Header.ReplayOffset += 100;
+    log.Expect("movement detector rejects excessive endpoint risk",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &nextEvent,
+            sizeof(nextEvent),
+            OAC_GAME_RISK_MAX + 1,
+            &state,
+            &result) == OAC_GAME_DECISION_INVALID &&
+        result.Reason == OAC_GAME_REASON_INVALID_ENDPOINT_RISK &&
+        std::memcmp(&state, &stateAfterSecond, sizeof(state)) == 0);
+    auto corruptState = state;
+    corruptState.LastPositionMillimeters[0] = 0;
+    corruptState.HasPosition = 0;
+    log.Expect("movement detector rejects inconsistent persistent state",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &nextEvent,
+            sizeof(nextEvent),
+            0,
+            &corruptState,
+            &result) == OAC_GAME_DECISION_INVALID &&
+        result.Reason == OAC_GAME_REASON_INVALID_STATE);
+    log.Expect("movement detector requires a result without advancing state",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &nextEvent,
+            sizeof(nextEvent),
+            0,
+            &state,
+            nullptr) == OAC_GAME_DECISION_INVALID &&
+        std::memcmp(&state, &stateAfterSecond, sizeof(state)) == 0);
+
+    auto gapEvent = CreateMovementEvent(
+        fixture.Session, 203, 1200, envelopeEdge, stopped);
+    ++gapEvent.Header.Sequence;
+    log.Expect("movement detector records sequence and tick gaps",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &gapEvent,
+            sizeof(gapEvent),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_OBSERVE &&
+        result.Findings ==
+            (OAC_GAME_FINDING_SEQUENCE_GAP | OAC_GAME_FINDING_TICK_GAP) &&
+        result.Reason == OAC_GAME_REASON_TICK_GAP &&
+        result.RiskDelta == 130 && result.BehaviorRisk == 130 &&
+        result.AllowedHorizontalDeltaMillimeters == 0 &&
+        state.LastSequence == 4 && state.EventsEvaluated == 3 &&
+        state.AnomaliesObserved == 1);
+
+    fixture.Session.NextSequence = 5;
+    const std::array<int64_t, 3> impossiblePosition{2301, -1100, 600};
+    const auto impossible = CreateMovementEvent(
+        fixture.Session, 205, 1300, impossiblePosition, stopped);
+    log.Expect("server movement plus endpoint risk reaches rejection",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &impossible,
+            sizeof(impossible),
+            170,
+            &state,
+            &result) == OAC_GAME_DECISION_REJECT &&
+        result.Findings == OAC_GAME_FINDING_MOVEMENT_ENVELOPE &&
+        result.Reason == OAC_GAME_REASON_MOVEMENT_ENVELOPE &&
+        result.ObservedDeltaMillimeters[0] == 1201 &&
+        result.AllowedHorizontalDeltaMillimeters == 1100 &&
+        result.RiskDelta == 400 && result.BehaviorRisk == 530 &&
+        result.EndpointRisk == 170 && result.CombinedRisk == 700);
+
+    const std::array<int32_t, 3> excessiveVelocity{10001, 0, 0};
+    const auto fast = CreateMovementEvent(
+        fixture.Session, 207, 1400, impossiblePosition, excessiveVelocity);
+    log.Expect("server detector rejects excessive reported velocity",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &fast,
+            sizeof(fast),
+            0,
+            &state,
+            &result) == OAC_GAME_DECISION_REJECT &&
+        result.Findings == OAC_GAME_FINDING_REPORTED_VELOCITY &&
+        result.Reason == OAC_GAME_REASON_REPORTED_VELOCITY &&
+        result.RiskDelta == 300 && result.BehaviorRisk == 830);
+
+    const std::array<int64_t, 3> secondImpossible{3502, -1100, 600};
+    const auto saturated = CreateMovementEvent(
+        fixture.Session, 209, 1500, secondImpossible, stopped);
+    log.Expect("behavior risk saturates without wrapping",
+        OacGameEvaluateMovement(
+            &fixture.Rules,
+            &saturated,
+            sizeof(saturated),
+            OAC_GAME_RISK_MAX,
+            &state,
+            &result) == OAC_GAME_DECISION_REJECT &&
+        result.BehaviorRisk == OAC_GAME_RISK_MAX &&
+        result.CombinedRisk == OAC_GAME_RISK_MAX &&
+        state.BehaviorRisk == OAC_GAME_RISK_MAX &&
+        state.EventsEvaluated == 6 && state.AnomaliesObserved == 4);
+}
+
+void TestGameCorrections(TestLog& log)
+{
+    const std::array<int32_t, 3> stopped{};
+    const std::array<int32_t, 3> excessiveVelocity{10001, 0, 0};
+    OAC_GAME_DETECTOR_RESULT result{};
+    auto correctionFixture = ValidGameIntegrationFixture();
+    OAC_GAME_DETECTOR_STATE correctionState{};
+    const bool correctionReady = OacGameInitializeDetector(
+        &correctionFixture.Rules,
+        &correctionFixture.Session,
+        &correctionState) != 0;
+    const std::array<int64_t, 3> minimumPosition{
+        std::numeric_limits<int64_t>::min(),
+        std::numeric_limits<int64_t>::min(),
+        std::numeric_limits<int64_t>::min()};
+    const auto correctionBaseline = CreateMovementEvent(
+        correctionFixture.Session, 100, 1000, minimumPosition, stopped);
+    const bool baselineAccepted = OacGameEvaluateMovement(
+        &correctionFixture.Rules,
+        &correctionBaseline,
+        sizeof(correctionBaseline),
+        0,
+        &correctionState,
+        &result) == OAC_GAME_DECISION_ACCEPT;
+    const std::array<int64_t, 3> maximumPosition{
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::max(),
+        std::numeric_limits<int64_t>::max()};
+    const auto correction = CreateMovementEvent(
+        correctionFixture.Session,
+        101,
+        1100,
+        maximumPosition,
+        stopped,
+        OAC_GAME_MOVEMENT_SERVER_CORRECTION);
+    log.Expect("server correction handles full-range coordinates safely",
+        correctionReady && baselineAccepted &&
+        OacGameEvaluateMovement(
+            &correctionFixture.Rules,
+            &correction,
+            sizeof(correction),
+            0,
+            &correctionState,
+            &result) == OAC_GAME_DECISION_ACCEPT &&
+        result.Findings == 0 &&
+        result.ObservedDeltaMillimeters[0] ==
+            std::numeric_limits<uint64_t>::max() &&
+        result.ObservedDeltaMillimeters[1] ==
+            std::numeric_limits<uint64_t>::max() &&
+        result.ObservedDeltaMillimeters[2] ==
+            std::numeric_limits<uint64_t>::max());
+    const auto invalidCorrection = CreateMovementEvent(
+        correctionFixture.Session,
+        102,
+        1200,
+        maximumPosition,
+        excessiveVelocity,
+        OAC_GAME_MOVEMENT_SERVER_CORRECTION);
+    log.Expect("server correction still enforces reported velocity",
+        OacGameEvaluateMovement(
+            &correctionFixture.Rules,
+            &invalidCorrection,
+            sizeof(invalidCorrection),
+            0,
+            &correctionState,
+            &result) == OAC_GAME_DECISION_REVIEW &&
+        result.Findings == OAC_GAME_FINDING_REPORTED_VELOCITY &&
+        result.BehaviorRisk == 300);
+}
+
+void TestGameIntegration(TestLog& log)
+{
+    TestGameEventContract(log);
+    TestGameMovementRules(log);
+    TestGameMovementDetector(log);
+    TestGameCorrections(log);
+}
+
 OAC_SIGNED_POLICY ValidSignedPolicy()
 {
     OAC_SIGNED_POLICY policy{};
@@ -4347,6 +4947,7 @@ int main()
     TestSignerClassification(log);
     TestPolicyEvaluation(log);
     TestGameManifest(log);
+    TestGameIntegration(log);
     TestSignedPolicy(log);
     TestBackendSession(log);
     return log.ExitCode();

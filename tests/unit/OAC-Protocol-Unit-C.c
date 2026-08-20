@@ -1,4 +1,5 @@
 #include "../../shared/oac_ipc.h"
+#include "../../shared/oac_game.h"
 #include "../../shared/oac_manifest.h"
 #include "../../shared/oac_signed_policy.h"
 #include "../../shared/protocol/oac_v5.h"
@@ -33,6 +34,10 @@ _Static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56,
     "C service launch response layout changed");
 _Static_assert(sizeof(OAC_GAME_MANIFEST) == 512,
     "C game-manifest layout changed");
+_Static_assert(sizeof(OAC_GAME_MOVEMENT_EVENT) == 256,
+    "C game movement-event layout changed");
+_Static_assert(sizeof(OAC_GAME_DETECTOR_RESULT) == 96,
+    "C game detector-result layout changed");
 _Static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE,
     "C manifest digest size drifted from the production protocol");
 _Static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96,

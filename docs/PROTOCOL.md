@@ -295,7 +295,7 @@ authenticated diagnostic session; it is not advertised as a production capabilit
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
 request/response validation, evidence and snapshot correlation, the session transition matrix,
 hostile binary and UTF-16 event payloads, and backend record, replay, lease, queue, and
-acknowledgement behavior. The current Debug and Release runs pass `623/623`; the driver-backed VM
+acknowledgement behavior. The current Debug and Release runs pass `663/663`; the driver-backed VM
 campaign remains a separate runtime gate for each coherent kernel/runtime milestone.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,

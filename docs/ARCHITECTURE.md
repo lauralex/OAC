@@ -2,7 +2,9 @@
 
 **Status:** WP-01 through WP-12 accepted locally and in the disposable-VM campaign at implementation
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
-passed.
+passed. WP-13's portable game-event contract and reference server detector passed local and PR #19
+hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`; production game and
+backend deployment remain external integration work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -24,6 +26,11 @@ flowchart TD
     S -->|"assign before resume"| J["Kill-on-close job"]
     J -->|"owns target tree"| T
     S -->|"bounded incremental sampling"| T
+
+    G["Authoritative game server"] -->|"canonical movement event"| R["Reference behavior detector"]
+    Q["Replay identity and offset"] --> R
+    B -.->|"endpoint risk"| R
+    R -->|"typed decision"| A["Game policy and adjudication"]
 
     X["Elevated OAC-Client"] -->|"diagnostic protocol; LabMode=1 only"| D
     X -->|"system, target, policy, and HWID scans"| W["Documented Windows user-mode APIs"]
@@ -48,6 +55,7 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | `shared/oac_signed_policy.*` | Canonical policy record, strict validation, scope, update decisions, and persistent high-water state | C-compatible service and driver-free test module; detached signature verification remains in user mode |
 | `shared/oac_manifest.*` | Canonical manifest and rollback records, strict validation, exact build identity, and monotonic high-water decisions | C-compatible service and driver-free test module; signature verification remains in user mode |
 | `shared/oac_backend.*` | Canonical backend-session records, strict correlation and replay validation, acknowledgement decisions, and bounded failure states | Transport-independent C contract; no network library or reusable client secret |
+| `shared/oac_game.*` | Canonical authoritative movement records, replay-safe detector state, bounded rules, and explainable risk decisions | Portable C game/server contract; no network transport, game-engine dependency, or account identifier |
 | `OAC-Service/backend.*` | Fixed-capacity service queue, lease lifecycle, driver binding digest, transport interface, and deterministic test backend | The included implementation is a protected test double; production transport remains a deployment component |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
@@ -68,6 +76,28 @@ the Windows data they own:
 
 This is an internal responsibility split, not a new detection claim. The diagnostic ABI, finding
 categories, scan ordering, and report contract remain unchanged.
+
+## Game and server boundary
+
+`shared/oac_game.*` is intentionally independent of the driver, service, and Windows APIs. An
+authenticated game server creates canonical records from its own authoritative state. Each record
+is scoped to one game, build, backend session, match, player pseudonym, replay digest, monotonic
+sequence, server tick, and replay offset. The schema carries no raw account identifier and makes no
+claim that an unauthenticated caller becomes authoritative by setting a flag.
+
+The reference detector stores one bounded state record per complete identity tuple. It rejects
+replayed, reordered, malformed, or foreign-scope input without mutation; reports forward sequence
+and tick gaps; and checks authoritative X/Y and Z displacement against tick-scaled speed and
+tolerance limits. Reported velocity is checked independently. A server correction bypasses only
+the position envelope. Typed behavior risk and separately supplied endpoint risk remain visible in
+the result and combine through saturated, policy-selected thresholds. Endpoint-only risk remains
+observational; server-side behavior risk is required for Review or Reject.
+
+This implements the portable interface, event schema, replay state, and one server-side invariant
+required by WP-13. It is a reference integration boundary, not a deployed backend. Authentication,
+durable partitioned state, replay storage, game-engine adaptation, ruleset signing, additional
+gameplay detectors, and adjudication remain production responsibilities described in
+[`GAME_INTEGRATION.md`](GAME_INTEGRATION.md).
 
 ## Production service boundary
 
@@ -206,11 +236,12 @@ named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Implement the production authenticated transport and remote persistence behind the existing
-   backend-session interface.
-2. Add one game integration and a server-side detector against the existing signed-build, policy,
-   backend-session, and evidence contracts.
-3. Complete production signing, compatibility, release, privacy, and operational controls.
+1. Complete WP-14 production release engineering: signing and HLK planning, reproducible metadata,
+   an SBOM, symbol handling, update and key-rotation design, support scope, privacy, and runbooks.
+2. Implement production authenticated transport, durable backend and replay persistence, and a real
+   game-engine adapter behind the existing contracts.
+3. Add game-specific combat, economy, input, and protocol detectors and validate them against
+   representative workloads and the supported-platform matrix.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

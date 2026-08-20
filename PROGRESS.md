@@ -8,9 +8,12 @@
 
 WP-01 through WP-12 form the accepted production-control, target-lifetime, evidence,
 bounded-scheduling, signed-build, signed-policy, backend-session, and scanner-organization
-foundation. Implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` passed the
-commit-bound disposable-VM and standard Driver Verifier campaign described below. Status still
-distinguishes source, evidence, and the remaining production-hardening work packages.
+foundation. WP-13 adds a portable game/server event interface and one deterministic behavioral
+detector. Windows-runtime implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c`
+passed the commit-bound disposable-VM and standard Driver Verifier campaign described below.
+Portable game-integration implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`
+passed local and PR #19 hosted acceptance. Status still distinguishes source, evidence, and the
+remaining production-hardening work.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -27,7 +30,7 @@ distinguishes source, evidence, and the remaining production-hardening work pack
 | WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
 | WP-11 Backend session abstraction | Implemented; VM tested | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, target-tree failure policy, and fresh recovery passed on the named campaign |
 | WP-12 Scanner modularization | Implemented; tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, Driver Verifier, and PR #18 hosted gates passed |
-| WP-13 Game/server integration | Planned | No current game-specific server detector |
+| WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
@@ -99,6 +102,10 @@ The current source is organized around these implementation areas:
 - `OAC-Service/backend.hpp` and `OAC-Service/backend.cpp`: the nonblocking transport interface,
   fixed-capacity evidence queue, lease lifecycle, driver binding digest, and protected deterministic
   test backend. A production network transport and remote persistence are intentionally not supplied.
+- `shared/oac_game.h` and `shared/oac_game.c`: portable canonical game-event construction, strict
+  server identity and replay validation, bounded movement policy, persistent detector state, and
+  explainable behavior/endpoint risk decisions. They have no Windows, driver, transport, game-engine,
+  or account-system dependency.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
   service-owned target job, bounded two-channel evidence polling, central policy enforcement, and
@@ -126,7 +133,7 @@ the verified manifest digest as correlated session identity rather than parsing 
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `623/623` in each configuration, including client-option parsing and shared text helpers plus the existing backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `663/663` in each configuration, including canonical game events, replay state, movement and velocity detection, risk integration, client-option parsing, shared text helpers, backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Current Clang-Tidy | All eight `OAC-Client` translation units passed with warnings treated as errors; the four changed service translation units also passed targeted analysis |
@@ -139,6 +146,22 @@ the verified manifest digest as correlated session identity rather than parsing 
 `actionlint` and PSScriptAnalyzer are not installed on this workstation. The current CI workflow
 does not yet provide CodeQL or SBOM-generation evidence. These are explicit remaining CI and
 static-analysis gaps rather than implied passes.
+
+## Current game/server integration validation
+
+The portable WP-13 interface constructs exact authoritative movement records scoped to game,
+build, backend session, match, player pseudonym, replay identity, sequence, and server tick. The
+reference detector rejects replay and state corruption without mutation, reports forward gaps,
+checks tick-scaled horizontal and vertical movement plus reported velocity, handles explicit server
+corrections, and combines bounded behavior risk with a separately retained endpoint-risk input.
+
+Debug and Release driver-free suites pass `663/663`, including hostile schema, identity, flags,
+reserved data, rules, replay, coordinate extremes, threshold, saturation, and partial-output cases.
+Implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83` also passed the PR #19 hosted
+Debug/Release builds, `663/663` tests in each configuration, and repository validation. WP-13
+changes no driver, service, installer, or privileged Windows runtime behavior. Rebuilding a
+disposable VM would add no meaningful evidence for this portable server-side slice, so the existing
+WP-01 through WP-12 VM/Verifier evidence remains unchanged and no new VM campaign was run.
 
 ## Current scanner-modularization validation
 
@@ -180,10 +203,14 @@ bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
 
 - Hosted Debug/Release build, unit, and repository-validation checks remain required for each merge.
 - A real online admission boundary still requires a production authenticated transport, backend
-  service, credential lifecycle, and durable evidence storage behind the implemented interface.
+  service, credential lifecycle, and durable evidence and replay storage behind the implemented
+  interfaces.
 - WP-12 scanner modularization has commit-bound runtime acceptance and PR #18 hosted acceptance.
   The refactor does not add or relax a scanner capability.
-- WP-13 game/server integration is the next product milestone.
+- WP-13 game/server integration passed its local and PR #19 hosted acceptance. A real game still
+  needs an authenticated adapter, signed rules, representative workload tuning, and additional
+  gameplay detectors.
+- WP-14 production release engineering is the next work package.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
