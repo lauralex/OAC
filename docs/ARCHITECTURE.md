@@ -1,8 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-09 accepted at commit
-`535730c6828f723c2e42a4721db885fab94505aa` on the named Windows 11 build 26100 campaign. WP-10
-signed-policy source and driver-free tests are complete; runtime acceptance is pending.
+**Status:** WP-01 through WP-10 accepted at commit
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -155,7 +154,7 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; acceptance commit
-`535730c6828f723c2e42a4721db885fab94505aa` passed the driver-backed target-live, cleanup,
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 

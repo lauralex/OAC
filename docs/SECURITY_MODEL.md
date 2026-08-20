@@ -1,7 +1,7 @@
 # OAC security model
 
-**Status:** WP-01 through WP-09 controls accepted at commit
-`535730c6828f723c2e42a4721db885fab94505aa` on the named Windows 11 build 26100 campaign
+**Status:** WP-01 through WP-10 controls accepted at commit
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -35,9 +35,9 @@ trust boundaries, adversaries, and failure behavior.
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
-| Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, signed-policy, mode, signer-state, hostile-input, and text-independence tests pass; signed-policy runtime acceptance is pending |
+| Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests plus integrated signed-policy VM execution pass |
 | Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the current 544-test driver-free suite covers the record and decision rules |
-| Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Source and driver-free tests complete; package and restricted-service VM acceptance pending |
+| Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Driver-free, signed-package, restricted-service, and Driver Verifier acceptance passed at the named commit |
 | Backend | No authenticated production trust boundary exists | Planned |
 
 ## Production authority
@@ -145,9 +145,9 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   RAII guard so every successful suspension has an explicit resume and cleanup fallback.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-09 statements combine source behavior with one exact platform acceptance run. The
+WP-01 through WP-10 statements combine source behavior with one exact platform acceptance run. The
 current driver-backed production, service installation, lifecycle, race, job/liveness, typed
-evidence, local-policy, signed-manifest, snapshot, and standard Driver Verifier campaign passed on
+evidence, signed-policy, signed-manifest, snapshot, and standard Driver Verifier campaign passed on
 Windows 11 build 26100 with zero crash events and minidumps. That result does not replace the broader
 supported-platform, effective-right, compatibility, or production-deployment matrix.
 

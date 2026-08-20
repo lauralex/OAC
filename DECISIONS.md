@@ -194,7 +194,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-015: Authenticate policy and preserve update history
 
-- **Status:** Accepted; source implemented, runtime acceptance pending
+- **Status:** Accepted; source and runtime tested
 - **Date:** 2026-08-20
 - **Decision:** Use one fixed 1024-byte canonical policy record with a detached SHA-256/RSA CMS
   signature and an independent protected signer pin. Bind its rule set and deployment mode to an
@@ -208,6 +208,6 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   package. Policy files remain local deployment inputs; remote delivery, signer rotation metadata,
   backend admission, durable evidence acknowledgement, and game-specific module approval remain
   separate work. Driver-free validation and isolated-package fixtures cover canonical validation,
-  scope, expiry, replay, equivocation, explicit rollback, and emergency revocation; restricted-
-  service and Driver Verifier acceptance must still be recorded before this decision is called
-  runtime tested.
+  scope, expiry, replay, equivocation, explicit rollback, and emergency revocation. Acceptance
+  commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the signed-policy positive and negative cases
+  in the complete Windows 11 build 26100 restricted-service and Driver Verifier campaign.

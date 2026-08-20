@@ -17,16 +17,15 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the complete
+  Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-09. The campaign covered signed-manifest authorization and rejection, target-tree
-  containment after service crash and graceful stop, session-loss reporting, retained-alert
-  delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots, and the
-  independent health loop with bounded target sampling. The service applies an authenticated typed
-  policy to both evidence channels. The canonical record binds game/build/channel scope and
-  component compatibility, expires, prevents replay, and supports explicit rollback authorization
-  and emergency revocation. Manifest-key rotation, authenticated backend leases, and authenticated
-  upload are not implemented.
+  WP-01 through WP-10. The campaign covered signed-manifest and signed-policy authorization and
+  rejection, target-tree containment after service crash and graceful stop, session-loss reporting,
+  retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots,
+  and the independent health loop with bounded target sampling. The canonical policy binds typed
+  rules and deployment mode to game/build/channel scope and component compatibility, expires,
+  prevents replay, and supports explicit rollback authorization and emergency revocation.
+  Manifest-key rotation, authenticated backend leases, and authenticated upload are not implemented.
 
 ## Repository map
 

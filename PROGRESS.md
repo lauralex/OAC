@@ -6,9 +6,9 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-09 form the accepted production-control, target-lifetime, local-evidence,
-bounded-scheduling, local-policy, and signed-build foundation. Acceptance commit
-`535730c6828f723c2e42a4721db885fab94505aa` passed the commit-bound disposable-VM and standard
+WP-01 through WP-10 form the accepted production-control, target-lifetime, local-evidence,
+bounded-scheduling, signed-build, and signed-policy foundation. Acceptance commit
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the commit-bound disposable-VM and standard
 Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
 remaining production-hardening work packages.
 
@@ -24,7 +24,7 @@ remaining production-hardening work packages.
 | WP-07 Bounded service scheduler | Implemented; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
 | WP-08 Rule catalog and policy engine | Implemented; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
 | WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
-| WP-10 Signed policy/update model | Implemented; runtime acceptance pending | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and driver-free tests are present; one coherent VM/Verifier campaign remains |
+| WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
 | WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
 | WP-12 Scanner modularization | Planned | Refactor behind tests; preserve lab behavior |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
@@ -130,42 +130,44 @@ static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed on Microsoft Windows
+Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
-and Secure Boot disabled. The host accepted 34 exact result records, including five protocol
+and Secure Boot disabled. The host accepted 40 exact result records, including five protocol
 executions and thirteen client, launcher, and preflight executions. The campaign accepted two
 standard-user launches authorized by the canonical signed manifest and rejected modified,
-wrong-build, expired, and rollback manifests before launch. Both successful launches completed
-creation-time binding, exact-handle confirmation, verified job assignment, and first-thread resume.
+wrong-build, expired, and rollback manifests before launch. It also rejected signed policies with
+the wrong signer, scope, validity period, or rollback state, accepted one explicitly authorized
+rollback, and committed an emergency revocation before refusing startup. Both successful launches
+completed creation-time binding, exact-handle confirmation, verified job assignment, and first-
+thread resume.
 The campaign also proved service-crash and graceful-stop termination of target and child, SCM
 recovery, idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to
 `1` to `2` with reasons `none`, `service exit`, and `requested shutdown`.
 
-The restricted service completed 27 queued scan slices and six full memory/thread sweeps with no
-coalesced, cancelled, or failed slice. It inspected 1,246 memory regions and 21 threads; the maximum
-measured health-loop delay was 391 ms, scan-slice duration 80.048 ms, and thread suspension 0.172 ms,
-all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone races, the
-armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed. Final
+The restricted service completed 38 queued scan slices and eight full memory/thread sweeps with no
+coalesced, cancelled, or failed slice. It inspected 1,504 memory regions and 24 threads; the maximum
+measured health-loop delay was 313 ms, scan-slice duration 151.377 ms, and thread suspension
+36.533 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
+races, the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed. Final
 Verifier flags were clear, both OAC services were stopped, the VM was Off with zero adapters, and
-there were zero crash events and zero minidumps. The driver-free unit suite passed `518/518`; each
+there were zero crash events and zero minidumps. The driver-free unit suite passed `544/544`; each
 of four driver-backed protocol executions passed `130/130`. Driver Verifier recorded three OAC
 loads and three unloads. The validated result ZIP SHA-256 was
-`FC7ADD186A62614573AFD4F9045C4828DAE27E7EA372C305339C7AFA82570CAF`.
+`6167983A1A6C8CAB53F1F603D816F5D015C9CE9C96CC5AE9F300386B51D7BA49`.
 
 The exact status, host-manifest, and host-log SHA-256 values are
-`490363A2FEF52F38865DC847B6CDB06C9FB6C064A4814DC7D460D6BA08D0AF24`,
-`3CA2EB1E1434BF2513E870DDB90FB9F4BC17D9B3520E6150AB871A1F44A4F3DD`, and
-`6B7A8E24DA289530CD1E69ED3866B83467C9F4E2F43DF1DBE84FA162DB100BFD`.
+`74AD825D4AE6DDCD8424468390BC3667C3F3B078C5FB9737DC768369C72DCCA9`,
+`B3FF7DDF83792C0CC2AB1A2EDB5FE42089DFC1DFF2B02445F9BA4D8EE3CAF381`, and
+`3FC226F15632E1296CE243611844DAC8A66FB1D5125E6A396730D767482A0754`.
 After recording these values, the exact VM, checkpoint, VHD/AVHDX, package, seed, and full campaign
-directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO and the compact
-hash-verified success bundle remain.
+directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO remains.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-10 requires the pending package and VM/Verifier campaign to confirm signature, scope, expiry,
-  rollback, emergency-revocation, install/remove, and recovery behavior in the restricted service.
+- WP-11 requires an authenticated backend session, lease, evidence acknowledgement, upload, and
+  replay model before local authorization can become an online admission boundary.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
