@@ -166,11 +166,11 @@ admission service.
 
 ## Validation
 
-The accepted source baseline has passed clean Debug and Release builds, driver-free regression
-tests, PREfast, solution-wide static analysis, package and signing checks, and a networkless Windows
-11 build 26100 campaign under standard Driver Verifier. Runtime claims are limited to the exact
-commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they are not a general
-Windows, HVCI/VBS, hardware, or game-compatibility certification.
+The current accepted implementation has passed clean Debug and Release builds, driver-free
+regression tests, PREfast, solution-wide static analysis, package and signing checks, and a
+networkless Windows 11 build 26100 campaign under standard Driver Verifier. Runtime claims are
+limited to the exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
+are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification.
 
 ## Responsible use
 

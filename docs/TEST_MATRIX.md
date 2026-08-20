@@ -1,8 +1,7 @@
 # OAC test matrix
 
-**Status:** WP-01 through WP-10 tested at acceptance commit
-`865a9f9b5d665c1c69fcf8b39486722046d6647f` on Windows 11 build 26100. WP-11
-backend-session source and tests are present; current VM acceptance is pending.
+**Status:** WP-01 through WP-11 tested at implementation commit
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 build 26100.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -98,7 +97,8 @@ driver-gate coverage plus these production cases:
   sequence once, and returns the same terminal result on repetition.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
-standard Driver Verifier run passed on acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f`.
+standard Driver Verifier run passed at implementation commit
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1`.
 Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
@@ -146,21 +146,21 @@ negative effective-service-right and reboot-persistence cases remain pending.
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `865a9f9`; 40 exact results, overall pass, Secure Boot disabled |
-| Standard Driver Verifier on `OAC.sys` | Tested at `865a9f9`; three loads/unloads, reset and inactive at completion, zero crashes/dumps |
-| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `865a9f9`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `47c0400`; 41 exact formal results, overall pass, Secure Boot disabled |
+| Standard Driver Verifier on `OAC.sys` | Tested at `47c0400`; reset and inactive at completion, zero crashes/dumps |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `47c0400`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| Production per-file cleanup/close and concurrent status teardown | Tested at `865a9f9` in baseline and Verifier protocol executions |
-| Live-target tombstone and later retirement | Tested at `865a9f9` in the driver-backed lifecycle suite |
-| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `865a9f9` |
-| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `865a9f9`; both process trees terminated and SCM recovery completed |
-| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `865a9f9`; four driver-backed executions passed `130/130` |
-| Independent health loop and bounded target worker | Tested at `865a9f9`; 38 slices, eight sweeps, 313 ms maximum health delay, 151.377 ms maximum slice duration, 36.533 ms maximum suspension, no failed/cancelled slice |
-| Typed policy rules and service evaluation | Current driver-free tests pass `608/608`; integrated signed-policy service execution passed at `865a9f9` |
-| Signed main-executable manifest authorization | Tested at `865a9f9`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
-| Signed policy selection and update state | Tested at `865a9f9`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
-| Backend session, lease, replay, and acknowledgement failure | Source and driver-free tests present; commit-bound VM/Verifier execution pending |
-| Renamed, signed normal post-start driver image | Tested at `865a9f9`; armed callback and persistent latch both observed |
+| Production per-file cleanup/close and concurrent status teardown | Tested at `47c0400` in baseline and Verifier protocol executions |
+| Live-target tombstone and later retirement | Tested at `47c0400` in the driver-backed lifecycle suite |
+| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `47c0400` |
+| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `47c0400`; both process trees terminated and SCM recovery completed |
+| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `47c0400`; four driver-backed executions passed |
+| Independent health loop and bounded target worker | Tested at `47c0400`; 36 slices, eight sweeps, 360 ms maximum health delay, 55.677 ms maximum slice duration, 5.219 ms maximum suspension |
+| Typed policy rules and service evaluation | Current driver-free tests pass `608/608`; integrated signed-policy service execution passed at `47c0400` |
+| Signed main-executable manifest authorization | Tested at `47c0400`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
+| Signed policy selection and update state | Tested at `47c0400`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
+| Backend session, lease, replay, and acknowledgement failure | Tested at `47c0400`; replay was rejected, withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
+| Renamed, signed normal post-start driver image | Tested at `47c0400`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
 | Secure Boot production signing path | Planned |
@@ -177,20 +177,20 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | Work package | Required evidence | State |
 |---|---|---|
 | WP-00 baseline/docs/tests | Debug/Release, pure units, schema/link checks, factual records | Local and VM-tested foundation; hosted CI required at merge |
-| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `865a9f9` |
-| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `865a9f9`; broader negative matrix remains |
-| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `865a9f9`; literal numeric PID reuse remains unforced |
-| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `865a9f9` |
-| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `865a9f9` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `608/608`, Debug/Release, PREfast, driver-backed `130/130`, and VM/Verifier acceptance passed at `865a9f9` |
-| WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy, restricted-service metrics, and Driver Verifier passed at `865a9f9` |
-| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `608/608`, static analysis, repository checks, and integrated VM/Verifier execution passed at `865a9f9` |
-| WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `865a9f9` |
-| WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `865a9f9` |
-| WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Source and driver-free tests present; VM/Verifier acceptance pending |
+| WP-01 production protocol | ABI/layout, negotiation, exact message types, hostile flags/sizes/payloads | Unit and driver-backed cases tested at `47c0400` |
+| WP-02 service/device identity | Standard-user status, admin direct-open denial, service open, IPC ACL, install/remove | Exercised acceptance tested at `47c0400`; broader negative matrix remains |
+| WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `47c0400`; literal numeric PID reuse remains unforced |
+| WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `47c0400` |
+| WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `47c0400` |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `608/608`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `47c0400` |
+| WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy baseline, restricted-service metrics, and Driver Verifier passed at `47c0400` |
+| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `608/608`, static analysis, repository checks, and integrated VM/Verifier execution passed at `47c0400` |
+| WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
+| WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
+| WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
 
-WP-02 through WP-10 acceptance is recorded only for the exact commit and environment above. WP-11
-remains source-present until its named campaign completes.
+WP-02 through WP-11 acceptance is recorded only for the exact implementation commit and environment
+above.
 
 ## Exact host commands
 

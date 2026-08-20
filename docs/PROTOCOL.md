@@ -3,10 +3,10 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest authorization,
-signed-policy authorization, job/liveness, typed evidence, bounded service scheduling, and
-integrated policy evaluation.
+implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the Windows 11 build
+26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest and
+signed-policy authorization, backend failure/recovery, job/liveness, typed evidence, bounded service
+scheduling, and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -295,8 +295,8 @@ authenticated diagnostic session; it is not advertised as a production capabilit
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
 request/response validation, evidence and snapshot correlation, the session transition matrix,
 hostile binary and UTF-16 event payloads, and backend record, replay, lease, queue, and
-acknowledgement behavior. The current Debug and Release runs pass `608/608`; VM acceptance remains
-a separate runtime gate.
+acknowledgement behavior. The current Debug and Release runs pass `608/608`; the driver-backed VM
+campaign remains a separate runtime gate for each coherent kernel/runtime milestone.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,
 bidirectional diagnostic/production per-file exclusion, same-file and wrong-file authorization, a
@@ -306,10 +306,10 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-10 suite passed
-at acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` on Windows 11 Pro build
-26100. Each of four driver-backed protocol executions passed `130/130`, including the transport
-cases, under the baseline and standard Driver Verifier phases.
+sessions cannot invoke production launch operations. The complete WP-01 through WP-11 suite passed
+at implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 Pro build
+26100. Four driver-backed protocol executions passed under the baseline and standard Driver
+Verifier phases.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
@@ -327,8 +327,8 @@ modified, wrong-build, expired, and rollback manifest rejection in the same name
 The same production boundary rejected policies with the wrong signature, scope, validity period, or
 rollback state, accepted one explicitly authorized rollback, and persisted emergency revocation
 before refusing startup. The current VM harness additionally contains bounded backend replay,
-withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; their
-commit-bound execution is pending.
+withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; all passed
+in the named campaign.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 38 completed slices, eight completed sweeps, a 313 ms maximum
-health-loop delay, a 151.377 ms maximum slice duration, and no failed or cancelled slice.
+thread-resume metrics. It accepted 36 completed slices, eight completed sweeps, a 360 ms maximum
+health-loop delay, a 55.677 ms maximum slice duration, and no failed or cancelled slice.

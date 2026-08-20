@@ -214,7 +214,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-016: Bind production authority to a bounded backend session
 
-- **Status:** Accepted; source implemented, runtime acceptance pending
+- **Status:** Accepted; implemented and VM tested
 - **Date:** 2026-08-20
 - **Decision:** Define one strict, transport-independent backend contract for session open, lease
   renewal, evaluated-evidence delivery, and monotonic acknowledgement. Derive a nonzero binding
@@ -231,5 +231,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   service/backend session without moving time, policy, or network work into the kernel. The test
   backend can exercise replay and loss paths reproducibly, but it is not a deployable admission
   service or durable evidence store. Production transport, backend operations, credential lifecycle,
-  retention, and remote policy delivery remain separate deployment work. Driver-free validation
-  passes; the commit-bound disposable-VM and Driver Verifier campaign remains the acceptance gate.
+  retention, and remote policy delivery remain separate deployment work. Implementation commit
+  `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed driver-free validation and the complete
+  Windows 11 build 26100 disposable-VM and Driver Verifier campaign, including nonce replay,
+  withheld-acknowledgement and lease-loss containment, and fresh-session recovery.

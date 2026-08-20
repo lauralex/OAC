@@ -6,10 +6,9 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-10 form the accepted production-control, target-lifetime, local-evidence,
-bounded-scheduling, signed-build, and signed-policy foundation. The WP-11 backend-session source is
-implemented and awaiting its commit-bound runtime campaign. Acceptance commit
-`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the commit-bound disposable-VM and standard
+WP-01 through WP-11 form the accepted production-control, target-lifetime, evidence,
+bounded-scheduling, signed-build, signed-policy, and backend-session foundation. Implementation
+commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the commit-bound disposable-VM and standard
 Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
 remaining production-hardening work packages.
 
@@ -26,7 +25,7 @@ remaining production-hardening work packages.
 | WP-08 Rule catalog and policy engine | Implemented; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
 | WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
 | WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
-| WP-11 Backend session abstraction | Source present; acceptance pending | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, and failure-policy tests are implemented; final VM/Verifier evidence is pending |
+| WP-11 Backend session abstraction | Implemented; VM tested | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, target-tree failure policy, and fresh recovery passed on the named campaign |
 | WP-12 Scanner modularization | Planned | Refactor behind tests; preserve lab behavior |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
@@ -137,45 +136,39 @@ static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed on Microsoft Windows
+Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
-and Secure Boot disabled. The host accepted 40 exact result records, including five protocol
-executions and thirteen client, launcher, and preflight executions. The campaign accepted two
-standard-user launches authorized by the canonical signed manifest and rejected modified,
-wrong-build, expired, and rollback manifests before launch. It also rejected signed policies with
-the wrong signer, scope, validity period, or rollback state, accepted one explicitly authorized
-rollback, and committed an emergency revocation before refusing startup. Both successful launches
-completed creation-time binding, exact-handle confirmation, verified job assignment, and first-
-thread resume.
-The campaign also proved service-crash and graceful-stop termination of target and child, SCM
-recovery, idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to
-`1` to `2` with reasons `none`, `service exit`, and `requested shutdown`.
+and Secure Boot disabled. The host accepted 41 exact formal result records, including five protocol
+executions and thirteen client, launcher, and preflight executions. The campaign rejected a reused
+backend nonce, terminated the target tree after withheld acknowledgement and lease loss, and then
+established a fresh healthy session after each failure. It also reran the signed-manifest,
+signed-policy, production-boundary, session-loss, removal/reinstall, driver-gate, kernel-provenance,
+retained-evidence, snapshot, and bounded-scheduler cases.
 
-The restricted service completed 38 queued scan slices and eight full memory/thread sweeps with no
-coalesced, cancelled, or failed slice. It inspected 1,504 memory regions and 24 threads; the maximum
-measured health-loop delay was 313 ms, scan-slice duration 151.377 ms, and thread suspension
-36.533 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
-races, the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed. Final
-Verifier flags were clear, both OAC services were stopped, the VM was Off with zero adapters, and
-there were zero crash events and zero minidumps. The driver-free unit suite passed `544/544`; each
-of four driver-backed protocol executions passed `130/130`. Driver Verifier recorded three OAC
-loads and three unloads. The validated result ZIP SHA-256 was
-`6167983A1A6C8CAB53F1F603D816F5D015C9CE9C96CC5AE9F300386B51D7BA49`.
+The restricted service completed 36 queued scan slices and eight full memory/thread sweeps. It
+inspected 1,416 memory regions and 24 threads; maximum measured health-loop delay was 360 ms,
+scan-slice duration 55.677 ms, and thread suspension 5.219 ms. Standard Driver Verifier completed
+with its settings reset and inactive. Both OAC services were stopped, the VM was Off with zero
+network adapters, and there were zero crash events and zero minidumps. Debug and Release
+driver-free unit runs passed `608/608`. The validated result ZIP SHA-256 was
+`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`.
 
-The exact status, host-manifest, and host-log SHA-256 values are
-`74AD825D4AE6DDCD8424468390BC3667C3F3B078C5FB9737DC768369C72DCCA9`,
-`B3FF7DDF83792C0CC2AB1A2EDB5FE42089DFC1DFF2B02445F9BA4D8EE3CAF381`, and
-`3FC226F15632E1296CE243611844DAC8A66FB1D5125E6A396730D767482A0754`.
-After recording these values, the exact VM, checkpoint, VHD/AVHDX, package, seed, and full campaign
-directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO remains.
+The exact final-status, host-manifest, and host-log SHA-256 values are
+`847FBF55EC666E0F24A6B84A517189712AF0026D8FF873A862D554219C6E883F`,
+`42AE14F78D8EF67D17C55CC0F6E9A184EE4850970972B2F32E266AE4A783B268`, and
+`B593DC19960E555B6EEDF2FC3797CC1DAEA2FB9BDC94EE67BBD05AF3C3A66EDB`.
+The compact evidence bundle is stored outside the repository at
+`C:\OAC-VM\evidence\20260820-47c0400-backend-session`. After preserving and verifying that bundle,
+the exact disposable VM, checkpoint, VHD/AVHDX, package, seed, and full campaign directory were
+deleted.
 
 ## Current pending gates
 
-- Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
-  required for each merge.
-- WP-11 requires its final commit-bound VM/Verifier campaign. A real online admission boundary still
-  requires a production authenticated transport, backend service, and durable evidence storage
-  behind the implemented interface.
+- Hosted Debug/Release build, unit, and repository-validation checks remain required for each merge.
+- A real online admission boundary still requires a production authenticated transport, backend
+  service, credential lifecycle, and durable evidence storage behind the implemented interface.
+- WP-12 scanner modularization is the next planned engineering package; it must preserve the current
+  scanner behavior and evidence contracts behind existing tests.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation

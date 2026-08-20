@@ -1,8 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-10 accepted at commit
-`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign. The WP-11
-backend-session source is implemented; its commit-bound VM acceptance is pending.
+**Status:** WP-01 through WP-11 accepted at implementation commit
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on the named Windows 11 build 26100 campaign.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -161,8 +160,8 @@ until the process-exit callback clears the target reference and retires that tom
 transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
-The service drives the serialized production transaction; acceptance commit
-`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the driver-backed target-live, cleanup,
+The service drives the serialized production transaction; implementation commit
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 
@@ -185,7 +184,8 @@ Overwrite gaps remain explicit. The service now exposes evaluated records throug
 backend transport interface and advances acknowledgement only after correlated backend delivery;
 the included transport is an in-process authenticated test double rather than durable remote
 persistence. The retained-alert, event-gap, overflow, concurrent-publication, and snapshot-paging
-paths passed the named baseline and Driver Verifier campaign.
+paths and the backend replay, acknowledgement-loss, lease-loss, and recovery boundaries passed the
+named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 

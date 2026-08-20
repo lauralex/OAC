@@ -17,19 +17,16 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the complete
+  Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-10. The campaign covered signed-manifest and signed-policy authorization and
-  rejection, target-tree containment after service crash and graceful stop, session-loss reporting,
-  retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots,
-  and the independent health loop with bounded target sampling. The canonical policy binds typed
-  rules and deployment mode to game/build/channel scope and component compatibility, expires,
-  prevents replay, and supports explicit rollback authorization and emergency revocation.
-  The current WP-11 source adds a strict backend transport interface, protected deterministic test
-  backend, nonce replay rejection, bounded leases, fixed evidence queuing, acknowledgement, and
-  driver-session binding; its commit-bound VM acceptance is pending. A production network
-  transport, backend service, durable remote storage, manifest-key rotation, and remote policy
-  delivery are not implemented.
+  WP-01 through WP-11. The campaign covered signed-manifest and signed-policy authorization and
+  rejection, backend replay rejection, target-tree containment after acknowledgement and lease
+  loss, fresh-session recovery, service-crash and graceful-stop containment, session-loss
+  reporting, retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module
+  snapshots, and bounded target sampling. The backend milestone provides a strict transport
+  interface, protected deterministic test backend, bounded leases, fixed evidence queuing,
+  acknowledgement, and driver-session binding. A production network transport, backend service,
+  durable remote storage, manifest-key rotation, and remote policy delivery are not implemented.
 
 ## Repository map
 
