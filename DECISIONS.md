@@ -211,3 +211,27 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   scope, expiry, replay, equivocation, explicit rollback, and emergency revocation. Acceptance
   commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the signed-policy positive and negative cases
   in the complete Windows 11 build 26100 restricted-service and Driver Verifier campaign.
+
+## ADR-016: Bind production authority to a bounded backend session
+
+- **Status:** Accepted; implemented and VM tested
+- **Date:** 2026-08-20
+- **Decision:** Define one strict, transport-independent backend contract for session open, lease
+  renewal, evaluated-evidence delivery, and monotonic acknowledgement. Derive a nonzero binding
+  digest from the backend session identity and both open nonces, require it in the production driver
+  claim, and return it through every correlated status response. Keep the service queue fixed,
+  require a currently healthy lease before launch, advance retained-alert acknowledgement only
+  after backend acknowledgement, and make replay, malformed correlation, lease loss or revocation,
+  queue exhaustion, and acknowledgement timeout terminal service outcomes. Keep network I/O and
+  authentication entirely behind a nonblocking service transport interface; provide a protected
+  deterministic test double rather than embedding a reusable credential or choosing a production
+  network library in this milestone.
+- **Consequence:** The local control path now has explicit online-session semantics and preserves
+  evidence until a correlated backend acknowledgement. Driver authority is tied to the exact
+  service/backend session without moving time, policy, or network work into the kernel. The test
+  backend can exercise replay and loss paths reproducibly, but it is not a deployable admission
+  service or durable evidence store. Production transport, backend operations, credential lifecycle,
+  retention, and remote policy delivery remain separate deployment work. Implementation commit
+  `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed driver-free validation and the complete
+  Windows 11 build 26100 disposable-VM and Driver Verifier campaign, including nonce replay,
+  withheld-acknowledgement and lease-loss containment, and fresh-session recovery.

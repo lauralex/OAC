@@ -1151,6 +1151,13 @@ static __inline OAC_V5_VALIDATION OacV5ValidateClaimRequest(
     {
         return OAC_V5_INVALID_VALUE;
     }
+    if ((Request->Mode == OAC_V5_SESSION_PRODUCTION) !=
+        !OacV5BufferIsZero(
+            Request->BackendBindingSha256,
+            sizeof(Request->BackendBindingSha256)))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
     return OAC_V5_VALID;
 }
 
@@ -1432,7 +1439,14 @@ static __inline OAC_V5_VALIDATION OacV5ValidateStatusResponse(
     {
         return OAC_V5_INVALID_VALUE;
     }
-    return Response->Reserved == 0
-        ? OAC_V5_VALID
-        : OAC_V5_INVALID_RESERVED;
+    if ((Response->SessionMode != OAC_V5_SESSION_PRODUCTION &&
+         Response->SessionMode != OAC_V5_SESSION_DIAGNOSTIC) ||
+        ((Response->SessionMode == OAC_V5_SESSION_PRODUCTION) !=
+         !OacV5BufferIsZero(
+             Response->BackendBindingSha256,
+             sizeof(Response->BackendBindingSha256))))
+    {
+        return OAC_V5_INVALID_VALUE;
+    }
+    return OAC_V5_VALID;
 }

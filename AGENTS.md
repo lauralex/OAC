@@ -10,22 +10,23 @@
   it. `docs/hardening-plan.md` is proposed work, not proof of implementation.
 - `shared/protocol/oac_v5.h` is the current production-control ABI header. It defines strict typed
   negotiation, claim, status, launch-ticket, evidence-read, and snapshot messages over a session
-  bound to one file object and one referenced service process. `shared/oac_protocol.h` is the
-  diagnostic compatibility ABI.
+  bound to one file object, one referenced service process, and a nonzero backend binding for
+  production claims. `shared/oac_protocol.h` is the diagnostic compatibility ABI.
 - The restricted service owns one serialized launch transaction: authenticate a local interactive
   client, resolve and lock one executable, arm a bounded driver ticket, create the process suspended
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the complete
+  Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-10. The campaign covered signed-manifest and signed-policy authorization and
-  rejection, target-tree containment after service crash and graceful stop, session-loss reporting,
-  retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots,
-  and the independent health loop with bounded target sampling. The canonical policy binds typed
-  rules and deployment mode to game/build/channel scope and component compatibility, expires,
-  prevents replay, and supports explicit rollback authorization and emergency revocation.
-  Manifest-key rotation, authenticated backend leases, and authenticated upload are not implemented.
+  WP-01 through WP-11. The campaign covered signed-manifest and signed-policy authorization and
+  rejection, backend replay rejection, target-tree containment after acknowledgement and lease
+  loss, fresh-session recovery, service-crash and graceful-stop containment, session-loss
+  reporting, retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module
+  snapshots, and bounded target sampling. The backend milestone provides a strict transport
+  interface, protected deterministic test backend, bounded leases, fixed evidence queuing,
+  acknowledgement, and driver-session binding. A production network transport, backend service,
+  durable remote storage, manifest-key rotation, and remote policy delivery are not implemented.
 
 ## Repository map
 
@@ -33,7 +34,7 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session, typed policy enforcement, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
+| `OAC-Service/` | Restricted production controller; owns the backend and driver sessions, typed policy enforcement, evidence queue, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
@@ -41,6 +42,7 @@
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
 | `shared/oac_signed_policy.*` | Canonical signed policy, update decision, and persistent cache-state contracts |
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
+| `shared/oac_backend.*` | Canonical backend-session, lease, evidence, acknowledgement, replay, and failure-state contracts |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |

@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define OAC_SIGNED_POLICY_SCHEMA 1u
+#define OAC_SIGNED_POLICY_SCHEMA 2u
 #define OAC_SIGNED_POLICY_SIZE 1024u
 #define OAC_POLICY_CACHE_SCHEMA 1u
 #define OAC_POLICY_CACHE_SIZE 160u
@@ -87,7 +87,11 @@ typedef struct OAC_SIGNED_POLICY_TAG
     uint64_t RollbackFromPolicyVersion;
     uint8_t RollbackFromPolicySha256[OAC_POLICY_HASH_SIZE];
     OAC_POLICY_RULE Rules[OAC_POLICY_RULE_COUNT];
-    uint8_t Reserved[24];
+    uint32_t BackendLeaseMilliseconds;
+    uint32_t BackendGraceMilliseconds;
+    uint32_t BackendRenewalMilliseconds;
+    uint32_t EvidenceAckTimeoutMilliseconds;
+    uint8_t Reserved[8];
 } OAC_SIGNED_POLICY;
 
 typedef struct OAC_POLICY_CACHE_STATE_TAG
@@ -152,7 +156,10 @@ OAC_SIGNED_POLICY_STATIC_ASSERT(
 OAC_SIGNED_POLICY_STATIC_ASSERT(offsetof(OAC_SIGNED_POLICY, Rules) == 216,
     "signed policy rules moved");
 OAC_SIGNED_POLICY_STATIC_ASSERT(
-    offsetof(OAC_SIGNED_POLICY, Reserved) == 1000,
+    offsetof(OAC_SIGNED_POLICY, BackendLeaseMilliseconds) == 1000,
+    "signed policy backend parameters moved");
+OAC_SIGNED_POLICY_STATIC_ASSERT(
+    offsetof(OAC_SIGNED_POLICY, Reserved) == 1016,
     "signed policy reserved bytes moved");
 OAC_SIGNED_POLICY_STATIC_ASSERT(
     sizeof(OAC_POLICY_CACHE_STATE) == OAC_POLICY_CACHE_SIZE,

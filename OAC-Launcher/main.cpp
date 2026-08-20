@@ -229,6 +229,7 @@ const wchar_t* ServiceStageText(OAC_SERVICE_FAILURE_STAGE stage) noexcept
     case OAC_SERVICE_STAGE_PIPE_THREAD: return L"control worker startup";
     case OAC_SERVICE_STAGE_RUNTIME: return L"control worker runtime";
     case OAC_SERVICE_STAGE_TARGET_JOB: return L"target job initialization";
+    case OAC_SERVICE_STAGE_BACKEND: return L"backend session initialization";
     default: return L"unknown stage";
     }
 }
@@ -304,6 +305,8 @@ const wchar_t* LaunchDetailText(uint32_t detail) noexcept
         return L"game manifest is outside its validity period";
     case OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK:
         return L"game manifest was superseded or changed without a new sequence";
+    case OAC_IPC_LAUNCH_DETAIL_BACKEND:
+        return L"backend lease does not permit a launch";
     default:
         return L"";
     }
@@ -505,6 +508,7 @@ int SendRequest(ULONG requestType)
             response.DriverCapabilities != 0 ||
             response.SessionLossSequence != 0 ||
             response.LastSessionLossReason != 0 || response.Reserved != 0 ||
+            !OacIpcBackendStatusAreZero(&response.Backend) ||
             !OacIpcScanMetricsAreZero(&response.Scanner))
         {
             std::wcerr << L"OACService returned an invalid rejection.\n";
@@ -528,6 +532,7 @@ int SendRequest(ULONG requestType)
          (response.LastSessionLossReason == OAC_V5_REVOKE_NONE)) ||
         ((response.SessionLossSequence != 0) !=
          ((response.StatusFlags & OAC_IPC_STATUS_PRIOR_SESSION_LOSS) != 0)) ||
+        !OacIpcBackendStatusValid(&response.Backend) ||
         !OacIpcScanMetricsValid(&response.Scanner) ||
         (((response.StatusFlags & OAC_IPC_STATUS_SCANNER_ACTIVE) != 0) !=
          (response.Scanner.State == OAC_IPC_SCAN_READY ||
@@ -546,6 +551,16 @@ int SendRequest(ULONG requestType)
                << L"; flags=0x" << response.StatusFlags << std::dec
                << L"; session-loss-sequence=" << response.SessionLossSequence
                << L"; last-session-loss=" << response.LastSessionLossReason
+               << L"; backend-lease=" << response.Backend.LeaseState
+               << L"; backend-flags=0x" << std::hex
+               << response.Backend.Flags << std::dec
+               << L"; backend-lease-sequence="
+               << response.Backend.LeaseSequence
+               << L"; backend-acknowledged="
+               << response.Backend.AcknowledgedSequence
+               << L"; backend-pending="
+               << response.Backend.PendingEvidence
+               << L"; backend-error=" << response.Backend.LastError
                << L"; scan-state=" << response.Scanner.State
                << L"; scan-queued=" << response.Scanner.SlicesQueued
                << L"; scan-completed=" << response.Scanner.SlicesCompleted

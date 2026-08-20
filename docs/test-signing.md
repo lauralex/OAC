@@ -107,17 +107,18 @@ installation ISO to create a
 networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
 boundary including crash and graceful-stop standard-user launches with job-owned child processes,
 signed-manifest acceptance and modified/wrong-build/expired/rollback rejection, signed-policy
-signature/scope/expiry/rollback/emergency cases, protocol lifecycle/race, baseline scanner, and
-standard Driver Verifier phases,
+signature/scope/expiry/rollback/emergency cases, backend replay/acknowledgement/lease failure and
+recovery, protocol lifecycle/race, baseline scanner, and standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
 because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
-campaign passed at acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` on Windows 11 Pro
-build 26100: 40 exact results, signed-manifest and signed-policy positive and negative cases,
-verified job ownership and process-tree termination, bounded scheduler latency and coverage,
-typed-evidence integration, snapshot coverage, standard Driver Verifier, zero crash events and
-minidumps, and final containment were accepted. The validated result ZIP SHA-256 was
-`6167983A1A6C8CAB53F1F603D816F5D015C9CE9C96CC5AE9F300386B51D7BA49`.
+campaign passed at implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 Pro
+build 26100: 41 exact formal results, signed-manifest and signed-policy positive and negative cases,
+backend replay rejection, acknowledgement-loss and lease-loss containment, fresh-session recovery,
+verified job ownership, bounded scheduler coverage, typed-evidence and snapshot paths, standard
+Driver Verifier, zero crash events and minidumps, and final containment were accepted. The validated
+result ZIP SHA-256 was
+`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`.
 This is evidence for that exact test configuration, not authorization to use test signing outside
 a disposable VM.
 

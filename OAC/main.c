@@ -201,6 +201,7 @@ NTSTATUS OacDeviceControl(
                 DeviceObject,
                 stack->FileObject,
                 OAC_V5_SESSION_DIAGNOSTIC,
+                NULL,
                 FALSE,
                 &snapshot);
             if (NT_SUCCESS(status))
@@ -410,6 +411,8 @@ NTSTATUS OacDeviceControl(
                 ((const OAC_V5_CLAIM_REQUEST*)buffer)->Header.RequestId;
             const ULONG mode =
                 ((const OAC_V5_CLAIM_REQUEST*)buffer)->Mode;
+            const UCHAR* backendBindingSha256 =
+                ((const OAC_V5_CLAIM_REQUEST*)buffer)->BackendBindingSha256;
             OAC_SESSION_SNAPSHOT snapshot;
             POAC_V5_CLAIM_RESPONSE response;
 
@@ -417,6 +420,7 @@ NTSTATUS OacDeviceControl(
                 DeviceObject,
                 stack->FileObject,
                 mode,
+                backendBindingSha256,
                 TRUE,
                 &snapshot);
             if (!NT_SUCCESS(status)) break;
@@ -866,10 +870,15 @@ NTSTATUS OacDeviceControl(
             response->SessionLossSequence = snapshot.SessionLossSequence;
             response->LastSessionLossReason =
                 snapshot.LastSessionLossReason;
+            response->SessionMode = snapshot.Mode;
             RtlCopyMemory(
                 response->ManifestSha256,
                 snapshot.ManifestSha256,
                 sizeof(response->ManifestSha256));
+            RtlCopyMemory(
+                response->BackendBindingSha256,
+                snapshot.BackendBindingSha256,
+                sizeof(response->BackendBindingSha256));
             bytesWritten = sizeof(*response);
             status = STATUS_SUCCESS;
         }

@@ -84,6 +84,7 @@ $specialTests = [ordered]@{
     'production-policy-rollback' = @(3)
     'production-policy-authorized-rollback' = @(0)
     'production-policy-emergency-revoke' = @(3)
+    'production-backend-replay' = @(3)
     'baseline-driver-gate-create' = @(0)
     'baseline-driver-gate-trigger' = @(0)
     'baseline-driver-gate-detection' = @(1)
@@ -93,6 +94,7 @@ $specialTests = [ordered]@{
 $summaryNames = @(
     'baseline-driver-gate-summary',
     'production-boundary-summary',
+    'backend-boundary-summary',
     'removal-boundary-summary',
     'baseline-provenance-summary')
 $auxiliaryExitValues = [ordered]@{
@@ -106,6 +108,14 @@ $auxiliaryExitValues = [ordered]@{
     'production-service-crash' = @(0)
     'production-service-graceful-stop' = @(0)
     'production-service-post-stop-start' = @(0)
+    'production-backend-recovery-disable' = @(0)
+    'production-backend-recovery-restore' = @(0)
+    'production-backend-ack-start' = @(0)
+    'production-backend-ack-launch' = @(0)
+    'production-backend-ack-recovered' = @(0)
+    'production-backend-lease-start' = @(0)
+    'production-backend-lease-launch' = @(0)
+    'production-backend-lease-recovered' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
     'baseline-target-stop' = @(0)
@@ -152,6 +162,14 @@ $baselineAuxiliaryRequired = @(
     'production-service-crash',
     'production-service-graceful-stop',
     'production-service-post-stop-start',
+    'production-backend-recovery-disable',
+    'production-backend-recovery-restore',
+    'production-backend-ack-start',
+    'production-backend-ack-launch',
+    'production-backend-ack-recovered',
+    'production-backend-lease-start',
+    'production-backend-lease-launch',
+    'production-backend-lease-recovered',
     'production-legacy-driver-start',
     'baseline-sc-stop',
     'baseline-target-stop')
@@ -713,6 +731,7 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
             'rollback_policy_rejected',
             'authorized_rollback_policy_accepted',
             'emergency_policy_rejected',
+            'backend_boundary_passed',
             'crash_processes_terminated',
             'graceful_processes_terminated',
             'service_crash_restarted',
@@ -815,6 +834,18 @@ function Assert-DriverGateSummary([object]$Summary, [string]$Context) {
     }
 }
 
+function Assert-BackendBoundarySummary([object]$Summary, [string]$Context) {
+    foreach ($name in @(
+            'pass',
+            'replay_rejected',
+            'acknowledgement_loss_terminated_tree',
+            'acknowledgement_loss_recovered',
+            'lease_loss_terminated_tree',
+            'lease_loss_recovered')) {
+        Assert-Boolean $Summary $name $Context
+    }
+}
+
 function Assert-BaselineResults([object]$Campaign) {
     $results = [IO.Path]::Combine($Campaign.Root, 'results')
     $resultsItem = Get-Item -LiteralPath $results -Force `
@@ -897,6 +928,8 @@ function Assert-BaselineResults([object]$Campaign) {
             Assert-ProductionBoundarySummary $summary $name
         } elseif ($name -ceq 'baseline-driver-gate-summary') {
             Assert-DriverGateSummary $summary $name
+        } elseif ($name -ceq 'backend-boundary-summary') {
+            Assert-BackendBoundarySummary $summary $name
         } else {
             Assert-Boolean $summary 'pass' $name
         }
@@ -1935,6 +1968,8 @@ function Test-EvidenceArchive([string]$EvidenceDirectory, [object]$StableProbe) 
                 Assert-ProductionBoundarySummary $summary $name
             } elseif ($name -ceq 'baseline-driver-gate-summary') {
                 Assert-DriverGateSummary $summary $name
+            } elseif ($name -ceq 'backend-boundary-summary') {
+                Assert-BackendBoundarySummary $summary $name
             } else {
                 Assert-Boolean $summary 'pass' $name
             }

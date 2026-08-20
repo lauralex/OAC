@@ -25,7 +25,9 @@ typedef struct OAC_SESSION_SNAPSHOT_TAG
     ULONGLONG TargetProcessId;
     ULONGLONG SessionLossSequence;
     ULONG LastSessionLossReason;
+    ULONG Mode;
     UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
+    UCHAR BackendBindingSha256[OAC_V5_BACKEND_BINDING_DIGEST_SIZE];
 } OAC_SESSION_SNAPSHOT, *POAC_SESSION_SNAPSHOT;
 
 typedef struct OAC_DEVICE_EXTENSION_TAG
@@ -72,6 +74,8 @@ NTSTATUS OacSessionClaim(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PFILE_OBJECT FileObject,
     _In_ ULONG Mode,
+    _In_reads_opt_(OAC_V5_BACKEND_BINDING_DIGEST_SIZE)
+        const UCHAR* BackendBindingSha256,
     _In_ BOOLEAN RequireNegotiation,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot);
 

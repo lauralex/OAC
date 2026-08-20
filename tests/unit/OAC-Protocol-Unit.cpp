@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include "../../shared/oac_protocol.h"
+#include "../../shared/oac_backend.h"
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_lease.h"
 #include "../../shared/oac_manifest.h"
@@ -21,6 +22,7 @@
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 #include "../../shared/protocol/oac_test.h"
+#include "../../OAC-Service/backend.hpp"
 #include "../../OAC-Service/target_scanner.hpp"
 
 extern "C" int OacV5CProbe(void);
@@ -55,7 +57,8 @@ static_assert(offsetof(OAC_SNAPSHOT_RESPONSE, Records) == 152);
 static_assert(std::is_standard_layout_v<OAC_IPC_LAUNCH_REQUEST>);
 static_assert(sizeof(OAC_IPC_SCAN_METRICS) == 184);
 static_assert(offsetof(OAC_IPC_SCAN_METRICS, State) == 168);
-static_assert(sizeof(OAC_IPC_RESPONSE) == 256);
+static_assert(sizeof(OAC_IPC_BACKEND_STATUS) == 32);
+static_assert(sizeof(OAC_IPC_RESPONSE) == 288);
 static_assert(sizeof(OAC_IPC_LAUNCH_REQUEST) == 1056);
 static_assert(offsetof(OAC_IPC_LAUNCH_REQUEST, ExecutablePath) == 32);
 static_assert(sizeof(OAC_IPC_LAUNCH_RESPONSE) == 56);
@@ -76,7 +79,12 @@ static_assert(std::is_standard_layout_v<OAC_SIGNED_POLICY>);
 static_assert(std::is_trivially_copyable_v<OAC_POLICY_CACHE_STATE>);
 static_assert(sizeof(OAC_SIGNED_POLICY) == 1024);
 static_assert(offsetof(OAC_SIGNED_POLICY, Rules) == 216);
+static_assert(offsetof(OAC_SIGNED_POLICY, BackendLeaseMilliseconds) == 1000);
 static_assert(sizeof(OAC_POLICY_CACHE_STATE) == 160);
+static_assert(sizeof(OAC_BACKEND_REQUEST_HEADER) == 88);
+static_assert(sizeof(OAC_BACKEND_OPEN_REQUEST) == 184);
+static_assert(sizeof(OAC_BACKEND_OPEN_RESPONSE) == 144);
+static_assert(sizeof(OAC_BACKEND_EVIDENCE_ITEM) == 584);
 
 namespace
 {
@@ -176,6 +184,10 @@ OAC_V5_CLAIM_REQUEST ValidClaimRequest()
         sizeof(request),
         OAC_V5_MESSAGE_CLAIM_SESSION);
     request.Mode = OAC_V5_SESSION_PRODUCTION;
+    std::fill(
+        std::begin(request.BackendBindingSha256),
+        std::end(request.BackendBindingSha256),
+        UCHAR{0xA5});
     return request;
 }
 
@@ -245,6 +257,11 @@ OAC_V5_STATUS_RESPONSE ValidStatusResponse()
     response.ConfigurationFlags = OAC_V5_CONFIG_DRIVER_GATE;
     response.RevokeReason = OAC_V5_REVOKE_NONE;
     response.ServiceProcessId = 100;
+    response.SessionMode = OAC_V5_SESSION_PRODUCTION;
+    std::fill(
+        std::begin(response.BackendBindingSha256),
+        std::end(response.BackendBindingSha256),
+        UCHAR{0xA5});
     return response;
 }
 
@@ -607,9 +624,9 @@ void TestBasicHelpers(TestLog& log)
     log.Expect("different session IDs", OacV5SessionIdEqual(&first, &other) == FALSE);
     log.Expect("null session ID is not zero", OacV5SessionIdIsZero(nullptr) == FALSE);
     log.Expect("production protocol exact revision",
-        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050005UL);
+        OAC_PRODUCTION_PROTOCOL_VERSION == 0x00050006UL);
     log.Expect("launcher-service protocol exact revision",
-        OAC_IPC_PROTOCOL_REVISION == 0x00010005u);
+        OAC_IPC_PROTOCOL_REVISION == 0x00010006u);
     log.Expect("compatibility alias selects production revision",
         OAC_V5_VERSION == OAC_PRODUCTION_PROTOCOL_VERSION);
     log.Expect("legacy production revision is rejected", OacV5ValidateVersion(
@@ -684,7 +701,7 @@ void TestServiceFailures(TestLog& log)
     log.Expect("service failure zero stage", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_NONE, ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure unknown stage", OacEncodeServiceFailure(
-        OAC_SERVICE_STAGE_TARGET_JOB + 1, ERROR_ACCESS_DENIED) == 0);
+        OAC_SERVICE_STAGE_BACKEND + 1, ERROR_ACCESS_DENIED) == 0);
     log.Expect("service failure zero error", OacEncodeServiceFailure(
         OAC_SERVICE_STAGE_IDENTITY, ERROR_SUCCESS) == 0);
     log.Expect("service failure oversized error", OacEncodeServiceFailure(
@@ -703,7 +720,7 @@ void TestServiceFailures(TestLog& log)
         OAC_SERVICE_FAILURE_ERROR_MASK
     };
     for (uint32_t expectedStage = OAC_SERVICE_STAGE_BOOTSTRAP;
-         expectedStage <= OAC_SERVICE_STAGE_TARGET_JOB;
+         expectedStage <= OAC_SERVICE_STAGE_BACKEND;
          ++expectedStage)
     {
         for (const uint32_t expectedError : errors)
@@ -728,7 +745,8 @@ void TestServiceFailures(TestLog& log)
             (OAC_SERVICE_STAGE_DRIVER_OPEN <<
                 OAC_SERVICE_FAILURE_STAGE_SHIFT),
         OAC_SERVICE_FAILURE_MAGIC |
-            (11u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
+            ((OAC_SERVICE_STAGE_BACKEND + 1u) <<
+                OAC_SERVICE_FAILURE_STAGE_SHIFT) |
             ERROR_ACCESS_DENIED,
         OAC_SERVICE_FAILURE_MAGIC |
             (15u << OAC_SERVICE_FAILURE_STAGE_SHIFT) |
@@ -911,7 +929,7 @@ void TestServiceLaunchMessages(TestLog& log)
     log.Expect("service launch rejection stage range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
     response.FailureStage = OAC_IPC_LAUNCH_STAGE_CREATE_PROCESS;
-    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK + 1;
+    response.FailureDetail = OAC_IPC_LAUNCH_DETAIL_BACKEND + 1;
     log.Expect("service launch rejection detail range", OacIpcValidateLaunchResponse(
         &response, sizeof(response), request.Header.RequestId) == 0);
 }
@@ -995,6 +1013,43 @@ void TestServiceScanMetrics(TestLog& log)
     log.Expect("scan deadline is bounded",
         !oac::CanInspectMemory(budget, progress, budget.deadline100ns) &&
         !oac::CanInspectThread(budget, progress, budget.deadline100ns));
+}
+
+void TestServiceBackendStatus(TestLog& log)
+{
+    OAC_IPC_BACKEND_STATUS status{};
+    log.Expect("zero backend status", OacIpcBackendStatusAreZero(
+        &status) != 0);
+    log.Expect("empty backend status is not active",
+        OacIpcBackendStatusValid(&status) == 0);
+
+    status.LeaseState = OAC_LEASE_HEALTHY;
+    status.Flags = OAC_IPC_BACKEND_AUTHENTICATED |
+        OAC_IPC_BACKEND_TEST_DOUBLE;
+    status.LeaseSequence = 1;
+    log.Expect("healthy backend status", OacIpcBackendStatusValid(
+        &status) != 0);
+    status.LeaseState = OAC_LEASE_DEGRADED;
+    log.Expect("degraded backend status", OacIpcBackendStatusValid(
+        &status) != 0);
+    status.LeaseState = OAC_LEASE_EXPIRED;
+    status.LastError = ERROR_TIMEOUT;
+    log.Expect("expired backend status names its failure",
+        OacIpcBackendStatusValid(&status) != 0);
+    status.LastError = ERROR_SUCCESS;
+    log.Expect("expired backend status requires an error",
+        OacIpcBackendStatusValid(&status) == 0);
+    status.LeaseState = OAC_LEASE_HEALTHY;
+    status.LastError = ERROR_INVALID_DATA;
+    log.Expect("healthy backend status rejects an error",
+        OacIpcBackendStatusValid(&status) == 0);
+    status.LastError = ERROR_SUCCESS;
+    status.Flags = OAC_IPC_BACKEND_TEST_DOUBLE;
+    log.Expect("backend status requires authentication",
+        OacIpcBackendStatusValid(&status) == 0);
+    status.Flags = OAC_IPC_BACKEND_AUTHENTICATED | 0x80000000u;
+    log.Expect("backend status rejects unknown flags",
+        OacIpcBackendStatusValid(&status) == 0);
 }
 
 struct SuspensionTargetContext
@@ -1135,8 +1190,25 @@ void TestClaimAndStatusRequests(TestLog& log)
     log.Expect("valid production claim", OacV5ValidateClaimRequest(
         &claim, sizeof(claim)) == OAC_V5_VALID);
     claim.Mode = OAC_V5_SESSION_DIAGNOSTIC;
+    std::fill(
+        std::begin(claim.BackendBindingSha256),
+        std::end(claim.BackendBindingSha256),
+        UCHAR{0});
     log.Expect("valid diagnostic claim", OacV5ValidateClaimRequest(
         &claim, sizeof(claim)) == OAC_V5_VALID);
+    claim = ValidClaimRequest();
+    std::fill(
+        std::begin(claim.BackendBindingSha256),
+        std::end(claim.BackendBindingSha256),
+        UCHAR{0});
+    log.Expect("production claim requires backend binding",
+        OacV5ValidateClaimRequest(
+            &claim, sizeof(claim)) == OAC_V5_INVALID_VALUE);
+    claim = ValidClaimRequest();
+    claim.Mode = OAC_V5_SESSION_DIAGNOSTIC;
+    log.Expect("diagnostic claim rejects backend binding",
+        OacV5ValidateClaimRequest(
+            &claim, sizeof(claim)) == OAC_V5_INVALID_VALUE);
     claim = ValidClaimRequest();
     claim.Mode = 0;
     log.Expect("claim invalid mode", OacV5ValidateClaimRequest(
@@ -1683,10 +1755,27 @@ void TestResponses(TestLog& log)
         OacV5ValidateStatusResponse(
             &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
     status = ValidStatusResponse();
-    status.Reserved = 1;
-    log.Expect("status rejects reserved liveness field",
+    status.SessionMode = 0;
+    log.Expect("status rejects invalid session mode",
         OacV5ValidateStatusResponse(
-            &status, sizeof(status)) == OAC_V5_INVALID_RESERVED);
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    std::fill(
+        std::begin(status.BackendBindingSha256),
+        std::end(status.BackendBindingSha256),
+        UCHAR{0});
+    log.Expect("production status requires backend binding",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_INVALID_VALUE);
+    status = ValidStatusResponse();
+    status.SessionMode = OAC_V5_SESSION_DIAGNOSTIC;
+    std::fill(
+        std::begin(status.BackendBindingSha256),
+        std::end(status.BackendBindingSha256),
+        UCHAR{0});
+    log.Expect("diagnostic status omits backend binding",
+        OacV5ValidateStatusResponse(
+            &status, sizeof(status)) == OAC_V5_VALID);
 }
 
 void TestCorrelationAndIds(TestLog& log)
@@ -3346,6 +3435,10 @@ OAC_SIGNED_POLICY ValidSignedPolicy()
     {
         std::copy(rules, rules + ruleCount, policy.Rules);
     }
+    policy.BackendLeaseMilliseconds = 6000;
+    policy.BackendGraceMilliseconds = 2000;
+    policy.BackendRenewalMilliseconds = 1000;
+    policy.EvidenceAckTimeoutMilliseconds = 5000;
     return policy;
 }
 
@@ -3444,7 +3537,37 @@ void TestSignedPolicy(TestLog& log)
     log.Expect("signed policy action range", OacSignedPolicyValidate(
         &invalid, sizeof(invalid), now, OAC_V5_VERSION,
         OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
-            OAC_SIGNED_POLICY_INVALID_RULES);
+             OAC_SIGNED_POLICY_INVALID_RULES);
+
+    invalid = policy;
+    invalid.BackendLeaseMilliseconds =
+        OAC_BACKEND_MIN_LEASE_MILLISECONDS - 1;
+    log.Expect("signed policy backend lease bound", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_OPERATION);
+    invalid = policy;
+    invalid.BackendGraceMilliseconds =
+        OAC_BACKEND_MAX_GRACE_MILLISECONDS + 1;
+    log.Expect("signed policy backend grace bound", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_OPERATION);
+    invalid = policy;
+    invalid.BackendRenewalMilliseconds = invalid.BackendLeaseMilliseconds;
+    log.Expect("signed policy backend renewal ordering",
+        OacSignedPolicyValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+                OAC_SIGNED_POLICY_INVALID_OPERATION);
+    invalid = policy;
+    invalid.EvidenceAckTimeoutMilliseconds =
+        OAC_BACKEND_MIN_ACK_TIMEOUT_MILLISECONDS - 1;
+    log.Expect("signed policy evidence acknowledgement bound",
+        OacSignedPolicyValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+                OAC_SIGNED_POLICY_INVALID_OPERATION);
 
     invalid = policy;
     invalid.Flags = OAC_SIGNED_POLICY_EMERGENCY_REVOKE;
@@ -3567,6 +3690,531 @@ void TestSignedPolicy(TestLog& log)
             1,
             &next) == OAC_POLICY_UPDATE_INVALID_STATE);
 }
+
+OAC_BACKEND_EVIDENCE_ITEM ValidBackendEvidenceItem(
+    const OAC_SIGNED_POLICY& policy,
+    uint64_t serviceSequence)
+{
+    OAC_BACKEND_EVIDENCE_ITEM item{};
+    item.Record = ValidEventRecord();
+    item.Record.ObservationSeverity = OAC_V5_OBSERVATION_CRITICAL;
+    item.Record.EvidenceFlags |= OAC_V5_EVIDENCE_CALLBACK_SOURCE;
+    item.Record.IngestionTimestamp100ns = item.Record.Timestamp100ns;
+    item.Record.ServiceSequence = serviceSequence;
+    if (!OacPolicyEvaluateRules(
+            policy.Mode,
+            policy.Rules,
+            policy.RuleCount,
+            &item.Record,
+            nullptr,
+            &item.Decision) ||
+        !OacPolicyApplyDecision(&item.Record, &item.Decision))
+    {
+        item = {};
+        return item;
+    }
+    item.SourceChannel = OAC_EVIDENCE_CHANNEL_ALERT;
+    return item;
+}
+
+void InitializeBackendRequestHeader(
+    OAC_BACKEND_REQUEST_HEADER& header,
+    uint32_t size,
+    uint32_t messageType,
+    uint64_t sequence,
+    uint64_t now,
+    bool sessionRequired)
+{
+    header = {};
+    header.Revision = OAC_BACKEND_PROTOCOL_REVISION;
+    header.Size = size;
+    header.MessageType = messageType;
+    header.RequestSequence = sequence;
+    std::fill(
+        std::begin(header.Nonce), std::end(header.Nonce), uint8_t{0x31});
+    if (sessionRequired)
+    {
+        std::fill(
+            std::begin(header.SessionId),
+            std::end(header.SessionId),
+            uint8_t{0x42});
+    }
+    header.IssuedAtUnixSeconds = now;
+    header.ExpiresAtUnixSeconds = now + 30;
+}
+
+OAC_BACKEND_OPEN_REQUEST ValidBackendOpenRequest(uint64_t now)
+{
+    OAC_BACKEND_OPEN_REQUEST request{};
+    InitializeBackendRequestHeader(
+        request.Header,
+        sizeof(request),
+        OAC_BACKEND_MESSAGE_OPEN_SESSION,
+        1,
+        now,
+        false);
+    std::fill(std::begin(request.GameId), std::end(request.GameId), uint8_t{1});
+    std::fill(std::begin(request.BuildId), std::end(request.BuildId), uint8_t{2});
+    std::fill(
+        std::begin(request.PolicyId), std::end(request.PolicyId), uint8_t{3});
+    std::fill(
+        std::begin(request.PolicySha256),
+        std::end(request.PolicySha256),
+        uint8_t{4});
+    request.MaximumLeaseMilliseconds = 4000;
+    request.MaximumGraceMilliseconds = 2000;
+    request.RenewalIntervalMilliseconds = 1000;
+    request.EvidenceAckTimeoutMilliseconds = 2000;
+    return request;
+}
+
+void InitializeBackendResponseHeader(
+    OAC_BACKEND_RESPONSE_HEADER& header,
+    uint32_t size,
+    uint32_t messageType,
+    const OAC_BACKEND_REQUEST_HEADER& request,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+{
+    header = {};
+    header.Revision = OAC_BACKEND_PROTOCOL_REVISION;
+    header.Size = size;
+    header.MessageType = messageType;
+    header.RequestSequence = request.RequestSequence;
+    header.Result = OAC_BACKEND_RESULT_ACCEPTED;
+    std::fill(
+        std::begin(header.SessionId),
+        std::end(header.SessionId),
+        uint8_t{0x42});
+    std::copy(
+        requestNonceSha256,
+        requestNonceSha256 + OAC_BACKEND_DIGEST_SIZE,
+        header.RequestNonceSha256);
+}
+
+OAC_BACKEND_OPEN_RESPONSE ValidBackendOpenResponse(
+    const OAC_BACKEND_OPEN_REQUEST& request,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+{
+    OAC_BACKEND_OPEN_RESPONSE response{};
+    InitializeBackendResponseHeader(
+        response.Header,
+        sizeof(response),
+        OAC_BACKEND_MESSAGE_OPEN_SESSION,
+        request.Header,
+        requestNonceSha256);
+    std::fill(
+        std::begin(response.ServerNonce),
+        std::end(response.ServerNonce),
+        uint8_t{0x53});
+    response.LeaseSequence = 1;
+    response.LeaseMilliseconds = request.MaximumLeaseMilliseconds;
+    response.GraceMilliseconds = request.MaximumGraceMilliseconds;
+    response.RenewalIntervalMilliseconds =
+        request.RenewalIntervalMilliseconds;
+    return response;
+}
+
+void TestBackendRecords(TestLog& log, const OAC_SIGNED_POLICY& policy)
+{
+    constexpr uint64_t now = 1000000;
+    auto open = ValidBackendOpenRequest(now);
+    log.Expect("backend open request accepts canonical fields",
+        OacBackendValidateOpenRequest(&open, sizeof(open), now) != 0);
+    auto invalidOpen = open;
+    invalidOpen.Header.Flags = 1;
+    log.Expect("backend open request rejects flags",
+        OacBackendValidateOpenRequest(
+            &invalidOpen, sizeof(invalidOpen), now) == 0);
+    invalidOpen = open;
+    invalidOpen.Header.SessionId[0] = 1;
+    log.Expect("backend open request rejects an existing session",
+        OacBackendValidateOpenRequest(
+            &invalidOpen, sizeof(invalidOpen), now) == 0);
+    invalidOpen = open;
+    invalidOpen.Header.IssuedAtUnixSeconds =
+        now + OAC_BACKEND_CLOCK_SKEW_SECONDS + 1;
+    invalidOpen.Header.ExpiresAtUnixSeconds =
+        invalidOpen.Header.IssuedAtUnixSeconds + 1;
+    log.Expect("backend open request rejects excessive clock skew",
+        OacBackendValidateOpenRequest(
+            &invalidOpen, sizeof(invalidOpen), now) == 0);
+    invalidOpen = open;
+    invalidOpen.Header.ExpiresAtUnixSeconds =
+        invalidOpen.Header.IssuedAtUnixSeconds;
+    log.Expect("backend open request requires a nonempty lifetime",
+        OacBackendValidateOpenRequest(
+            &invalidOpen, sizeof(invalidOpen), now) == 0);
+    log.Expect("backend open request requires a current clock",
+        OacBackendValidateOpenRequest(&open, sizeof(open), 0) == 0);
+    invalidOpen = open;
+    std::fill(
+        std::begin(invalidOpen.PolicySha256),
+        std::end(invalidOpen.PolicySha256),
+        uint8_t{});
+    log.Expect("backend open request requires policy identity",
+        OacBackendValidateOpenRequest(
+            &invalidOpen, sizeof(invalidOpen), now) == 0);
+
+    auto edgeTime = ValidBackendOpenRequest(UINT64_MAX - 10);
+    edgeTime.Header.IssuedAtUnixSeconds = UINT64_MAX - 5;
+    edgeTime.Header.ExpiresAtUnixSeconds = UINT64_MAX;
+    log.Expect("backend request time check is overflow safe",
+        OacBackendValidateOpenRequest(
+            &edgeTime, sizeof(edgeTime), UINT64_MAX - 10) != 0);
+
+    std::array<uint8_t, OAC_BACKEND_DIGEST_SIZE> requestDigest{};
+    requestDigest.fill(0x61);
+    auto openResponse = ValidBackendOpenResponse(open, requestDigest.data());
+    log.Expect("backend open response accepts exact correlation",
+        OacBackendValidateOpenResponse(
+            &open,
+            &openResponse,
+            sizeof(openResponse),
+            requestDigest.data()) != 0);
+    auto invalidOpenResponse = openResponse;
+    invalidOpenResponse.Header.SessionId[0] = 0;
+    std::fill(
+        std::begin(invalidOpenResponse.Header.SessionId),
+        std::end(invalidOpenResponse.Header.SessionId),
+        uint8_t{});
+    log.Expect("backend open response requires a session identity",
+        OacBackendValidateOpenResponse(
+            &open,
+            &invalidOpenResponse,
+            sizeof(invalidOpenResponse),
+            requestDigest.data()) == 0);
+    invalidOpenResponse = openResponse;
+    invalidOpenResponse.EvidenceAcknowledgedThrough = 1;
+    log.Expect("backend open response cannot pre-acknowledge evidence",
+        OacBackendValidateOpenResponse(
+            &open,
+            &invalidOpenResponse,
+            sizeof(invalidOpenResponse),
+            requestDigest.data()) == 0);
+    invalidOpenResponse = openResponse;
+    invalidOpenResponse.RenewalIntervalMilliseconds /= 2;
+    log.Expect("backend open response cannot rewrite renewal policy",
+        OacBackendValidateOpenResponse(
+            &open,
+            &invalidOpenResponse,
+            sizeof(invalidOpenResponse),
+            requestDigest.data()) == 0);
+
+    OAC_BACKEND_RENEW_REQUEST renewal{};
+    InitializeBackendRequestHeader(
+        renewal.Header,
+        sizeof(renewal),
+        OAC_BACKEND_MESSAGE_RENEW_LEASE,
+        2,
+        now,
+        true);
+    renewal.CurrentLeaseSequence = 1;
+    log.Expect("backend renewal request accepts canonical fields",
+        OacBackendValidateRenewRequest(
+            &renewal, sizeof(renewal), now) != 0);
+    OAC_BACKEND_RENEW_RESPONSE renewed{};
+    InitializeBackendResponseHeader(
+        renewed.Header,
+        sizeof(renewed),
+        OAC_BACKEND_MESSAGE_RENEW_LEASE,
+        renewal.Header,
+        requestDigest.data());
+    renewed.LeaseSequence = 2;
+    renewed.LeaseMilliseconds = 4000;
+    renewed.GraceMilliseconds = 2000;
+    renewed.RenewalIntervalMilliseconds = 1000;
+    log.Expect("backend renewal response advances the lease",
+        OacBackendValidateRenewResponse(
+            &renewal,
+            &renewed,
+            sizeof(renewed),
+            requestDigest.data(),
+            4000,
+            2000,
+            1000) != 0);
+    auto invalidRenewed = renewed;
+    invalidRenewed.LeaseSequence = renewal.CurrentLeaseSequence;
+    log.Expect("backend renewal response rejects replayed leases",
+        OacBackendValidateRenewResponse(
+            &renewal,
+            &invalidRenewed,
+            sizeof(invalidRenewed),
+            requestDigest.data(),
+            4000,
+            2000,
+            1000) == 0);
+    invalidRenewed = renewed;
+    invalidRenewed.RenewalIntervalMilliseconds /= 2;
+    log.Expect("backend renewal cannot rewrite renewal policy",
+        OacBackendValidateRenewResponse(
+            &renewal,
+            &invalidRenewed,
+            sizeof(invalidRenewed),
+            requestDigest.data(),
+            4000,
+            2000,
+            1000) == 0);
+
+    const auto item = ValidBackendEvidenceItem(policy, 1);
+    OAC_BACKEND_EVIDENCE_METADATA metadata{};
+    InitializeBackendRequestHeader(
+        metadata.Header,
+        sizeof(metadata),
+        OAC_BACKEND_MESSAGE_UPLOAD_EVIDENCE,
+        3,
+        now,
+        true);
+    std::array<uint8_t, OAC_BACKEND_DIGEST_SIZE> binding{};
+    binding.fill(0x71);
+    std::copy(binding.begin(), binding.end(), metadata.BindingSha256);
+    metadata.FirstServiceSequence = 1;
+    metadata.LastServiceSequence = 1;
+    metadata.RecordCount = 1;
+    log.Expect("backend evidence batch accepts canonical records",
+        OacBackendValidateEvidenceBatch(
+            &metadata,
+            sizeof(metadata),
+            &item,
+            1,
+            now,
+            binding.data()) != 0);
+    auto invalidMetadata = metadata;
+    invalidMetadata.LastServiceSequence = 2;
+    log.Expect("backend evidence batch rejects sequence gaps",
+        OacBackendValidateEvidenceBatch(
+            &invalidMetadata,
+            sizeof(invalidMetadata),
+            &item,
+            1,
+            now,
+            binding.data()) == 0);
+    invalidMetadata = metadata;
+    invalidMetadata.FirstServiceSequence = UINT64_MAX;
+    invalidMetadata.LastServiceSequence = UINT64_MAX;
+    invalidMetadata.RecordCount = 2;
+    std::array<OAC_BACKEND_EVIDENCE_ITEM, 2> overflowItems{item, item};
+    log.Expect("backend evidence sequence range is overflow safe",
+        OacBackendValidateEvidenceBatch(
+            &invalidMetadata,
+            sizeof(invalidMetadata),
+            overflowItems.data(),
+            overflowItems.size(),
+            now,
+            binding.data()) == 0);
+    auto invalidItem = item;
+    invalidItem.Decision.RuleId ^= 1;
+    log.Expect("backend evidence binds the policy decision",
+        OacBackendValidateEvidenceBatch(
+            &metadata,
+            sizeof(metadata),
+            &invalidItem,
+            1,
+            now,
+            binding.data()) == 0);
+
+    OAC_BACKEND_UPLOAD_RESPONSE upload{};
+    InitializeBackendResponseHeader(
+        upload.Header,
+        sizeof(upload),
+        OAC_BACKEND_MESSAGE_UPLOAD_EVIDENCE,
+        metadata.Header,
+        requestDigest.data());
+    upload.AcknowledgedThrough = 1;
+    log.Expect("backend upload response acknowledges delivered evidence",
+        OacBackendValidateUploadResponse(
+            &metadata,
+            &upload,
+            sizeof(upload),
+            requestDigest.data(),
+            0) != 0);
+    upload.AcknowledgedThrough = 2;
+    log.Expect("backend upload response rejects undelivered acknowledgement",
+        OacBackendValidateUploadResponse(
+            &metadata,
+            &upload,
+            sizeof(upload),
+            requestDigest.data(),
+            0) == 0);
+}
+
+void TestBackendSession(TestLog& log)
+{
+    log.Expect("backend policy accepts bounded intervals",
+        OacBackendPolicyValid(4000, 2000, 1000, 2000) != 0);
+    log.Expect("backend policy rejects renewal at lease boundary",
+        OacBackendPolicyValid(4000, 2000, 4000, 2000) == 0);
+    log.Expect("backend policy rejects short acknowledgement timeout",
+        OacBackendPolicyValid(4000, 2000, 1000, 999) == 0);
+
+    std::array<uint8_t, OAC_BACKEND_DIGEST_SIZE> nonceDigest{};
+    nonceDigest[0] = 1;
+    OAC_BACKEND_REPLAY_WINDOW replayWindow{};
+    log.Expect("backend accepts a fresh nonce digest",
+        OacBackendAcceptNonceDigest(
+            &replayWindow, nonceDigest.data()) != 0);
+    log.Expect("backend rejects a replayed nonce digest",
+        OacBackendAcceptNonceDigest(
+            &replayWindow, nonceDigest.data()) == 0);
+    bool filledWindow = true;
+    for (uint8_t value = 2;
+         value <= OAC_BACKEND_REPLAY_WINDOW_SIZE + 1;
+         ++value)
+    {
+        auto candidate = nonceDigest;
+        candidate[0] = value;
+        filledWindow = filledWindow && OacBackendAcceptNonceDigest(
+            &replayWindow, candidate.data()) != 0;
+    }
+    log.Expect("backend replay window remains bounded", filledWindow &&
+        replayWindow.Count == OAC_BACKEND_REPLAY_WINDOW_SIZE &&
+        OacBackendAcceptNonceDigest(
+            &replayWindow, nonceDigest.data()) != 0);
+    auto corruptWindow = replayWindow;
+    corruptWindow.Next = OAC_BACKEND_REPLAY_WINDOW_SIZE;
+    log.Expect("backend rejects corrupt replay state",
+        OacBackendAcceptNonceDigest(
+            &corruptWindow, nonceDigest.data()) == 0);
+    OAC_BACKEND_REPLAY_WINDOW partialWindow{};
+    partialWindow.Count = 1;
+    log.Expect("backend rejects a corrupt partial replay window",
+        OacBackendAcceptNonceDigest(
+            &partialWindow, nonceDigest.data()) == 0);
+
+    log.Expect("backend accepts a current acknowledgement",
+        OacBackendEvaluateAcknowledgement(4, 7, 4) ==
+            OAC_BACKEND_ACK_ACCEPT_CURRENT);
+    log.Expect("backend accepts acknowledgement progress",
+        OacBackendEvaluateAcknowledgement(4, 7, 7) ==
+            OAC_BACKEND_ACK_ACCEPT_PROGRESS);
+    log.Expect("backend rejects acknowledgement replay",
+        OacBackendEvaluateAcknowledgement(4, 7, 3) ==
+            OAC_BACKEND_ACK_REJECT_REPLAY);
+    log.Expect("backend rejects acknowledgement beyond delivery",
+        OacBackendEvaluateAcknowledgement(4, 7, 8) ==
+            OAC_BACKEND_ACK_REJECT_UNDELIVERED);
+    log.Expect("backend evidence starts clear",
+        OacBackendEvaluateEvidenceState(100, 0, 2000, 0, 64, 0) ==
+            OAC_BACKEND_EVIDENCE_CLEAR);
+    log.Expect("backend evidence remains pending before its deadline",
+        OacBackendEvaluateEvidenceState(2099, 100, 2000, 1, 64, 0) ==
+            OAC_BACKEND_EVIDENCE_PENDING);
+    log.Expect("backend evidence acknowledgement timeout is explicit",
+        OacBackendEvaluateEvidenceState(2100, 100, 2000, 1, 64, 0) ==
+            OAC_BACKEND_EVIDENCE_ACK_TIMEOUT);
+    log.Expect("backend evidence queue exhaustion is explicit",
+        OacBackendEvaluateEvidenceState(200, 100, 2000, 64, 64, 1) ==
+            OAC_BACKEND_EVIDENCE_QUEUE_FULL);
+
+    oac::VerifiedPolicy policy{};
+    policy.Record = ValidSignedPolicy();
+    std::fill(policy.Digest.begin(), policy.Digest.end(), uint8_t{0xD5});
+    TestBackendRecords(log, policy.Record);
+    const auto evidence = ValidBackendEvidenceItem(policy.Record, 1);
+    log.Expect("backend evidence fixture is canonical",
+        OacV5ValidateEventRecord(
+            &evidence.Record, sizeof(evidence.Record)) == OAC_V5_VALID &&
+        evidence.Decision.RuleId == evidence.Record.RuleId);
+
+    const ULONGLONG now = GetTickCount64();
+    auto normal = std::make_unique<oac::BackendSession>();
+    DWORD error = normal->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::Normal));
+    const ULONGLONG normalStarted = GetTickCount64();
+    const auto initial = normal->Status();
+    log.Expect("mock backend opens an authenticated lease",
+        error == ERROR_SUCCESS && normal->AllowsLaunch(now) &&
+        initial.Authenticated && initial.TestDouble &&
+        initial.LeaseState == OAC_LEASE_HEALTHY &&
+        initial.LeaseSequence == 1 &&
+        !std::all_of(
+            normal->BindingSha256().begin(),
+            normal->BindingSha256().end(),
+            [](uint8_t value) { return value == 0; }));
+    log.Expect("launch authorization checks the current lease deadline",
+        !normal->AllowsLaunch(
+            normalStarted + policy.Record.BackendLeaseMilliseconds));
+    error = normal->Enqueue(evidence, now);
+    if (error == ERROR_SUCCESS) error = normal->Poll(now);
+    const auto acknowledged = normal->Status();
+    log.Expect("mock backend acknowledges delivered evidence",
+        error == ERROR_SUCCESS && acknowledged.PendingEvidence == 0 &&
+        acknowledged.AcknowledgedSequence == 1 &&
+        acknowledged.AlertAcknowledgedSequence == evidence.Record.Sequence);
+    normal->Stop();
+    error = normal->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::Normal));
+    if (error == ERROR_SUCCESS) error = normal->Enqueue(evidence, now);
+    if (error == ERROR_SUCCESS) error = normal->Poll(now);
+    log.Expect("backend session can restart from clean state",
+        error == ERROR_SUCCESS && normal->Status().PendingEvidence == 0 &&
+        normal->Status().AcknowledgedSequence == 1);
+
+    auto replay = std::make_unique<oac::BackendSession>();
+    error = replay->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::ReplayOpen));
+    log.Expect("mock backend rejects a replayed open nonce",
+        error == ERROR_RETRY && !replay->AllowsLaunch(now));
+
+    auto missingAcknowledgement = std::make_unique<oac::BackendSession>();
+    error = missingAcknowledgement->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::HoldAcknowledgement));
+    if (error == ERROR_SUCCESS)
+        error = missingAcknowledgement->Enqueue(evidence, now);
+    if (error == ERROR_SUCCESS) error = missingAcknowledgement->Poll(now);
+    if (error == ERROR_SUCCESS)
+    {
+        error = missingAcknowledgement->Poll(
+            now + policy.Record.EvidenceAckTimeoutMilliseconds);
+    }
+    log.Expect("unacknowledged evidence terminates the backend session",
+        error == ERROR_TIMEOUT && !missingAcknowledgement->AllowsLaunch(now) &&
+        missingAcknowledgement->Status().PendingEvidence == 1);
+
+    auto lostLease = std::make_unique<oac::BackendSession>();
+    error = lostLease->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::StopRenewing));
+    const ULONGLONG lostLeaseStarted = GetTickCount64();
+    if (error == ERROR_SUCCESS)
+    {
+        error = lostLease->Poll(
+            lostLeaseStarted + policy.Record.BackendRenewalMilliseconds);
+    }
+    if (error == ERROR_SUCCESS)
+    {
+        error = lostLease->Poll(
+            lostLeaseStarted + policy.Record.BackendLeaseMilliseconds +
+            policy.Record.BackendGraceMilliseconds);
+    }
+    log.Expect("lease loss terminates the backend session",
+        error == ERROR_TIMEOUT && !lostLease->AllowsLaunch(now) &&
+        lostLease->Status().LeaseState == OAC_LEASE_EXPIRED);
+
+    auto revokedLease = std::make_unique<oac::BackendSession>();
+    error = revokedLease->Start(
+        policy,
+        std::make_unique<oac::MockBackendTransport>(
+            oac::BackendScenario::RevokeLease));
+    const ULONGLONG revokedLeaseStarted = GetTickCount64();
+    if (error == ERROR_SUCCESS)
+    {
+        error = revokedLease->Poll(
+            revokedLeaseStarted + policy.Record.BackendRenewalMilliseconds);
+    }
+    log.Expect("backend revocation terminates the session",
+        error == ERROR_ACCESS_DISABLED_BY_POLICY &&
+        !revokedLease->AllowsLaunch(now) &&
+        revokedLease->Status().LeaseState == OAC_LEASE_REVOKED);
+}
 } // namespace
 
 int main()
@@ -3577,6 +4225,7 @@ int main()
     TestServiceFailures(log);
     TestServiceLaunchMessages(log);
     TestServiceScanMetrics(log);
+    TestServiceBackendStatus(log);
     TestThreadSuspension(log);
     TestRanges(log);
     TestNegotiateRequest(log);
@@ -3598,5 +4247,6 @@ int main()
     TestPolicyEvaluation(log);
     TestGameManifest(log);
     TestSignedPolicy(log);
+    TestBackendSession(log);
     return log.ExitCode();
 }

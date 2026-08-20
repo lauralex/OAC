@@ -9,7 +9,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define OAC_IPC_PROTOCOL_REVISION 0x00010005u
+#include "oac_lease.h"
+
+#define OAC_IPC_PROTOCOL_REVISION 0x00010006u
 #define OAC_IPC_VERSION OAC_IPC_PROTOCOL_REVISION
 #define OAC_IPC_MAX_MESSAGE_SIZE 4096u
 #define OAC_IPC_MAX_EXECUTABLE_PATH_CHARS 512u
@@ -75,7 +77,8 @@ typedef enum OAC_IPC_LAUNCH_DETAIL_TAG
     OAC_IPC_LAUNCH_DETAIL_MANIFEST_SIGNATURE = 16,
     OAC_IPC_LAUNCH_DETAIL_MANIFEST_BUILD = 17,
     OAC_IPC_LAUNCH_DETAIL_MANIFEST_EXPIRED = 18,
-    OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK = 19
+    OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK = 19,
+    OAC_IPC_LAUNCH_DETAIL_BACKEND = 20
 } OAC_IPC_LAUNCH_DETAIL;
 
 /*
@@ -102,7 +105,8 @@ typedef enum OAC_SERVICE_FAILURE_STAGE_TAG
     OAC_SERVICE_STAGE_PIPE_CREATE = 7,
     OAC_SERVICE_STAGE_PIPE_THREAD = 8,
     OAC_SERVICE_STAGE_RUNTIME = 9,
-    OAC_SERVICE_STAGE_TARGET_JOB = 10
+    OAC_SERVICE_STAGE_TARGET_JOB = 10,
+    OAC_SERVICE_STAGE_BACKEND = 11
 } OAC_SERVICE_FAILURE_STAGE;
 
 static inline uint32_t OacEncodeServiceFailure(
@@ -110,7 +114,7 @@ static inline uint32_t OacEncodeServiceFailure(
     uint32_t win32Error)
 {
     if (stage == OAC_SERVICE_STAGE_NONE ||
-        stage > OAC_SERVICE_STAGE_TARGET_JOB ||
+        stage > OAC_SERVICE_STAGE_BACKEND ||
         win32Error == 0 || win32Error > OAC_SERVICE_FAILURE_ERROR_MASK)
     {
         return 0;
@@ -133,7 +137,7 @@ static inline int OacDecodeServiceFailure(
     if (stage == 0 || win32Error == 0 || stage == win32Error ||
         (value & OAC_SERVICE_FAILURE_MAGIC_MASK) != OAC_SERVICE_FAILURE_MAGIC ||
         decodedStage == OAC_SERVICE_STAGE_NONE ||
-        decodedStage > OAC_SERVICE_STAGE_TARGET_JOB || decodedError == 0)
+        decodedStage > OAC_SERVICE_STAGE_BACKEND || decodedError == 0)
     {
         return 0;
     }
@@ -209,6 +213,21 @@ typedef struct OAC_IPC_SCAN_METRICS_TAG
     uint32_t Reserved;
 } OAC_IPC_SCAN_METRICS;
 
+#define OAC_IPC_BACKEND_AUTHENTICATED 0x00000001u
+#define OAC_IPC_BACKEND_TEST_DOUBLE   0x00000002u
+#define OAC_IPC_BACKEND_FLAGS (OAC_IPC_BACKEND_AUTHENTICATED | \
+    OAC_IPC_BACKEND_TEST_DOUBLE)
+
+typedef struct OAC_IPC_BACKEND_STATUS_TAG
+{
+    uint32_t LeaseState;
+    uint32_t Flags;
+    uint32_t PendingEvidence;
+    uint32_t LastError;
+    uint64_t LeaseSequence;
+    uint64_t AcknowledgedSequence;
+} OAC_IPC_BACKEND_STATUS;
+
 typedef struct OAC_IPC_RESPONSE_TAG
 {
     OAC_IPC_HEADER Header;
@@ -222,6 +241,7 @@ typedef struct OAC_IPC_RESPONSE_TAG
     uint64_t SessionLossSequence;
     uint32_t LastSessionLossReason;
     uint32_t Reserved;
+    OAC_IPC_BACKEND_STATUS Backend;
     OAC_IPC_SCAN_METRICS Scanner;
 } OAC_IPC_RESPONSE;
 
@@ -334,6 +354,41 @@ static inline int OacIpcScanMetricsValid(
     return 1;
 }
 
+static inline int OacIpcBackendStatusAreZero(
+    const OAC_IPC_BACKEND_STATUS* status)
+{
+    const uint8_t* bytes;
+    size_t index;
+
+    if (status == 0) return 0;
+    bytes = (const uint8_t*)status;
+    for (index = 0; index < sizeof(*status); ++index)
+    {
+        if (bytes[index] != 0) return 0;
+    }
+    return 1;
+}
+
+static inline int OacIpcBackendStatusValid(
+    const OAC_IPC_BACKEND_STATUS* status)
+{
+    if (status == 0 || status->LeaseState < OAC_LEASE_HEALTHY ||
+        status->LeaseState > OAC_LEASE_REVOKED ||
+        (status->Flags & ~OAC_IPC_BACKEND_FLAGS) != 0 ||
+        (status->Flags & OAC_IPC_BACKEND_AUTHENTICATED) == 0 ||
+        status->LeaseSequence == 0)
+    {
+        return 0;
+    }
+    if (status->LastError == 0)
+    {
+        return status->LeaseState == OAC_LEASE_HEALTHY ||
+            status->LeaseState == OAC_LEASE_DEGRADED;
+    }
+    return status->LeaseState == OAC_LEASE_EXPIRED ||
+        status->LeaseState == OAC_LEASE_REVOKED;
+}
+
 static inline int OacIpcExecutablePathValid(
     const uint16_t* path,
     uint32_t length)
@@ -438,7 +493,7 @@ static inline int OacIpcValidateLaunchResponse(
             OAC_IPC_TYPE_LAUNCH_RESPONSE) ||
         response->Header.RequestId != requestId ||
         response->FailureStage > OAC_IPC_LAUNCH_STAGE_VERIFY_MANIFEST ||
-        response->FailureDetail > OAC_IPC_LAUNCH_DETAIL_MANIFEST_ROLLBACK)
+        response->FailureDetail > OAC_IPC_LAUNCH_DETAIL_BACKEND)
     {
         return 0;
     }
@@ -486,7 +541,12 @@ OAC_IPC_STATIC_ASSERT(
 OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_SCAN_METRICS, LastError) == 176,
     "OAC_IPC_SCAN_METRICS error moved");
-OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 256,
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_BACKEND_STATUS) == 32,
+    "OAC_IPC_BACKEND_STATUS layout changed");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_BACKEND_STATUS, LeaseSequence) == 16,
+    "OAC_IPC_BACKEND_STATUS sequence moved");
+OAC_IPC_STATIC_ASSERT(sizeof(OAC_IPC_RESPONSE) == 288,
     "OAC_IPC_RESPONSE layout changed");
 OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, SessionLossSequence) == 56,
@@ -498,7 +558,10 @@ OAC_IPC_STATIC_ASSERT(
     OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Reserved) == 68,
     "OAC_IPC_RESPONSE reserved field moved");
 OAC_IPC_STATIC_ASSERT(
-    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Scanner) == 72,
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Backend) == 72,
+    "OAC_IPC_RESPONSE backend status moved");
+OAC_IPC_STATIC_ASSERT(
+    OAC_IPC_OFFSETOF(OAC_IPC_RESPONSE, Scanner) == 104,
     "OAC_IPC_RESPONSE scanner metrics moved");
 OAC_IPC_STATIC_ASSERT(sizeof(uint16_t) == 2,
     "OAC IPC paths require 16-bit code units");
@@ -526,7 +589,7 @@ OAC_IPC_STATIC_ASSERT(
     (OAC_SERVICE_FAILURE_MAGIC_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0 &&
     (OAC_SERVICE_FAILURE_STAGE_MASK & OAC_SERVICE_FAILURE_ERROR_MASK) == 0,
     "service failure fields overlap");
-OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_TARGET_JOB <= 0xFu,
+OAC_IPC_STATIC_ASSERT(OAC_SERVICE_STAGE_BACKEND <= 0xFu,
     "service failure stage exceeds its field");
 
 #undef OAC_IPC_STATIC_ASSERT

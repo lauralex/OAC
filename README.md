@@ -1,17 +1,21 @@
+<div align="center">
+
 # OAC
+
+**A defensive Windows anti-cheat research platform with a narrow, auditable trust boundary.**
 
 [![Windows build](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg?branch=main)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#building-oac)
 
-**OAC is a defensive Windows anti-cheat research project built around a narrow, auditable trust
-boundary.** It combines a demand-start kernel driver, a restricted control service, and a
-standard-user launcher with reproducible validation in an isolated virtual machine.
+Demand-start kernel protection · Restricted service authority · Reproducible isolated validation
 
-The project asks a practical question: *how much useful protection can be achieved without turning
-the driver into a second operating system?* OAC keeps identity, signatures, policy, reporting, and
-other blocking work in user mode. The kernel is responsible only for the small set of operations
-that require kernel authority.
+</div>
+
+OAC combines a Windows kernel driver, a restricted control service, and a standard-user launcher.
+It explores how much useful protection can be achieved without turning the driver into a second
+operating system: identity, signatures, policy, reporting, and blocking operations remain in user
+mode, while the kernel retains only the responsibilities that genuinely require kernel authority.
 
 > [!IMPORTANT]
 > OAC is an engineering reference, **not a production-ready anti-cheat release**. The repository
@@ -19,20 +23,22 @@ that require kernel authority.
 > matrix, authenticated backend admission, or a finished game-integration SDK. Never install the
 > disposable test package on a workstation or production system.
 
-## The trust path
+## How it works
 
 ```mermaid
 flowchart LR
-    Player["Standard-user game client"] -->|"local request"| Launcher["OAC Launcher"]
-    Launcher -->|"authenticated named pipe"| Service["Restricted OAC service"]
+    Player["Standard-user client"] -->|"status or launch"| Launcher["OAC Launcher"]
+    Launcher -->|"identity-checked local IPC"| Service["Restricted OAC service"]
     Manifest["Signed game manifest"] -->|"exact build"| Service
-    Policy["Signed policy"] -->|"rules, scope, expiry"| Service
-    Service -->|"one-use launch ticket"| Driver["Demand-start OAC driver"]
-    Service -->|"create suspended"| Target["Protected game process"]
-    Driver -->|"bind during creation"| Target
+    Policy["Signed policy"] -->|"scope and rules"| Service
+    Backend["Backend session contract"] -->|"lease"| Service
+    Service -->|"typed evidence"| Backend
+    Service -->|"one-use ticket"| Driver["Demand-start OAC driver"]
+    Service -->|"create suspended"| Target["Protected process tree"]
+    Driver -->|"bind at creation"| Target
     Service -->|"assign before resume"| Job["Kill-on-close job"]
     Job --> Target
-    Driver -->|"typed evidence"| Service
+    Driver -->|"retained alerts and events"| Service
 ```
 
 A launch is deliberately serialized. The service authenticates the local client, locks and verifies
@@ -68,6 +74,8 @@ The current source includes:
 - signed game-build authorization with exact executable hash and signer checks;
 - signed rule policy with deployment mode, build and channel scope, bounded validity, component
   compatibility, replay protection, explicit rollback authorization, and emergency revocation;
+- a transport-independent backend session with nonce replay rejection, bounded leases, monotonic
+  evidence acknowledgement, a fixed service queue, and a test-only authenticated mock transport;
 - creation-time target binding, exact-handle confirmation, pre-resume job assignment, and target
   process-tree containment;
 - retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
@@ -90,7 +98,8 @@ OAC does not claim universal detection, a driver-load veto, or protection agains
 DMA device, hypervisor, or compromised firmware. Work still required for a deployable product
 includes:
 
-- authenticated backend sessions, leases, evidence upload, acknowledgement, and replay handling;
+- a production authenticated network transport, backend admission service, and durable remote
+  evidence storage—the repository currently provides the strict transport contract and test mock;
 - manifest signer rotation and revocation metadata;
 - approved module, middleware, overlay, child-process, and runtime rules for a real game;
 - production signing, release engineering, privacy and retention policy, and platform certification.
@@ -142,8 +151,8 @@ The full contributor build, analysis, and change-specific gates are documented i
 
 ## Launcher interface
 
-After a reviewed deployment has installed the driver and restricted service, a standard user can
-query status or request one exact executable launch:
+Inside the isolated test deployment, a standard user can query status or request one exact
+executable launch:
 
 ```powershell
 OAC-Launcher.exe --status
@@ -151,16 +160,17 @@ OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
 ```
 
 The launch request accepts one absolute local executable path and no arguments. It requires an
-authorized adjacent game manifest and an active policy whose game and build scope match. It is not
-a general-purpose launcher and does not provide backend admission.
+authorized adjacent game manifest, a matching active policy, and a healthy backend lease. It is not
+a general-purpose launcher. The included backend is a deterministic test double, not a production
+admission service.
 
 ## Validation
 
-The accepted source baseline has passed clean Debug and Release builds, driver-free regression
-tests, PREfast, solution-wide static analysis, package and signing checks, and a networkless Windows
-11 build 26100 campaign under standard Driver Verifier. Runtime claims are limited to the exact
-commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they are not a general
-Windows, HVCI/VBS, hardware, or game-compatibility certification.
+The current accepted implementation has passed clean Debug and Release builds, driver-free
+regression tests, PREfast, solution-wide static analysis, package and signing checks, and a
+networkless Windows 11 build 26100 campaign under standard Driver Verifier. Runtime claims are
+limited to the exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
+are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification.
 
 ## Responsible use
 
