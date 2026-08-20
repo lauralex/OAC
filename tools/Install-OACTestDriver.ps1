@@ -263,7 +263,7 @@ function Assert-SignedPolicyShape(
         [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010006 -or
         [BitConverter]::ToUInt32($bytes, 132) -ne 1 -or
         [BitConverter]::ToUInt32($bytes, 136) -ne 14 -or
-        [BitConverter]::ToUInt32($bytes, 1000) -ne 6000 -or
+        [BitConverter]::ToUInt32($bytes, 1000) -ne 20000 -or
         [BitConverter]::ToUInt32($bytes, 1004) -ne 2000 -or
         [BitConverter]::ToUInt32($bytes, 1008) -ne 1000 -or
         [BitConverter]::ToUInt32($bytes, 1012) -ne 5000 -or
