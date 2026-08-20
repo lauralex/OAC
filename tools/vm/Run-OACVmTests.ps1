@@ -76,10 +76,10 @@ $auxiliaryExitValues = [ordered]@{
     'production-service-post-stop-start' = @(0)
     'production-backend-recovery-disable' = @(0)
     'production-backend-recovery-restore' = @(0)
-    'production-backend-ack-status' = @(0)
+    'production-backend-ack-start' = @(0)
     'production-backend-ack-launch' = @(0)
     'production-backend-ack-recovered' = @(0)
-    'production-backend-lease-status' = @(0)
+    'production-backend-lease-start' = @(0)
     'production-backend-lease-launch' = @(0)
     'production-backend-lease-recovered' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
@@ -130,10 +130,10 @@ $baselineAuxiliaryRequired = @(
     'production-service-post-stop-start',
     'production-backend-recovery-disable',
     'production-backend-recovery-restore',
-    'production-backend-ack-status',
+    'production-backend-ack-start',
     'production-backend-ack-launch',
     'production-backend-ack-recovered',
-    'production-backend-lease-status',
+    'production-backend-lease-start',
     'production-backend-lease-launch',
     'production-backend-lease-recovered',
     'production-legacy-driver-start',
@@ -1261,7 +1261,13 @@ function Invoke-BackendTerminationCase(
     [string]$Child
 ) {
     Set-BackendScenario $Scenario
-    [void](Invoke-ProductionStatus $Launcher "$Name-status")
+    $startExit = Invoke-ConsoleCapture `
+        "$Name-start" 'sc.exe' @('start', 'OACService')
+    if ($startExit -ne 0) {
+        throw "Could not start OACService for $Name; exit=$startExit."
+    }
+    Wait-TestServiceState OACService `
+        ([ServiceProcess.ServiceControllerStatus]::Running)
     $launch = Invoke-ProductionLaunch $Launcher $Target "$Name-launch"
     $processes = Wait-LivenessProcesses `
         $Target $Child $launch.TargetProcessId

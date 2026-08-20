@@ -4121,6 +4121,7 @@ void TestBackendSession(TestLog& log)
         policy,
         std::make_unique<oac::MockBackendTransport>(
             oac::BackendScenario::Normal));
+    const ULONGLONG normalStarted = GetTickCount64();
     const auto initial = normal->Status();
     log.Expect("mock backend opens an authenticated lease",
         error == ERROR_SUCCESS && normal->AllowsLaunch(now) &&
@@ -4133,7 +4134,7 @@ void TestBackendSession(TestLog& log)
             [](uint8_t value) { return value == 0; }));
     log.Expect("launch authorization checks the current lease deadline",
         !normal->AllowsLaunch(
-            now + policy.Record.BackendLeaseMilliseconds));
+            normalStarted + policy.Record.BackendLeaseMilliseconds));
     error = normal->Enqueue(evidence, now);
     if (error == ERROR_SUCCESS) error = normal->Poll(now);
     const auto acknowledged = normal->Status();
@@ -4182,15 +4183,16 @@ void TestBackendSession(TestLog& log)
         policy,
         std::make_unique<oac::MockBackendTransport>(
             oac::BackendScenario::StopRenewing));
+    const ULONGLONG lostLeaseStarted = GetTickCount64();
     if (error == ERROR_SUCCESS)
     {
         error = lostLease->Poll(
-            now + policy.Record.BackendRenewalMilliseconds);
+            lostLeaseStarted + policy.Record.BackendRenewalMilliseconds);
     }
     if (error == ERROR_SUCCESS)
     {
         error = lostLease->Poll(
-            now + policy.Record.BackendLeaseMilliseconds +
+            lostLeaseStarted + policy.Record.BackendLeaseMilliseconds +
             policy.Record.BackendGraceMilliseconds);
     }
     log.Expect("lease loss terminates the backend session",
@@ -4202,10 +4204,11 @@ void TestBackendSession(TestLog& log)
         policy,
         std::make_unique<oac::MockBackendTransport>(
             oac::BackendScenario::RevokeLease));
+    const ULONGLONG revokedLeaseStarted = GetTickCount64();
     if (error == ERROR_SUCCESS)
     {
         error = revokedLease->Poll(
-            now + policy.Record.BackendRenewalMilliseconds);
+            revokedLeaseStarted + policy.Record.BackendRenewalMilliseconds);
     }
     log.Expect("backend revocation terminates the session",
         error == ERROR_ACCESS_DISABLED_BY_POLICY &&
