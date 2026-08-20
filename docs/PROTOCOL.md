@@ -3,10 +3,10 @@
 **Status:** The production-control ABI is separate from the lab-only diagnostic compatibility ABI
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
-implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the Windows 11 build
-26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest and
-signed-policy authorization, backend failure/recovery, job/liveness, typed evidence, bounded service
-scheduling, and integrated policy evaluation.
+the complete runtime suite most recently passed at implementation commit
+`67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100 under standard Driver
+Verifier, including signed-manifest and signed-policy authorization, backend failure/recovery,
+job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -306,8 +306,8 @@ source additionally exercises retained alerts, monotonic acknowledgement, explic
 10,000-record inventory pressure, concurrent producers, frozen snapshot paging/correlation, full
 alert-queue loss provenance, and diagnostic authority after lab-only overflow. It also verifies
 explicit revoke provenance and idempotency, malformed launch rejection, and that diagnostic
-sessions cannot invoke production launch operations. The complete WP-01 through WP-11 suite passed
-at implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 Pro build
+sessions cannot invoke production launch operations. The complete WP-01 through WP-12 suite passed
+at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 Pro build
 26100. Four driver-backed protocol executions passed under the baseline and standard Driver
 Verifier phases.
 
@@ -330,5 +330,5 @@ before refusing startup. The current VM harness additionally contains bounded ba
 withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; all passed
 in the named campaign.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 36 completed slices, eight completed sweeps, a 360 ms maximum
-health-loop delay, a 55.677 ms maximum slice duration, and no failed or cancelled slice.
+thread-resume metrics. It accepted 35 completed slices, seven completed sweeps, a 437 ms maximum
+health-loop delay, a 43.498 ms maximum slice duration, and no failed or cancelled slice.

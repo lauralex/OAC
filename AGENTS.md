@@ -17,13 +17,16 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the complete
+  Implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-11. The campaign covered signed-manifest and signed-policy authorization and
+  WP-01 through WP-12. The campaign covered signed-manifest and signed-policy authorization and
   rejection, backend replay rejection, target-tree containment after acknowledgement and lease
   loss, fresh-session recovery, service-crash and graceful-stop containment, session-loss
   reporting, retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module
-  snapshots, and bounded target sampling. The backend milestone provides a strict transport
+  snapshots, bounded target sampling, and the reorganized scanner components. Kernel inventory,
+  process/handle inspection, and integrity orchestration are separated by responsibility; common
+  user-mode Windows ownership helpers and a driver-free client-option parser remove duplicated
+  infrastructure without changing scanner policy. The backend milestone provides a strict transport
   interface, protected deterministic test backend, bounded leases, fixed evidence queuing,
   acknowledgement, and driver-session binding. A production network transport, backend service,
   durable remote storage, manifest-key rotation, and remote policy delivery are not implemented.

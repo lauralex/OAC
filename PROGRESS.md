@@ -6,11 +6,11 @@
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-11 form the accepted production-control, target-lifetime, evidence,
-bounded-scheduling, signed-build, signed-policy, and backend-session foundation. Implementation
-commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed the commit-bound disposable-VM and standard
-Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
-remaining production-hardening work packages.
+WP-01 through WP-12 form the accepted production-control, target-lifetime, evidence,
+bounded-scheduling, signed-build, signed-policy, backend-session, and scanner-organization
+foundation. Implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` passed the
+commit-bound disposable-VM and standard Driver Verifier campaign described below. Status still
+distinguishes source, evidence, and the remaining production-hardening work packages.
 
 | Work package | Status | Current evidence or next gate |
 |---|---|---|
@@ -26,7 +26,7 @@ remaining production-hardening work packages.
 | WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
 | WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
 | WP-11 Backend session abstraction | Implemented; VM tested | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, target-tree failure policy, and fresh recovery passed on the named campaign |
-| WP-12 Scanner modularization | Implemented; acceptance pending | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; runtime and hosted gates remain |
+| WP-12 Scanner modularization | Implemented; VM tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, and Driver Verifier gates passed; hosted checks remain |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
 
@@ -140,43 +140,50 @@ the verified manifest digest as correlated session identity rather than parsing 
 does not yet provide CodeQL or SBOM-generation evidence. These are explicit remaining CI and
 static-analysis gaps rather than implied passes.
 
-## Current disposable-VM validation
+## Current scanner-modularization validation
 
-Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` passed on Microsoft Windows
+Implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
 and Secure Boot disabled. The host accepted 41 exact formal result records, including five protocol
-executions and thirteen client, launcher, and preflight executions. The campaign rejected a reused
-backend nonce, terminated the target tree after withheld acknowledgement and lease loss, and then
-established a fresh healthy session after each failure. It also reran the signed-manifest,
-signed-policy, production-boundary, session-loss, removal/reinstall, driver-gate, kernel-provenance,
-retained-evidence, snapshot, and bounded-scheduler cases.
+executions and thirteen client, launcher, and preflight executions. All formal and auxiliary result
+sets matched. The reorganized kernel scanner, shared user-mode Windows support, and client option
+parser completed the unchanged baseline and Driver Verifier acceptance paths.
 
-The restricted service completed 36 queued scan slices and eight full memory/thread sweeps. It
-inspected 1,416 memory regions and 24 threads; maximum measured health-loop delay was 360 ms,
-scan-slice duration 55.677 ms, and thread suspension 5.219 ms. Standard Driver Verifier completed
-with its settings reset and inactive. Both OAC services were stopped, the VM was Off with zero
-network adapters, and there were zero crash events and zero minidumps. Debug and Release
-driver-free unit runs passed `608/608`. The validated result ZIP SHA-256 was
-`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`.
+The campaign also reran production identity, signed-manifest and signed-policy authorization,
+backend replay, acknowledgement-loss and lease-loss containment, fresh-session recovery,
+removal/reinstall, driver-gate, kernel-provenance, retained-evidence, snapshot, and bounded-scheduler
+cases. The service completed 35 queued scan slices and seven full memory/thread sweeps, inspecting
+1,367 memory regions and 21 threads. Maximum measured health-loop delay was 437 ms, scan-slice
+duration 43.498 ms, and thread suspension 5.166 ms. Driver Verifier reported three OAC loads and
+three unloads, then reset and finished inactive. Both OAC services were stopped, the VM was Off with
+zero network adapters, and there were zero crash events and zero minidumps. Debug and Release
+driver-free unit runs passed `623/623`.
 
+The validated result ZIP SHA-256 was
+`53713237C27A11BF843DCDCAC86EC354C1E723615D62C7EEA769501F2FEAE466`.
 The exact final-status, host-manifest, and host-log SHA-256 values are
-`847FBF55EC666E0F24A6B84A517189712AF0026D8FF873A862D554219C6E883F`,
-`42AE14F78D8EF67D17C55CC0F6E9A184EE4850970972B2F32E266AE4A783B268`, and
-`B593DC19960E555B6EEDF2FC3797CC1DAEA2FB9BDC94EE67BBD05AF3C3A66EDB`.
+`FAC52438BD12AE222816E0BD9D5493F47B666BBC311C745BEBB1A205133454A0`,
+`F37FC3AAD2E0D359768265A07216F7B8307251C9E1FBDE4D960154EF32618F35`, and
+`4AD8029C94FF7E203769F875C43D8FBA41816502D9A0D29110AFFB2677A2839B`.
 The compact evidence bundle is stored outside the repository at
-`C:\OAC-VM\evidence\20260820-47c0400-backend-session`. After preserving and verifying that bundle,
-the exact disposable VM, checkpoint, VHD/AVHDX, package, seed, and full campaign directory were
-deleted.
+`C:\OAC-VM\evidence\20260820-67d3f61-scanner-modules`. After preserving and verifying it, the exact
+disposable VM, checkpoint, VHD/AVHDX, package, seed, and full campaign directory were deleted.
+
+### Previous backend-foundation campaign
+
+Implementation commit `47c04005e66f1fd61ae9fe9a35260f19ee447dd1` previously passed the same
+Windows build and containment model for WP-01 through WP-11. Its validated result ZIP SHA-256 was
+`18DF30A66D52B6FAAE163D4AF0458BC9D83263B02BF82EBDA4736205890259C5`; the compact historical
+bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks remain required for each merge.
 - A real online admission boundary still requires a production authenticated transport, backend
   service, credential lifecycle, and durable evidence storage behind the implemented interface.
-- WP-12 scanner modularization requires the commit-bound disposable-VM/Driver Verifier campaign and
-  hosted checks before it can be marked accepted. The refactor does not add or relax a scanner
-  capability.
-- WP-13 game/server integration is the next product milestone after WP-12 acceptance.
+- WP-12 scanner modularization has commit-bound runtime acceptance; hosted checks remain required
+  before merge. The refactor does not add or relax a scanner capability.
+- WP-13 game/server integration is the next product milestone.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation

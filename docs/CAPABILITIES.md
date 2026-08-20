@@ -32,12 +32,12 @@ durable remote storage, and target-session reuse remain planned work.
 
 ## Scanner organization
 
-WP-12 changes maintainability rather than security semantics. Kernel-module inventory and frozen
-snapshots, process/thread/handle cross-views, and kernel-integrity orchestration now live in focused
-implementation files behind the same scanner interface. User-mode components share move-only
-Windows resource wrappers and small text/optional-API helpers, while the diagnostic client's option
-parser is tested without loading the driver. The capability matrix and evidence thresholds below
-are unchanged.
+The scanner is divided by responsibility without changing its security semantics. Kernel-module
+inventory and frozen snapshots, process/thread/handle cross-views, and kernel-integrity orchestration
+live in focused implementation files behind one scanner interface. User-mode components share
+move-only Windows resource wrappers and small text and optional-API helpers, while the diagnostic
+client's option parser is tested without loading the driver. The capability matrix and evidence
+thresholds below are unchanged.
 
 ## Lab scanner matrix
 

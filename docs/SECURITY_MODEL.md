@@ -1,7 +1,8 @@
 # OAC security model
 
-**Status:** WP-01 through WP-11 controls accepted at implementation commit
-`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on the named Windows 11 build 26100 campaign.
+**Status:** WP-01 through WP-12 controls and organization accepted locally and in the disposable-VM
+campaign at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build
+26100. Hosted checks remain required before merge.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -152,7 +153,7 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   RAII guard so every successful suspension has an explicit resume and cleanup fallback.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
 
-WP-01 through WP-11 statements combine source behavior with one exact platform acceptance run. The
+WP-01 through WP-12 statements combine source behavior with one exact platform acceptance run. The
 current driver-backed production, service installation, lifecycle, race, job/liveness, typed
 evidence, signed-policy, signed-manifest, backend-session, snapshot, and standard Driver Verifier
 campaign passed on Windows 11 build 26100 with zero crash events and minidumps. That result does not
