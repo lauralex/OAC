@@ -1169,7 +1169,7 @@ function Invoke-RejectedServiceStart(
     $resultPath = Join-Path $workspace 'result.txt'
     $outputPath = Join-Path $workspace 'stdout.txt'
     $scriptText = @"
-`$output = & '$Launcher' --status 2>&1
+`$output = @(& '$Launcher' --status 2>&1 | ForEach-Object { `$_.ToString() })
 `$code = `$LASTEXITCODE
 `$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
 [IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
