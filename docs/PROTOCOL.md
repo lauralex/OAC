@@ -6,6 +6,7 @@
 acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the Windows 11 build
 26100 disposable-VM and standard Driver Verifier campaign, including signed-manifest authorization,
 job/liveness, typed evidence, bounded service scheduling, and integrated policy evaluation.
+Signed-policy source and driver-free coverage are complete; runtime acceptance is pending.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -95,7 +96,25 @@ manifest/build at the current sequence, is denied. A new high-water record is fl
 before the driver ticket is armed.
 
 This milestone authorizes the main executable only. Approved modules, middleware, child processes,
-runtime classes, manifest-key rotation, signed policy, and backend admission remain separate work.
+runtime classes, manifest-key rotation, and backend admission remain separate work.
+
+### Signed policy record
+
+`shared/oac_signed_policy.*` defines a fixed 1024-byte canonical policy record and a fixed 160-byte
+persistent cache record. The policy carries game, build, and channel scope; deployment mode;
+component compatibility; a bounded validity interval; a complete typed rule set; a signer identity;
+and explicit emergency-revocation or rollback-authorization fields. Its detached CMS signature is
+verified by the service through the same non-reparse, exact-signer path used for manifests, with an
+independent protected signer pin.
+
+The service records the current policy digest, update sequence, current version, and historic
+high-water version per game and channel. A lower sequence is replay, conflicting content at the
+current sequence is equivocation, and an ordinary version must advance beyond the historic
+high-water mark. A rollback is accepted only when the new signed record names the exact current
+version and digest; the historic high-water mark is preserved. An accepted emergency record is
+committed and then prevents service startup, so replacing it with an older record cannot clear the
+revocation. These records are local service authorization inputs, not production driver messages,
+so they do not change the wire revision.
 
 ### Strict validation and correlation
 
@@ -200,12 +219,11 @@ capacity.
 `shared/oac_policy.*` binds every current rule to its exact event type, category, observation range,
 and required provenance. It maps the record through deterministic Observe, Enforce, or Strict
 tables and returns separate action, five-level policy confidence, and policy severity fields. The
-service currently selects Enforce at compile time. It preserves the observation's original
+service selects the authenticated policy's rule set and deployment mode. It preserves the observation's original
 confidence and source provenance, retains actionable results with their decision, and ends the
 service runtime for `RevokeSession`. The service implements the `DenyLaunch` action needed by later
-manifest and signed-policy inputs, but no current fixed-catalog rule selects it. Signed runtime
-policy, authenticated upload, and server acknowledgement remain WP-10/WP-11 rather than being
-simulated locally.
+game-specific rules, but no current rule selects it. Authenticated upload and server acknowledgement
+remain later backend work rather than being simulated locally.
 
 ### Launcher/service IPC
 
@@ -263,13 +281,15 @@ response correlation, explicit revoke/liveness layouts, lease-state decisions, I
 the complete fixed policy catalog in every deployment mode. They also cover the canonical manifest
 layout, malformed identities/names/reserved data, exact file matching, component compatibility,
 expiry, monotonic updates, rollback, same-sequence equivocation, and corrupt high-water state.
-Policy tests cover typed drift,
+Signed-policy tests cover canonical layout, scope, time and component bounds, emergency and rollback
+operations, replay, equivocation, explicit rollback, preserved historic high-water state, and
+malformed cache records. Policy tests cover typed drift,
 malformed signer states, incomplete provenance, deterministic results, and display-text
 independence.
 The production-boundary test verified job ownership, service-crash and graceful-stop target-tree
 termination, recovery, monotonic session-loss reporting, two accepted signed launches, and
-modified, wrong-build, expired, and rollback manifest rejection in the same named campaign. Signed
-policy selection and authenticated backend sessions remain separate work packages.
+modified, wrong-build, expired, and rollback manifest rejection in the same named campaign.
+Signed-policy runtime acceptance and authenticated backend sessions remain separate pending gates.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
 thread-resume metrics. It accepted 27 completed slices, six completed sweeps, a 391 ms maximum
 health-loop delay, and no failed or cancelled slice.

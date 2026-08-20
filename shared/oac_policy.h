@@ -16,6 +16,7 @@ extern "C" {
 #endif
 
 #define OAC_POLICY_RULE_COUNT 14u
+#define OAC_POLICY_RULE_CATALOG_REVISION 1u
 #define OAC_POLICY_MAX_THUMBPRINT_BYTES 32u
 
 typedef uint32_t OAC_POLICY_MODE;
@@ -110,6 +111,9 @@ typedef struct OAC_POLICY_DECISION_TAG
 } OAC_POLICY_DECISION;
 
 const OAC_POLICY_RULE* OacPolicyRuleCatalog(size_t* count);
+int OacPolicyRuleSetValid(
+    const OAC_POLICY_RULE* rules,
+    size_t count);
 int OacPolicyModeValid(OAC_POLICY_MODE mode);
 int OacPolicyActionValid(OAC_POLICY_ACTION action);
 int OacPolicyConfidenceValid(OAC_POLICY_CONFIDENCE confidence);
@@ -117,6 +121,13 @@ int OacPolicySignerClassificationValid(
     const OAC_POLICY_SIGNER_CLASSIFICATION* signer);
 int OacPolicyEvaluate(
     OAC_POLICY_MODE mode,
+    const OAC_V5_EVENT_RECORD* observation,
+    const OAC_POLICY_SIGNER_CLASSIFICATION* signer,
+    OAC_POLICY_DECISION* decision);
+int OacPolicyEvaluateRules(
+    OAC_POLICY_MODE mode,
+    const OAC_POLICY_RULE* rules,
+    size_t ruleCount,
     const OAC_V5_EVENT_RECORD* observation,
     const OAC_POLICY_SIGNER_CLASSIFICATION* signer,
     OAC_POLICY_DECISION* decision);

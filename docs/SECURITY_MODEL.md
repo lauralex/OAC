@@ -35,9 +35,10 @@ trust boundaries, adversaries, and failure behavior.
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
-| Local policy | The service applies a fixed typed rule catalog in Enforce mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests passed; the policy-enabled service path completed the named VM/Verifier campaign |
-| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; 518 driver-free tests cover the record and decision rules |
-| Signed policy and backend | No production trust boundary exists | Planned |
+| Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, signed-policy, mode, signer-state, hostile-input, and text-independence tests pass; signed-policy runtime acceptance is pending |
+| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the current 543-test driver-free suite covers the record and decision rules |
+| Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Source and driver-free tests complete; package and restricted-service VM acceptance pending |
+| Backend | No authenticated production trust boundary exists | Planned |
 
 ## Production authority
 
@@ -131,14 +132,13 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   identity-bound, expiring, and unavailable for new work after revocation.
 - Driver producers emit observations with unevaluated policy state. The service polls both evidence
   channels and evaluates stable rule ID, event type, category, severity range, and required
-  provenance through one fixed catalog. Source confidence and provenance remain unchanged; the
-  policy action and policy confidence are separate typed results. Display text is not an input.
-- The compiled Enforce mode can retain warnings and review requests or stop the service runtime so
-  ordinary cleanup revokes the driver session and closes the target job. The service also supports
-  a deny-launch action, but no current fixed-catalog rule selects it; signed-policy inputs belong to
-  WP-10. Manifest rejection is an independent pre-arm authorization decision. Observe and Strict
-  modes share the same deterministic catalog but
-  are not runtime-selectable until authenticated policy work is implemented.
+  provenance through the authenticated policy's canonical rule set. Source confidence and
+  provenance remain unchanged; the policy action and policy confidence are separate typed results.
+  Display text is not an input.
+- The signed Observe, Enforce, or Strict mode can retain warnings and review requests or stop the
+  service runtime so ordinary cleanup revokes the driver session and closes the target job. The
+  service also supports a deny-launch action for later game-specific rules. Manifest or policy-scope
+  rejection is an independent pre-arm authorization decision.
 - The health loop never performs target memory or thread inspection. One cancellation-aware worker
   keeps continuation state and enforces per-slice time, byte, region, and thread limits. It opens
   threads under the authenticated target-owner identity, reverts immediately, and uses one shared
@@ -153,8 +153,9 @@ supported-platform, effective-right, compatibility, or production-deployment mat
 
 ## Planned controls
 
-- Manifest signer rotation and revocation metadata, approved module/middleware/child-process scope,
-  signed remote policy selection, and authenticated backend lease/upload.
+- Manifest and policy signer rotation and revocation metadata, approved
+  module/middleware/child-process scope, remote policy delivery, and authenticated backend
+  lease/upload.
 
 ## Evidence and enforcement
 
@@ -164,18 +165,18 @@ not proof of cheating. Evidence loss, incomplete scanning, unavailable security 
 unsupported platform must remain explicit rather than silently becoming a clean result. Display
 text has no policy meaning in the production schema.
 
-The current catalog is compiled into the service; it is not remotely mutable. Its signer model
-records signature source, chain, revocation, timestamp, approval flags, and an exact certificate
-thumbprint as typed fields. The fixed policy evaluator still receives an explicit unavailable
-classification until WP-10 supplies authenticated policy inputs; game-manifest authorization is a
-separate exact pre-launch check and does not infer trust from an image name or display string.
-Lower-priority overwrite gaps remain visible transport facts;
+The stable rule identities and default rule set are compiled, while the authenticated policy selects
+the active thresholds, actions, and deployment mode. The signer model records signature source,
+chain, revocation, timestamp, approval flags, and an exact certificate thumbprint as typed fields.
+Runtime-module approval classifications remain explicitly unavailable until game-specific policy
+supplies them; game-manifest authorization is a separate exact pre-launch check and does not infer
+trust from an image name or display string. Lower-priority overwrite gaps remain visible transport facts;
 only records actually delivered to the service can receive a local policy decision.
 
 Load-image callbacks are observational and cannot veto a mapping before `DriverEntry`. The diagnostic
 path can fail its gate after detecting the latch; the production launch transaction closes the
-creation-time target-binding gap but does not replace Windows Code Integrity or the later signed
-policy and authenticated backend controls.
+creation-time target-binding gap but does not replace Windows Code Integrity or authenticated
+backend controls.
 
 ## Unsupported guarantees
 

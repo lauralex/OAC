@@ -1,7 +1,7 @@
 # OAC capabilities
 
 This document is the detailed capability reference for the current source. It separates the
-production-control MVP from the elevated diagnostic scanner used only in isolated lab environments.
+production-control path from the elevated diagnostic scanner used only in isolated lab environments.
 Implementation does not imply universal detection, prevention, or platform compatibility.
 
 ## Production-control boundary
@@ -14,6 +14,7 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Early target binding | A bounded, one-use launch ticket matches the trusted creator and canonical executable path in the process-creation callback. |
 | Suspended launch | The service resolves and holds the executable under the caller identity, creates it suspended with the caller's primary token, confirms the exact process handle, and then resumes the first thread. |
 | Signed build authorization | Before arming the driver, the service requires a canonical detached-signed manifest, an explicitly provisioned signer pin, exact executable and Authenticode-signer identity, bounded compatibility/expiry, and monotonic per-game rollback state. The named VM/Verifier campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests. |
+| Signed policy | At service start, a canonical detached-signed policy must match the protected policy signer, component revisions, bounded validity period, and canonical rule set. Game/build scope is checked before launch. Per-game/channel state rejects replay and equivocation, permits only an explicitly signed rollback from the exact current digest, and makes emergency revocation terminal. Runtime VM acceptance for this milestone is pending. |
 | Target-tree containment | The service assigns the confirmed target to an unnamed kill-on-close job before resume. Children inherit the job, and graceful stop or service failure terminates the tree. |
 | Session-loss reporting | A device-lifetime monotonic sequence and stable loss reason let a replacement service distinguish requested shutdown from unexpected controller loss. |
 | Retained alerts | High and critical typed records remain in a dedicated queue until the controlling service acknowledges an exact delivered sequence. Full-queue loss preserves existing data, records severity counts, and revokes production authority. |
@@ -25,8 +26,8 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
 
 The current production path intentionally supports one target and no command-line arguments.
-Approved-module policy, manifest-key rotation, authenticated evidence upload, signed runtime policy,
-backend leases, and target-session reuse remain planned work.
+Approved-module policy, manifest-key rotation, authenticated evidence upload, backend leases, and
+target-session reuse remain planned work.
 
 ## Lab scanner matrix
 
@@ -66,16 +67,15 @@ automatic claim that a process is malicious.
 
 Production evidence records preserve the kernel session, generation, sequence, timestamp, rule,
 severity, confidence, category, and fixed provenance fields. Kernel producers leave policy state
-unevaluated. The service polls both evidence channels and applies a fixed typed catalog with
-Observe, Enforce, and Strict decision tables; Enforce is the current compiled mode. Policy action
-and five-level policy confidence remain separate from the source observation, and display text is
-never an evaluator input.
+unevaluated. The service polls both evidence channels and applies the authenticated policy's typed
+rule set and Observe, Enforce, or Strict mode. Policy action and five-level policy confidence remain
+separate from the source observation, and display text is never an evaluator input.
 
-The catalog also defines a typed signer classification for signature source, chain, revocation,
-timestamp, approval state, and certificate thumbprint. Runtime signer verification and signed
-policy selection are not implemented yet, so current service decisions use the explicit
-`unavailable` signer state. Actionable results use a bounded in-memory handoff; authenticated
-persistence, signed updates, and server acknowledgement remain later work.
+The rule model also defines typed signer classification for signature source, chain, revocation,
+timestamp, approval state, and certificate thumbprint. Current driver observations do not yet carry
+an approved runtime-module classification, so those fields remain explicitly unavailable. Policy
+updates are signed and locally replay-protected; authenticated persistence, server acknowledgement,
+and remote policy delivery remain later work.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or

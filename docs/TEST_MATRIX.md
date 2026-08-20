@@ -19,7 +19,7 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `518/518`; PR #13 previously passed `428/428` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `543/543`; PR #13 previously passed `428/428` |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
@@ -55,6 +55,9 @@ The pure C/C++ unit source covers:
 - canonical game-manifest and rollback-state layouts, hostile identities/names/reserved data,
   component compatibility, expiration, exact file/signer identity, rollback, and same-sequence
   equivocation; and
+- canonical signed-policy and cache layouts, hostile identity/time/component/rule/operation fields,
+  scope matching, replay, equivocation, explicit rollback, preserved historic high-water state, and
+  emergency revocation; and
 - strict scheduler metric states/counts/timestamps, fixed slice budgets, and real explicit plus
   scope-cleanup thread-resume paths.
 
@@ -119,6 +122,8 @@ The VM harness source now contains a bounded `LabMode=0` production-boundary pha
   recovery and exactly one file-cleanup or service-exit loss;
 - proves graceful service stop explicitly revokes the session, terminates the second parent and
   child, and advances the loss sequence exactly once;
+- replaces the installed policy with signed wrong-signature, expired, wrong-scope, rollback,
+  authorized-rollback, and emergency fixtures and requires each exact accept or reject outcome;
 - stops the service and restores explicit lab mode before diagnostic tests;
 - records cleanup separately so a failed boundary test cannot silently leave the wrong mode active.
 
@@ -144,8 +149,9 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `535730c`; both process trees terminated and SCM recovery completed |
 | Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `535730c`; four driver-backed executions passed `130/130` |
 | Independent health loop and bounded target worker | Tested at `535730c`; 27 slices, six sweeps, 391 ms maximum health delay, 80.048 ms maximum slice duration, 0.172 ms maximum suspension, no failed/cancelled slice |
-| Fixed typed policy catalog and service evaluation | All 518 current driver-free tests passed; the policy-enabled service completed baseline and Verifier execution at `535730c` |
+| Typed policy rules and service evaluation | Current driver-free tests pass `543/543`; the earlier fixed-policy service path completed baseline and Verifier execution at `535730c`, while signed-policy runtime acceptance is pending |
 | Signed main-executable manifest authorization | Tested at `535730c`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
+| Signed policy selection and update state | Driver-free coverage complete; restricted-service package and VM acceptance pending |
 | Renamed, signed normal post-start driver image | Tested at `535730c`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
@@ -172,11 +178,11 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy, restricted-service metrics, and Driver Verifier passed at `535730c` |
 | WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `518/518`, static analysis, repository checks, and integrated VM/Verifier execution passed at `535730c` |
 | WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `535730c` |
-| WP-10 signed policy | Wrong key/scope/build, expiry, rollback, authenticated selection | Planned |
+| WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free source coverage complete; package and restricted-service VM acceptance pending |
 | WP-11 backend | Nonce replay, lease expiry, evidence acknowledgement, offline mock | Planned |
 
 WP-02 through WP-09 acceptance is recorded only for the exact commit and environment above. WP-10
-and later work remain planned.
+is implemented in source but remains pending runtime acceptance; later work remains planned.
 
 ## Exact host commands
 

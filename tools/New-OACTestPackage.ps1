@@ -240,14 +240,14 @@ function New-GameManifestBytes(
     }
 }
 
-function Write-SignedGameManifest(
-    [byte[]]$ManifestBytes,
-    [string]$ManifestPath,
+function Write-SignedRecord(
+    [byte[]]$RecordBytes,
+    [string]$RecordPath,
     [string]$SignaturePath,
     [Security.Cryptography.X509Certificates.X509Certificate2]$SigningCertificate
 ) {
     Import-PkcsAssembly
-    $content = [Security.Cryptography.Pkcs.ContentInfo]::new($ManifestBytes)
+    $content = [Security.Cryptography.Pkcs.ContentInfo]::new($RecordBytes)
     $signed = [Security.Cryptography.Pkcs.SignedCms]::new($content, $true)
     $signer = [Security.Cryptography.Pkcs.CmsSigner]::new(
         [Security.Cryptography.Pkcs.SubjectIdentifierType]::IssuerAndSerialNumber,
@@ -258,11 +258,11 @@ function Write-SignedGameManifest(
         [Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
     $signed.ComputeSignature($signer, $false)
     $signature = $signed.Encode()
-    [IO.File]::WriteAllBytes($ManifestPath, $ManifestBytes)
+    [IO.File]::WriteAllBytes($RecordPath, $RecordBytes)
     [IO.File]::WriteAllBytes($SignaturePath, $signature)
 
     $verified = [Security.Cryptography.Pkcs.SignedCms]::new(
-        [Security.Cryptography.Pkcs.ContentInfo]::new($ManifestBytes), $true)
+        [Security.Cryptography.Pkcs.ContentInfo]::new($RecordBytes), $true)
     $verified.Decode($signature)
     $verified.CheckSignature($true)
     if ($verified.SignerInfos.Count -ne 1 -or
@@ -272,7 +272,109 @@ function Write-SignedGameManifest(
         $verified.SignerInfos[0].UnsignedAttributes.Count -ne 0 -or
         [Convert]::ToBase64String($verified.SignerInfos[0].Certificate.RawData) -cne
             [Convert]::ToBase64String($SigningCertificate.RawData)) {
-        throw "Detached game-manifest signature verification failed: $ManifestPath"
+        throw "Detached signature verification failed: $RecordPath"
+    }
+}
+
+function Get-PolicyRules {
+    $kernel = [uint64]1
+    $callback = [uint64]2
+    return ,@(
+        @(0x00010001, 7, 10, 0, 0, 0, 0, 0, 0, $kernel, 0),
+        @(0x00010002, 9, 10, 4, 4, 4, 1, 5, 5, $kernel, 0),
+        @(0x00010003, 9, 10, 0, 0, 3, 1, 1, 1, $kernel, 0),
+        @(0x00010004, 1, 0, 1, 4, 2, 1, 2, 3, $kernel, 0),
+        @(0x00010005, 7, 1, 0, 0, 0, 0, 0, 0, $kernel, 0),
+        @(0x00010006, 7, 1, 0, 0, 0, 0, 0, 0, ($kernel -bor $callback), 0),
+        @(0x00020001, 1, 2, 1, 2, 2, 1, 2, 3, ($kernel -bor $callback), 0),
+        @(0x00020002, 1, 3, 0, 3, 1, 1, 1, 2, ($kernel -bor $callback), 0),
+        @(0x00030001, 1, 4, 2, 2, 2, 1, 2, 5, ($kernel -bor $callback), 1),
+        @(0x00030002, 1, 4, 4, 4, 4, 1, 5, 5, ($kernel -bor $callback), 0),
+        @(0x00030003, 1, 4, 4, 4, 4, 1, 5, 5, ($kernel -bor $callback), 0),
+        @(0x00040001, 1, 8, 3, 4, 3, 1, 6, 5, $kernel, 0),
+        @(0x00040002, 1, 8, 1, 3, 1, 1, 2, 3, $kernel, 0),
+        @(0x00080001, 1, 9, 1, 3, 1, 1, 1, 2, $kernel, 0)
+    )
+}
+
+function New-SignedPolicyBytes(
+    [byte[]]$PolicyId,
+    [byte[]]$GameId,
+    [byte[]]$BuildId,
+    [byte[]]$ChannelId,
+    [uint64]$PolicyVersion,
+    [uint64]$UpdateSequence,
+    [uint64]$IssuedAtUnixSeconds,
+    [uint64]$ExpiresAtUnixSeconds,
+    [byte[]]$SigningKeyId,
+    [uint32]$Flags = 0,
+    [uint32]$EmergencyReason = 0,
+    [uint64]$RollbackFromPolicyVersion = 0,
+    [byte[]]$RollbackFromPolicySha256 = $null
+) {
+    foreach ($identity in @($PolicyId, $GameId, $BuildId, $ChannelId)) {
+        if ($identity.Length -ne 16) {
+            throw 'Signed-policy identities must contain exactly 16 bytes.'
+        }
+    }
+    if ($SigningKeyId.Length -ne 32) {
+        throw 'The signed-policy key identity must contain exactly 32 bytes.'
+    }
+    if ($null -eq $RollbackFromPolicySha256) {
+        $RollbackFromPolicySha256 = [byte[]]::new(32)
+    }
+    if ($RollbackFromPolicySha256.Length -ne 32) {
+        throw 'The signed-policy rollback digest must contain exactly 32 bytes.'
+    }
+    $rules = Get-PolicyRules
+    if ($rules.Count -ne 14) {
+        throw 'The canonical signed-policy rule catalog must contain 14 rules.'
+    }
+
+    $stream = [IO.MemoryStream]::new(1024)
+    $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::Unicode, $true)
+    try {
+        $writer.Write([Text.Encoding]::ASCII.GetBytes('OACPOLCY'))
+        $writer.Write([uint32]1)
+        $writer.Write([uint32]1024)
+        $writer.Write($Flags)
+        $writer.Write([uint32]2)
+        $writer.Write($PolicyId)
+        $writer.Write($GameId)
+        $writer.Write($BuildId)
+        $writer.Write($ChannelId)
+        $writer.Write($PolicyVersion)
+        $writer.Write($UpdateSequence)
+        $writer.Write($IssuedAtUnixSeconds)
+        $writer.Write($ExpiresAtUnixSeconds)
+        $writer.Write([uint32]0x00050005)
+        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]1)
+        $writer.Write([uint32]$rules.Count)
+        $writer.Write($EmergencyReason)
+        $writer.Write($SigningKeyId)
+        $writer.Write($RollbackFromPolicyVersion)
+        $writer.Write($RollbackFromPolicySha256)
+        foreach ($rule in $rules) {
+            for ($field = 0; $field -lt 9; $field++) {
+                $writer.Write([uint32]$rule[$field])
+            }
+            $writer.Write([uint32]0)
+            $writer.Write([uint64]$rule[9])
+            $writer.Write([uint32]$rule[10])
+            $writer.Write([uint32]0)
+        }
+        $writer.Write([byte[]]::new(24))
+        $writer.Flush()
+        $bytes = $stream.ToArray()
+        if ($bytes.Length -ne 1024) {
+            throw "The canonical signed policy has an unexpected size: $($bytes.Length)"
+        }
+        return ,$bytes
+    } finally {
+        $writer.Dispose()
+        $stream.Dispose()
     }
 }
 
@@ -478,7 +580,7 @@ try {
         $launcherHash `
         $signingKeyId `
         $targetName
-    Write-SignedGameManifest `
+    Write-SignedRecord `
         $validManifest $targetManifest $targetSignature $certificate
 
     $fixtureDefinitions = @(
@@ -519,11 +621,85 @@ try {
             $fixture.Hash `
             $signingKeyId `
             $targetName
-        Write-SignedGameManifest `
+        Write-SignedRecord `
             $fixtureBytes $fixtureManifest $fixtureSignature $certificate
         $manifestFixtures.Add($fixtureManifest)
         $manifestFixtures.Add($fixtureSignature)
     }
+
+    $policyId = [Guid]::NewGuid().ToByteArray()
+    $channelId = ([Guid]'16f42141-ca73-49a0-80a8-86df64076964').ToByteArray()
+    $validPolicy = New-SignedPolicyBytes `
+        $policyId $gameId.ToByteArray() ([byte[]]$buildId) $channelId `
+        3 3 ($now - 60) $validExpiry $signingKeyId
+    $policyPath = Join-Path $package 'OAC.policy'
+    $policySignature = "$policyPath.p7s"
+    Write-SignedRecord $validPolicy $policyPath $policySignature $certificate
+
+    $policyFixtures = [Collections.Generic.List[string]]::new()
+    $wrongScopePolicy = New-SignedPolicyBytes `
+        ([Guid]::NewGuid().ToByteArray()) $gameId.ToByteArray() `
+        ([Guid]::NewGuid().ToByteArray()) `
+        ([Guid]::NewGuid().ToByteArray()) `
+        1 1 ($now - 60) $validExpiry $signingKeyId
+    $wrongScopePath = Join-Path $output 'OAC-Policy-Wrong-Scope.bin'
+    Write-SignedRecord `
+        $wrongScopePolicy $wrongScopePath "$wrongScopePath.p7s" $certificate
+    $policyFixtures.Add($wrongScopePath)
+    $policyFixtures.Add("$wrongScopePath.p7s")
+
+    $expiredPolicy = New-SignedPolicyBytes `
+        ([Guid]::NewGuid().ToByteArray()) $gameId.ToByteArray() `
+        ([byte[]]$buildId) ([Guid]::NewGuid().ToByteArray()) `
+        1 1 ($now - 2 * 24 * 60 * 60) ($now - 24 * 60 * 60) $signingKeyId
+    $expiredPolicyPath = Join-Path $output 'OAC-Policy-Expired.bin'
+    Write-SignedRecord `
+        $expiredPolicy $expiredPolicyPath "$expiredPolicyPath.p7s" $certificate
+    $policyFixtures.Add($expiredPolicyPath)
+    $policyFixtures.Add("$expiredPolicyPath.p7s")
+
+    $rollbackPolicy = New-SignedPolicyBytes `
+        ([Guid]::NewGuid().ToByteArray()) $gameId.ToByteArray() `
+        ([byte[]]$buildId) $channelId `
+        2 4 ($now - 60) $validExpiry $signingKeyId
+    $rollbackPolicyPath = Join-Path $output 'OAC-Policy-Rollback.bin'
+    Write-SignedRecord `
+        $rollbackPolicy $rollbackPolicyPath "$rollbackPolicyPath.p7s" $certificate
+    $policyFixtures.Add($rollbackPolicyPath)
+    $policyFixtures.Add("$rollbackPolicyPath.p7s")
+
+    $authorizedRollbackPolicy = New-SignedPolicyBytes `
+        ([Guid]::NewGuid().ToByteArray()) $gameId.ToByteArray() `
+        ([byte[]]$buildId) $channelId `
+        2 4 ($now - 60) $validExpiry $signingKeyId 2 0 3 `
+        (Get-Sha256Bytes $validPolicy)
+    $authorizedRollbackPath =
+        Join-Path $output 'OAC-Policy-Authorized-Rollback.bin'
+    Write-SignedRecord `
+        $authorizedRollbackPolicy $authorizedRollbackPath `
+        "$authorizedRollbackPath.p7s" $certificate
+    $policyFixtures.Add($authorizedRollbackPath)
+    $policyFixtures.Add("$authorizedRollbackPath.p7s")
+
+    $emergencyPolicy = New-SignedPolicyBytes `
+        ([Guid]::NewGuid().ToByteArray()) $gameId.ToByteArray() `
+        ([byte[]]$buildId) $channelId `
+        4 5 ($now - 60) $validExpiry $signingKeyId 1 3
+    $emergencyPolicyPath = Join-Path $output 'OAC-Policy-Emergency-Revoke.bin'
+    Write-SignedRecord `
+        $emergencyPolicy $emergencyPolicyPath `
+        "$emergencyPolicyPath.p7s" $certificate
+    $policyFixtures.Add($emergencyPolicyPath)
+    $policyFixtures.Add("$emergencyPolicyPath.p7s")
+
+    $wrongSignaturePath = Join-Path $output 'OAC-Policy-Wrong-Signature.bin'
+    $wrongSignatureFile = "$wrongSignaturePath.p7s"
+    [IO.File]::WriteAllBytes($wrongSignaturePath, $validPolicy)
+    [IO.File]::WriteAllBytes(
+        $wrongSignatureFile,
+        [IO.File]::ReadAllBytes("$wrongScopePath.p7s"))
+    $policyFixtures.Add($wrongSignaturePath)
+    $policyFixtures.Add($wrongSignatureFile)
 
     $finalSourceCommit = Get-CleanSourceCommit $repoRoot
     if ($finalSourceCommit -cne $sourceCommit) {
@@ -538,7 +714,7 @@ try {
         }
     }
     $testFiles = @($protocolTestOutput, $protocolUnitOutput) +
-        @($manifestFixtures) | ForEach-Object {
+        @($manifestFixtures) + @($policyFixtures) | ForEach-Object {
         $item = Get-Item -LiteralPath $_
         [ordered]@{
             name = $item.Name

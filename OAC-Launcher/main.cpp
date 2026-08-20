@@ -285,7 +285,7 @@ const wchar_t* LaunchDetailText(uint32_t detail) noexcept
     case OAC_IPC_LAUNCH_DETAIL_TARGET_EXIT:
         return L"target exited during creation";
     case OAC_IPC_LAUNCH_DETAIL_POLICY:
-        return L"driver policy revoked the session";
+        return L"signed policy denied the launch";
     case OAC_IPC_LAUNCH_DETAIL_EVIDENCE_LOSS:
         return L"driver evidence loss";
     case OAC_IPC_LAUNCH_DETAIL_DRIVER_STOP:

@@ -2,136 +2,128 @@
 
 [![Windows build](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml/badge.svg?branch=main)](https://github.com/lauralex/OAC/actions/workflows/msbuild.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#build-from-source)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-0078D4.svg)](#building-oac)
 
-**A defensive Windows anti-cheat research project with a demand-start kernel driver, a restricted
-control service, and reproducible disposable-VM validation.**
+**OAC is a defensive Windows anti-cheat research project built around a narrow, auditable trust
+boundary.** It combines a demand-start kernel driver, a restricted control service, and a
+standard-user launcher with reproducible validation in an isolated virtual machine.
 
-OAC explores how to build a small, explicit trust boundary between a standard-user launcher, a
-privileged Windows service, and a kernel driver. The current production-control MVP can authenticate
-a local launcher request, authorize an exact signed game build, create it under the caller's token,
-bind that process during creation, confirm the exact process handle, assign its process tree to a
-service-owned job, and only then resume its first thread.
+The project asks a practical question: *how much useful protection can be achieved without turning
+the driver into a second operating system?* OAC keeps identity, signatures, policy, reporting, and
+other blocking work in user mode. The kernel is responsible only for the small set of operations
+that require kernel authority.
 
 > [!IMPORTANT]
-> OAC is an engineering reference, not a production-ready anti-cheat release. It does not yet include
-> externally signed runtime policy, authenticated backend evidence delivery, backend leases,
-> manifest-key rotation, a supported compatibility matrix, or production driver signing. Never
-> install the disposable test package on a workstation or production system.
+> OAC is an engineering reference, **not a production-ready anti-cheat release**. The repository
+> does not provide production driver signing, a supported hardware and Windows compatibility
+> matrix, authenticated backend admission, or a finished game-integration SDK. Never install the
+> disposable test package on a workstation or production system.
 
-## Why this project exists
-
-OAC focuses on security properties that are easy to lose in a Windows anti-cheat design:
-
-- **Authority stays narrow.** Standard users communicate with a restricted service and never
-  receive a privileged driver handle.
-- **Target binding happens early.** A bounded, one-use launch ticket binds the target in the process
-  creation callback before its initial thread is resumed.
-- **Kernel work stays bounded.** Blocking inspection, signature checks, reporting, and stack walking
-  remain in user mode; callbacks and processor sampling stay IRQL-appropriate.
-- **Lifetime rules are explicit.** Sessions are bound to exact process and file objects, use rundown,
-  and retain a live-target tombstone when cleanup cannot safely retire immediately.
-- **Evidence loss is explicit.** Important alerts remain until acknowledged, lower-priority event
-  gaps are counted, and large inventories use immutable bounded snapshots.
-- **Claims are evidence-bound.** Driver-backed behavior is exercised in a networkless disposable VM
-  under standard Driver Verifier, while broader compatibility remains explicitly unclaimed.
-
-## Architecture at a glance
+## The trust path
 
 ```mermaid
 flowchart LR
-    User["Standard-user application"] --> Launcher["OAC Launcher"]
-    Launcher -->|"authenticated local IPC"| Service["Restricted OAC service"]
-    Manifest["Signed game manifest"] -->|"build authorization"| Service
-    Service -->|"production session + launch ticket"| Driver["Demand-start OAC driver"]
-    Service -->|"create suspended + assign job"| Job["Kill-on-close job"]
-    Job --> Target["Protected target tree"]
-    Service -->|"bounded incremental sampling"| Target
-    Driver -->|"creation-time bind"| Target
-    Driver -->|"status and typed observations"| Service
+    Player["Standard-user game client"] -->|"local request"| Launcher["OAC Launcher"]
+    Launcher -->|"authenticated named pipe"| Service["Restricted OAC service"]
+    Manifest["Signed game manifest"] -->|"exact build"| Service
+    Policy["Signed policy"] -->|"rules, scope, expiry"| Service
+    Service -->|"one-use launch ticket"| Driver["Demand-start OAC driver"]
+    Service -->|"create suspended"| Target["Protected game process"]
+    Driver -->|"bind during creation"| Target
+    Service -->|"assign before resume"| Job["Kill-on-close job"]
+    Job --> Target
+    Driver -->|"typed evidence"| Service
 ```
 
-The launcher exposes status and one serialized executable-launch request. The service authenticates
-the local client, resolves and keeps the executable open under that identity, verifies its adjacent
-signed manifest and persistent rollback state, then arms the driver. It creates the process
-suspended with the caller's primary token, confirms the exact process, assigns it to a kill-on-close
-job, and resumes it. The driver enforces the session and target identity,
-filters selected dangerous user-mode process and thread handles, and reports prior session loss to
-the next restricted service instance. The service applies one typed rule catalog to both evidence
-channels; the driver does not assign policy outcomes. A separate service worker incrementally
-samples target memory regions and threads while the health loop continues to acknowledge alerts and
-monitor liveness.
+A launch is deliberately serialized. The service authenticates the local client, locks and verifies
+the requested executable, checks its signed manifest and the active signed policy, arms a bounded
+driver ticket, creates the process suspended under the caller's token, confirms the exact process
+handle, assigns the process tree to a service-owned job, and only then resumes the first thread.
 
-The separate `OAC-Client` scanner is a **lab-only diagnostic tool**. It is unavailable unless an
-explicit `LabMode=1` test configuration is present, and it cannot become the production controller.
+## Security properties
+
+- **Narrow authority.** Standard users never receive a privileged driver handle. Production driver
+  access is bound to the restricted service identity, creator process object, exact file object,
+  random session identifier, and monotonic generation.
+- **Early process binding.** The driver matches a one-use ticket in the process-creation callback;
+  it does not infer authority later from a reusable process identifier.
+- **Authenticated inputs.** Canonical game manifests and policy records use detached signatures,
+  protected signer pins, explicit scope and expiry, and persistent rollback state.
+- **Deterministic lifetime.** The target tree belongs to an unnamed kill-on-close job. Service
+  failure, graceful revocation, handle cleanup, and a live-target tombstone have explicit outcomes.
+- **Bounded kernel work.** Callbacks and processor sampling remain allocation-conscious and
+  IRQL-appropriate. Filesystem access, certificate validation, policy evaluation, and reporting
+  stay in the service.
+- **Evidence with provenance.** High-priority alerts are retained until acknowledged, operational
+  event gaps are counted, inventories use immutable paged snapshots, and policy decisions consume
+  typed fields rather than display strings.
 
 ## What is implemented
 
-### Production-control MVP
+The current source includes:
 
-- Strict typed negotiate, claim, status, launch-arm, cancel, and target-confirm messages.
-- Authority bound to the restricted service SID, creator process object, claimed file object,
-  random session identifier, and monotonic generation.
-- Standard-user status and one-executable launch through identity-checked local IPC.
-- Suspended caller-token process creation with canonical-path matching and one-use ticket expiry.
-- Canonical signed game manifests with exact executable hash, Authenticode signer, component
-  compatibility, expiration, protected signer pinning, and per-game rollback prevention.
-- Creation-time kernel binding, exact-handle confirmation, job assignment, and first-thread resume.
-- Service-owned target-tree lifetime with kill-on-close containment on graceful stop or service
-  failure, plus explicit idempotent driver-session revocation.
-- A monotonic session-loss status latch for service recovery diagnostics.
-- Separate bounded channels for retained high/critical alerts and lower-priority operational
-  events, with explicit sequence, acknowledgement, and loss metadata.
-- Frozen, expiring kernel-module snapshots with stable identifiers and cursor-based paging.
-- A centralized typed rule catalog with Observe, Enforce, and Strict modes, explicit confidence and
-  action results, signer-state classification, and display-text-independent decisions.
-- A bounded service evidence path that evaluates both channels, retains actionable policy results,
-  and fails closed on alert loss, session revocation, or local handoff exhaustion.
-- An independent service health loop and one-slot, cancellation-aware target worker with fixed
-  time, region, byte, and thread budgets, continuation state, and measured suspension latency.
-- Per-file cleanup, rundown, protocol isolation, live-target tombstones, and safe retirement.
-- Demand-start driver and service installation with strict package, service-policy, and cleanup
-  verification in the disposable test workflow.
+- strict production negotiation, claim, status, launch-arm, cancel, confirmation, evidence-read,
+  and snapshot messages;
+- identity-checked launcher IPC and one serialized caller-token launch transaction;
+- signed game-build authorization with exact executable hash and signer checks;
+- signed rule policy with deployment mode, build and channel scope, bounded validity, component
+  compatibility, replay protection, explicit rollback authorization, and emergency revocation;
+- creation-time target binding, exact-handle confirmation, pre-resume job assignment, and target
+  process-tree containment;
+- retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
+- deterministic Observe, Enforce, and Strict policy evaluation with typed confidence and actions;
+- a cancellation-aware service worker for bounded memory-region and thread sampling; and
+- a fail-closed disposable-VM installer, package validator, protocol suite, and Driver Verifier
+  campaign.
 
-### Lab-only diagnostics
+The separate **OAC Client** is an elevated laboratory scanner. It covers process, module, driver,
+handle, memory, thread, stack, service, callback, hardware-identity, debugger, virtualization, and
+kernel-integrity observations. It is unavailable unless the disposable test environment explicitly
+enables diagnostic mode, and it cannot become the production controller.
 
-The diagnostic scanner includes process, module, driver, handle, device, hardware-identity,
-debugger, virtualization, memory, thread, stack, service, callback, and kernel-integrity inspection.
-It correlates independent observations and preserves uncertainty rather than presenting every
-heuristic as proof of cheating.
+See the [capability reference](docs/CAPABILITIES.md) for the complete matrix and the limitations of
+each observation.
 
-See the [capabilities reference](docs/CAPABILITIES.md) for the complete matrix and its limitations.
+## Deliberate limitations
 
-### Still planned
+OAC does not claim universal detection, a driver-load veto, or protection against a hostile kernel,
+DMA device, hypervisor, or compromised firmware. Work still required for a deployable product
+includes:
 
-- Externally signed runtime policy selection and manifest-key rotation/revocation metadata.
-- Approved module, middleware, overlay, child-process, and runtime-class rules for real games.
-- Authenticated backend sessions, leases, and evidence acknowledgement.
-- Production signing, operational controls, privacy review, and supported-platform certification.
+- authenticated backend sessions, leases, evidence upload, acknowledgement, and replay handling;
+- manifest signer rotation and revocation metadata;
+- approved module, middleware, overlay, child-process, and runtime rules for a real game;
+- production signing, release engineering, privacy and retention policy, and platform certification.
 
-The [hardening roadmap](docs/hardening-plan.md) describes this remaining work. Roadmap text is not a
-claim that a feature already exists.
+The [hardening plan](docs/hardening-plan.md) describes those work packages. Roadmap text is a design
+target, not evidence that a feature already exists.
 
-## Repository layout
+## Repository guide
 
 | Path | Responsibility |
 |---|---|
-| [`OAC/`](OAC/) | C17 WDM driver, session lifetime, callbacks, bounded scans, and telemetry |
-| [`OAC-Service/`](OAC-Service/) | Restricted controller, target-launch owner, and bounded scan scheduler |
+| [`OAC/`](OAC/) | C17 WDM driver: sessions, callbacks, bounded scans, and telemetry |
+| [`OAC-Service/`](OAC-Service/) | Restricted controller, signed authorization, launch ownership, and scheduling |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
-| [`OAC-Client/`](OAC-Client/) | Elevated lab scanner and diagnostic reporting |
-| [`shared/`](shared/) | Production, diagnostic, launcher IPC, manifest, and typed policy contracts |
-| [`tests/unit/`](tests/unit/) | Driver-free protocol, policy, layout, validation, and transition tests |
-| [`tools/`](tools/) | Protocol integration, packaging, policy, and repository tooling |
-| [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance harness |
+| [`OAC-Client/`](OAC-Client/) | Elevated laboratory scanner and diagnostic reports |
+| [`shared/`](shared/) | Wire contracts, canonical records, policy rules, and strict validators |
+| [`tests/unit/`](tests/unit/) | Driver-free layout, validation, transition, and policy regression tests |
+| [`tools/`](tools/) | Integration tests, packaging, installation, and repository checks |
+| [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance workflow |
 
-## Build from source
+For architecture and security details, start with:
 
-Requirements:
+- [Architecture](docs/ARCHITECTURE.md)
+- [Security model](docs/SECURITY_MODEL.md)
+- [Production protocol](docs/PROTOCOL.md)
+- [Capabilities and limitations](docs/CAPABILITIES.md)
 
-- Visual Studio 2022 with the Desktop C++ workload
-- Windows SDK and WDK `10.0.26100.0`
-- An x64 Native Tools command prompt
+Exact campaign hashes, work-package bookkeeping, historical baselines, and maintainer decisions are
+kept separately in the [development records](docs/development/README.md).
+
+## Building OAC
+
+You need Visual Studio 2022, the x64 C++ toolchain, and Windows SDK/WDK `10.0.26100.0`.
 
 ```powershell
 msbuild .\OAC.sln /m /t:Rebuild `
@@ -141,76 +133,40 @@ msbuild .\OAC.sln /m /t:Rebuild `
 .\x64\Release\OAC-Protocol-Unit.exe
 ```
 
-The build intentionally produces an unsigned driver. Do not load it by weakening host security or
-using a vulnerable-driver mapper. Use an authorized signing pipeline for production work, or follow
-the [disposable-VM test guide](docs/test-signing.md) for isolated development validation.
+The build intentionally produces an unsigned driver. **Do not weaken a development workstation to
+load it and do not use a vulnerable-driver mapper.** Use an authorized production signing pipeline,
+or follow the [disposable-VM guide](docs/test-signing.md) for isolated development testing.
 
-For both supported configurations, repository validation, static analysis, and change-specific
-gates, see [CONTRIBUTING.md](CONTRIBUTING.md).
+The full contributor build, analysis, and change-specific gates are documented in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Launcher interface
 
 After a reviewed deployment has installed the driver and restricted service, a standard user can
-query the production-control path:
+query status or request one exact executable launch:
 
 ```powershell
 OAC-Launcher.exe --status
-```
-
-The same user can request one absolute local executable path with no arguments:
-
-```powershell
 OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
 ```
 
-This interface demonstrates the current MVP boundary. It is not a general-purpose launcher and
-requires an adjacent authorized game manifest and detached signature. It does not provide backend
-admission.
+The launch request accepts one absolute local executable path and no arguments. It requires an
+authorized adjacent game manifest and an active policy whose game and build scope match. It is not
+a general-purpose launcher and does not provide backend admission.
 
-## Validation status
+## Validation
 
-Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed:
+The accepted source baseline has passed clean Debug and Release builds, driver-free regression
+tests, PREfast, solution-wide static analysis, package and signing checks, and a networkless Windows
+11 build 26100 campaign under standard Driver Verifier. Runtime claims are limited to the exact
+commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they are not a general
+Windows, HVCI/VBS, hardware, or game-compatibility certification.
 
-- clean x64 Debug and Release builds with warnings treated as errors;
-- `518/518` driver-free protocol, policy, and manifest tests in both configurations;
-- driver PREfast and solution-wide Release analysis;
-- package, catalog, signature, INF, seed, and host-residue validation; and
-- a networkless Windows 11 build 26100 campaign with 34 exact results and standard Driver Verifier.
-  It accepted two authorized signed launches, rejected modified, wrong-build, expired, and rollback
-  manifests, verified job ownership and target-tree containment, exercised bounded evidence and
-  scheduling paths, and finished with zero crashes or minidumps.
-
-That campaign proves one exact source, build, configuration, and guest environment. It is not a
-universal Windows, HVCI/VBS, hardware, or game-compatibility certification. Maintainer-facing
-evidence and remaining gates live in the [development records](docs/development/README.md).
-
-## Documentation
-
-### For users and evaluators
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [Security model](docs/SECURITY_MODEL.md)
-- [Protocol reference](docs/PROTOCOL.md)
-- [Capability matrix](docs/CAPABILITIES.md)
-- [Driver-load research](docs/driver-load-review.md)
-- [Hardware-identity research](docs/hwid-review.md)
-- [Security policy](SECURITY.md)
-
-### For contributors and maintainers
-
-- [Contributing guide](CONTRIBUTING.md)
-- [Development records](docs/development/README.md)
-- [Disposable-VM test guide](docs/test-signing.md)
-- [Documentation index](docs/README.md)
-
-## Security and responsible use
+## Responsible use
 
 OAC is defensive software. The project does not accept vulnerable-driver loading, kernel hiding,
-Code Integrity or PatchGuard bypasses, anti-forensics, exploit delivery, or private-loader hooks.
-Kernel-privileged attackers, DMA devices, hostile hypervisors, and compromised firmware remain
-outside what an in-guest anti-cheat can reliably defeat.
-
-Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
+Code Integrity or PatchGuard bypasses, exploit delivery, anti-forensics, or private loader hooks.
+Please report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## License
 

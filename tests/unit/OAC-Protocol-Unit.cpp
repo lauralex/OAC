@@ -16,6 +16,7 @@
 #include "../../shared/oac_lease.h"
 #include "../../shared/oac_manifest.h"
 #include "../../shared/oac_policy.h"
+#include "../../shared/oac_signed_policy.h"
 #include "../../shared/oac_thread_suspension.hpp"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
@@ -71,6 +72,11 @@ static_assert(sizeof(OAC_GAME_MANIFEST) == 512);
 static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableSha256) == 120);
 static_assert(offsetof(OAC_GAME_MANIFEST, ExecutableName) == 184);
 static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96);
+static_assert(std::is_standard_layout_v<OAC_SIGNED_POLICY>);
+static_assert(std::is_trivially_copyable_v<OAC_POLICY_CACHE_STATE>);
+static_assert(sizeof(OAC_SIGNED_POLICY) == 1024);
+static_assert(offsetof(OAC_SIGNED_POLICY, Rules) == 216);
+static_assert(sizeof(OAC_POLICY_CACHE_STATE) == 160);
 
 namespace
 {
@@ -3301,6 +3307,262 @@ void TestGameManifest(TestLog& log)
             1,
             &next) == OAC_MANIFEST_ROLLBACK_INVALID_STATE);
 }
+
+OAC_SIGNED_POLICY ValidSignedPolicy()
+{
+    OAC_SIGNED_POLICY policy{};
+    constexpr std::array<uint8_t, 8> magic{
+        'O', 'A', 'C', 'P', 'O', 'L', 'C', 'Y'
+    };
+    std::copy(magic.begin(), magic.end(), policy.Magic);
+    policy.SchemaVersion = OAC_SIGNED_POLICY_SCHEMA;
+    policy.Size = sizeof(policy);
+    policy.Mode = OAC_POLICY_MODE_ENFORCE;
+    for (size_t index = 0; index != OAC_POLICY_ID_SIZE; ++index)
+    {
+        policy.PolicyId[index] = static_cast<uint8_t>(index + 1);
+        policy.GameId[index] = static_cast<uint8_t>(index + 17);
+        policy.BuildId[index] = static_cast<uint8_t>(index + 33);
+        policy.ChannelId[index] = static_cast<uint8_t>(index + 49);
+    }
+    policy.PolicyVersion = 7;
+    policy.UpdateSequence = 10;
+    policy.IssuedAtUnixSeconds = 999900;
+    policy.ExpiresAtUnixSeconds = 1086400;
+    policy.RequiredDriverProtocol = OAC_V5_VERSION;
+    policy.RequiredServiceProtocol = OAC_IPC_PROTOCOL_REVISION;
+    policy.RequiredLauncherProtocol = OAC_IPC_PROTOCOL_REVISION;
+    policy.RuleCatalogRevision = OAC_POLICY_RULE_CATALOG_REVISION;
+    policy.RuleCount = OAC_POLICY_RULE_COUNT;
+    for (size_t index = 0; index != OAC_POLICY_HASH_SIZE; ++index)
+        policy.SigningKeyId[index] = static_cast<uint8_t>(index + 65);
+    size_t ruleCount = 0;
+    const OAC_POLICY_RULE* rules = OacPolicyRuleCatalog(&ruleCount);
+    if (rules != nullptr && ruleCount == OAC_POLICY_RULE_COUNT)
+    {
+        std::copy(rules, rules + ruleCount, policy.Rules);
+    }
+    return policy;
+}
+
+void TestSignedPolicy(TestLog& log)
+{
+    constexpr uint64_t now = 1000000;
+    auto policy = ValidSignedPolicy();
+    const auto validate = [&policy](uint64_t currentTime) {
+        return OacSignedPolicyValidate(
+            &policy,
+            sizeof(policy),
+            currentTime,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION);
+    };
+
+    log.Expect("valid canonical signed policy",
+        validate(now) == OAC_SIGNED_POLICY_VALID);
+    log.Expect("signed policy exact scope",
+        OacSignedPolicyScopeMatches(
+            &policy, policy.GameId, policy.BuildId) != 0);
+    auto wrongBuild = std::array<uint8_t, OAC_POLICY_ID_SIZE>{};
+    std::copy(
+        std::begin(policy.BuildId), std::end(policy.BuildId), wrongBuild.begin());
+    wrongBuild[0] ^= 1;
+    log.Expect("signed policy rejects wrong scope",
+        OacSignedPolicyScopeMatches(
+            &policy, policy.GameId, wrongBuild.data()) == 0);
+    log.Expect("signed policy null pointer",
+        OacSignedPolicyValidate(
+            nullptr, sizeof(policy), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_POINTER);
+    log.Expect("signed policy exact length",
+        OacSignedPolicyValidate(
+            &policy, sizeof(policy) - 1, now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_LENGTH);
+
+    auto invalid = policy;
+    invalid.Magic[0] ^= 1;
+    log.Expect("signed policy magic", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_MAGIC);
+    invalid = policy;
+    ++invalid.SchemaVersion;
+    log.Expect("signed policy schema", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_SCHEMA);
+    invalid = policy;
+    invalid.Reserved[0] = 1;
+    log.Expect("signed policy reserved tail", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_RESERVED);
+    invalid = policy;
+    std::fill(
+        std::begin(invalid.PolicyId),
+        std::end(invalid.PolicyId),
+        uint8_t{0});
+    log.Expect("signed policy identity", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_IDENTITY);
+    invalid = policy;
+    invalid.IssuedAtUnixSeconds = now + OAC_POLICY_CLOCK_SKEW_SECONDS + 1;
+    log.Expect("signed policy future issuance", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_TIME);
+    invalid = policy;
+    invalid.ExpiresAtUnixSeconds = now - OAC_POLICY_CLOCK_SKEW_SECONDS - 1;
+    invalid.IssuedAtUnixSeconds = invalid.ExpiresAtUnixSeconds - 10;
+    log.Expect("signed policy expiration", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_EXPIRED);
+    invalid = policy;
+    ++invalid.RequiredDriverProtocol;
+    log.Expect("signed policy component compatibility", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INCOMPATIBLE_COMPONENT);
+    invalid = policy;
+    std::swap(invalid.Rules[0], invalid.Rules[1]);
+    log.Expect("signed policy ordered rule identities", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_RULES);
+    invalid = policy;
+    invalid.Rules[0].EnforceAction =
+        OAC_POLICY_ACTION_REQUEST_SERVER_REVIEW + 1;
+    log.Expect("signed policy action range", OacSignedPolicyValidate(
+        &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+        OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_RULES);
+
+    invalid = policy;
+    invalid.Flags = OAC_SIGNED_POLICY_EMERGENCY_REVOKE;
+    invalid.EmergencyReason = OAC_POLICY_EMERGENCY_BUILD_WITHDRAWN;
+    log.Expect("signed emergency revoke",
+        OacSignedPolicyValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_VALID);
+    invalid.Flags |= OAC_SIGNED_POLICY_ROLLBACK_AUTHORIZATION;
+    invalid.RollbackFromPolicyVersion = policy.PolicyVersion + 1;
+    std::fill(
+        std::begin(invalid.RollbackFromPolicySha256),
+        std::end(invalid.RollbackFromPolicySha256),
+        uint8_t{0x31});
+    log.Expect("signed policy rejects combined emergency rollback",
+        OacSignedPolicyValidate(
+            &invalid, sizeof(invalid), now, OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION, OAC_IPC_PROTOCOL_REVISION) ==
+            OAC_SIGNED_POLICY_INVALID_OPERATION);
+
+    auto customized = policy;
+    customized.Rules[1].EnforceAction = OAC_POLICY_ACTION_WARN;
+    auto observation = ValidEventRecord();
+    observation.RuleId = OAC_V5_RULE_SESSION_LOST;
+    observation.EventType = OAC_V5_EVENT_REVOCATION;
+    observation.Category = OAC_V5_CATEGORY_SERVICE;
+    observation.ObservationSeverity = OAC_V5_OBSERVATION_CRITICAL;
+    observation.EvidenceFlags = OAC_V5_EVIDENCE_KERNEL_SOURCE;
+    OAC_POLICY_DECISION decision{};
+    log.Expect("signed rules drive policy evaluation",
+        OacPolicyEvaluateRules(
+            customized.Mode,
+            customized.Rules,
+            customized.RuleCount,
+            &observation,
+            nullptr,
+            &decision) != 0 &&
+        decision.Action == OAC_POLICY_ACTION_WARN);
+
+    std::array<uint8_t, OAC_POLICY_HASH_SIZE> firstDigest{};
+    std::fill(firstDigest.begin(), firstDigest.end(), uint8_t{0xA1});
+    OAC_POLICY_CACHE_STATE first{};
+    log.Expect("signed policy first cache state",
+        OacPolicyEvaluateUpdate(
+            &policy, firstDigest.data(), nullptr, 0, &first) ==
+            OAC_POLICY_UPDATE_ACCEPT_NEW &&
+        OacPolicyCacheStateValid(&first) != 0 &&
+        first.HighestPolicyVersion == policy.PolicyVersion);
+    OAC_POLICY_CACHE_STATE next{};
+    log.Expect("signed policy current cache state",
+        OacPolicyEvaluateUpdate(
+            &policy, firstDigest.data(), &first, 1, &next) ==
+            OAC_POLICY_UPDATE_ACCEPT_CURRENT &&
+        std::memcmp(&next, &first, sizeof(next)) == 0);
+    auto otherDigest = firstDigest;
+    otherDigest[0] ^= 1;
+    log.Expect("signed policy sequence equivocation",
+        OacPolicyEvaluateUpdate(
+            &policy, otherDigest.data(), &first, 1, &next) ==
+            OAC_POLICY_UPDATE_REJECT_EQUIVOCATION);
+
+    auto newer = policy;
+    ++newer.PolicyVersion;
+    ++newer.UpdateSequence;
+    std::array<uint8_t, OAC_POLICY_HASH_SIZE> newerDigest{};
+    std::fill(newerDigest.begin(), newerDigest.end(), uint8_t{0xB2});
+    OAC_POLICY_CACHE_STATE highWater{};
+    log.Expect("signed policy monotonic update",
+        OacPolicyEvaluateUpdate(
+            &newer, newerDigest.data(), &first, 1, &highWater) ==
+            OAC_POLICY_UPDATE_ACCEPT_NEW &&
+        highWater.HighestPolicyVersion == newer.PolicyVersion &&
+        highWater.CurrentPolicyVersion == newer.PolicyVersion);
+
+    auto rollback = policy;
+    rollback.UpdateSequence = newer.UpdateSequence + 1;
+    rollback.Flags = OAC_SIGNED_POLICY_ROLLBACK_AUTHORIZATION;
+    rollback.RollbackFromPolicyVersion = newer.PolicyVersion;
+    std::copy(
+        newerDigest.begin(), newerDigest.end(),
+        rollback.RollbackFromPolicySha256);
+    std::array<uint8_t, OAC_POLICY_HASH_SIZE> rollbackDigest{};
+    std::fill(rollbackDigest.begin(), rollbackDigest.end(), uint8_t{0xC3});
+    OAC_POLICY_CACHE_STATE rolledBack{};
+    log.Expect("signed explicit rollback",
+        OacPolicyEvaluateUpdate(
+            &rollback,
+            rollbackDigest.data(),
+            &highWater,
+            1,
+            &rolledBack) == OAC_POLICY_UPDATE_ACCEPT_ROLLBACK &&
+        rolledBack.HighestPolicyVersion == newer.PolicyVersion &&
+        rolledBack.CurrentPolicyVersion == rollback.PolicyVersion);
+    auto replay = newer;
+    replay.UpdateSequence = rollback.UpdateSequence + 1;
+    log.Expect("signed rollback preserves historical high water",
+        OacPolicyEvaluateUpdate(
+            &replay,
+            newerDigest.data(),
+            &rolledBack,
+            1,
+            &next) == OAC_POLICY_UPDATE_REJECT_REPLAY);
+    rollback.RollbackFromPolicySha256[0] ^= 1;
+    log.Expect("signed rollback binds current digest",
+        OacPolicyEvaluateUpdate(
+            &rollback,
+            rollbackDigest.data(),
+            &highWater,
+            1,
+            &next) == OAC_POLICY_UPDATE_REJECT_ROLLBACK);
+
+    auto corrupt = first;
+    corrupt.Reserved[0] = 1;
+    log.Expect("signed policy rejects corrupt cache",
+        OacPolicyEvaluateUpdate(
+            &newer,
+            newerDigest.data(),
+            &corrupt,
+            1,
+            &next) == OAC_POLICY_UPDATE_INVALID_STATE);
+}
 } // namespace
 
 int main()
@@ -3331,5 +3593,6 @@ int main()
     TestSignerClassification(log);
     TestPolicyEvaluation(log);
     TestGameManifest(log);
+    TestSignedPolicy(log);
     return log.ExitCode();
 }

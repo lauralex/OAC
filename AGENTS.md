@@ -22,9 +22,11 @@
   WP-01 through WP-09. The campaign covered signed-manifest authorization and rejection, target-tree
   containment after service crash and graceful stop, session-loss reporting, retained-alert
   delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots, and the
-  independent health loop with bounded target sampling. The service applies the fixed typed policy
-  catalog to both evidence channels. Externally signed policy, manifest-key rotation, authenticated
-  backend leases, and authenticated upload are not implemented.
+  independent health loop with bounded target sampling. The service applies an authenticated typed
+  policy to both evidence channels. The canonical record binds game/build/channel scope and
+  component compatibility, expires, prevents replay, and supports explicit rollback authorization
+  and emergency revocation. Manifest-key rotation, authenticated backend leases, and authenticated
+  upload are not implemented.
 
 ## Repository map
 
@@ -38,6 +40,7 @@
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
+| `shared/oac_signed_policy.*` | Canonical signed policy, update decision, and persistent cache-state contracts |
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
