@@ -2,8 +2,8 @@
 
 **Status:** WP-01 through WP-12 tested locally and in the disposable-VM campaign at implementation
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
-passed. WP-13 game/server contracts and the reference detector are locally driver-free tested;
-hosted checks are pending.
+passed. WP-13 game/server contracts and the reference detector passed local and PR #19 hosted
+driver-free acceptance at implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,10 +19,10 @@ Labels in this document are evidence states:
 
 | Check | Current source | Current evidence |
 |---|---|---|
-| `Debug|x64` solution build | Workflow matrix configured | Local and PR #18 hosted builds passed with zero warnings/errors |
-| `Release|x64` solution build | Workflow matrix configured | Local and PR #18 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `663/663`; the earlier `623/623` foundation also passed on PR #18 |
-| Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #18 |
+| `Debug|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
+| `Release|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local and PR #19 hosted Debug/Release runs passed `663/663` |
+| Protocol layout assertions | Diagnostic, production, and game-event compile-time sizes/offsets | Compiled in both local configurations and on PR #19 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
 | Clang-Tidy | Required for scanner changes | Current `OAC-Client` analysis passed across all eight translation units with warnings treated as errors; the four changed service translation units passed targeted analysis |
@@ -197,11 +197,12 @@ or game-compatibility evidence.
 | WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-12 scanner modularization | Coherent kernel scanner responsibilities, common user-mode ownership helpers, parser/helper units, no behavioral regression | Debug/Release `623/623`, driver PREfast, scanner Clang-Tidy, repository checks, VM/Verifier acceptance at `67d3f61`, and PR #18 hosted checks passed |
-| WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local Debug/Release `663/663`, full builds, analysis, and repository checks pass; hosted checks remain pending; no VM rerun is required for this portable-only change |
+| WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation
-evidence. WP-13 does not modify or extend that Windows runtime claim.
+evidence. PR #19 supplies WP-13's portable hosted build, unit, and repository-validation evidence.
+WP-13 does not modify or extend the Windows runtime claim.
 
 ## Exact host commands
 

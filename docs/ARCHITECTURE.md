@@ -2,8 +2,9 @@
 
 **Status:** WP-01 through WP-12 accepted locally and in the disposable-VM campaign at implementation
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
-passed. WP-13 adds a portable game-event contract and reference server detector with driver-free
-coverage; production game and backend deployment remain external integration work.
+passed. WP-13's portable game-event contract and reference server detector passed local and PR #19
+hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`; production game and
+backend deployment remain external integration work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 

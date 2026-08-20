@@ -30,9 +30,11 @@
   interface, protected deterministic test backend, bounded leases, fixed evidence queuing,
   acknowledgement, and driver-session binding. The portable game/server interface provides
   canonical authoritative movement records, replay-safe detector state, one bounded movement and
-  velocity invariant, and explainable behavior/endpoint risk decisions. A production network
-  transport, backend service, durable remote and replay storage, real game adapter, manifest-key
-  rotation, and remote policy delivery are not implemented.
+  velocity invariant, and explainable behavior/endpoint risk decisions. Implementation commit
+  `8eca1747680f7dc9ad084d1e1897f30bfec08d83` passed local and PR #19 hosted Debug/Release builds,
+  `663/663` driver-free tests in each configuration, static analysis, and repository validation.
+  A production network transport, backend service, durable remote and replay storage, real game
+  adapter, manifest-key rotation, and remote policy delivery are not implemented.
 
 ## Repository map
 
