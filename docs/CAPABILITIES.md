@@ -15,6 +15,7 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Suspended launch | The service resolves and holds the executable under the caller identity, creates it suspended with the caller's primary token, confirms the exact process handle, and then resumes the first thread. |
 | Signed build authorization | Before arming the driver, the service requires a canonical detached-signed manifest, an explicitly provisioned signer pin, exact executable and Authenticode-signer identity, bounded compatibility/expiry, and monotonic per-game rollback state. The named VM/Verifier campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests. |
 | Signed policy | At service start, a canonical detached-signed policy must match the protected policy signer, component revisions, bounded validity period, and canonical rule set. Game/build scope is checked before launch. Per-game/channel state rejects replay and equivocation, permits only an explicitly signed rollback from the exact current digest, and makes emergency revocation terminal. The named Windows 11 campaign passed the signer, scope, expiry, rollback, authorized-rollback, and emergency-revocation cases. |
+| Backend session | The service opens a transport-independent authenticated session before claiming the driver. A digest of the session identity and nonces is bound into the production driver session. Signed policy bounds lease, grace, renewal, and evidence-acknowledgement intervals; nonce replay, lease loss, revocation, queue exhaustion, and acknowledgement timeout fail closed. The included transport is a protected, test-only mock; a production network transport and backend service are not included. |
 | Target-tree containment | The service assigns the confirmed target to an unnamed kill-on-close job before resume. Children inherit the job, and graceful stop or service failure terminates the tree. |
 | Session-loss reporting | A device-lifetime monotonic sequence and stable loss reason let a replacement service distinguish requested shutdown from unexpected controller loss. |
 | Retained alerts | High and critical typed records remain in a dedicated queue until the controlling service acknowledges an exact delivered sequence. Full-queue loss preserves existing data, records severity counts, and revokes production authority. |
@@ -26,8 +27,8 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Protocol isolation | Production and diagnostic authority are mutually exclusive on each file object. |
 
 The current production path intentionally supports one target and no command-line arguments.
-Approved-module policy, manifest-key rotation, authenticated evidence upload, backend leases, and
-target-session reuse remain planned work.
+Approved-module policy, manifest-key rotation, a deployable authenticated backend transport,
+durable remote storage, and target-session reuse remain planned work.
 
 ## Lab scanner matrix
 
@@ -74,13 +75,15 @@ separate from the source observation, and display text is never an evaluator inp
 The rule model also defines typed signer classification for signature source, chain, revocation,
 timestamp, approval state, and certificate thumbprint. Current driver observations do not yet carry
 an approved runtime-module classification, so those fields remain explicitly unavailable. Policy
-updates are signed and locally replay-protected; authenticated persistence, server acknowledgement,
-and remote policy delivery remain later work.
+updates are signed and locally replay-protected. The backend session contract carries evaluated
+records with monotonic service sequences and advances retained-alert acknowledgement only after
+the backend acknowledges delivery. The test transport exercises this contract in process;
+authenticated remote policy delivery and durable server persistence remain later work.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or
-after-the-fact modification; they do not authenticate the scanner. Authenticated upload, server
-challenges, nonce expiry, and evidence acknowledgement remain production work.
+after-the-fact modification; they do not authenticate the scanner and are separate from the
+production evidence-session contract.
 
 ### Vulnerable-driver policy
 

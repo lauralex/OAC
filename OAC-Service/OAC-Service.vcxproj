@@ -59,23 +59,28 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="backend.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="manifest.cpp" />
     <ClCompile Include="policy.cpp" />
     <ClCompile Include="signed_record.cpp" />
     <ClCompile Include="service.cpp" />
     <ClCompile Include="target_scanner.cpp" />
+    <ClCompile Include="..\shared\oac_backend.c" />
     <ClCompile Include="..\shared\oac_manifest.c" />
     <ClCompile Include="..\shared\oac_policy.c" />
     <ClCompile Include="..\shared\oac_signed_policy.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="backend.hpp" />
     <ClInclude Include="manifest.hpp" />
     <ClInclude Include="policy.hpp" />
     <ClInclude Include="signed_record.hpp" />
     <ClInclude Include="service.hpp" />
     <ClInclude Include="target_scanner.hpp" />
     <ClInclude Include="..\shared\oac_ipc.h" />
+    <ClInclude Include="..\shared\oac_backend.h" />
+    <ClInclude Include="..\shared\oac_lease.h" />
     <ClInclude Include="..\shared\oac_manifest.h" />
     <ClInclude Include="..\shared\oac_policy.h" />
     <ClInclude Include="..\shared\oac_signed_policy.h" />

@@ -1,9 +1,9 @@
 #pragma once
 
 /*
- * Backend-independent lease policy. The service will supply authenticated
- * deadlines when the backend milestone is implemented; this helper keeps the
- * transition and termination rules deterministic and directly testable now.
+ * Deterministic lease transitions shared by the authenticated backend session
+ * and local status protocol. Time values use one caller-selected monotonic
+ * unit; the service uses milliseconds from GetTickCount64.
  */
 
 #include <stdint.h>

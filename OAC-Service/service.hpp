@@ -2,12 +2,12 @@
 
 #include <Windows.h>
 
-#include <array>
 #include <cstddef>
 
 #include "..\shared\oac_ipc.h"
 #include "..\shared\oac_policy.h"
 #include "..\shared\protocol\oac_v5.h"
+#include "backend.hpp"
 #include "policy.hpp"
 #include "target_scanner.hpp"
 
@@ -25,14 +25,6 @@ public:
     DWORD Stop() noexcept;
 
 private:
-    struct EvaluatedEvidence
-    {
-        OAC_V5_EVENT_RECORD Record{};
-        OAC_POLICY_DECISION Decision{};
-    };
-
-    static constexpr std::size_t kPolicyRecordCapacity = 32;
-
     static DWORD WINAPI PipeThreadEntry(void* context) noexcept;
     DWORD PipeLoop() noexcept;
     DWORD PollEvidence() noexcept;
@@ -48,6 +40,7 @@ private:
     HANDLE targetJob_ = nullptr;
     HANDLE targetProcess_ = nullptr;
     HANDLE targetUserToken_ = nullptr;
+    oac::BackendSession backend_;
     oac::TargetScanWorker targetScanner_;
     volatile LONG stopped_ = FALSE;
     volatile LONG stopError_ = ERROR_SUCCESS;
@@ -58,12 +51,7 @@ private:
     OAC_V5_SESSION_ID driverSessionId_{};
     ULONGLONG driverSessionGeneration_ = 0;
     oac::VerifiedPolicy policy_{};
-    // Actionable policy results remain in a bounded handoff until
-    // authenticated upload exists. Filling it is a fail-closed error.
-    std::array<EvaluatedEvidence, kPolicyRecordCapacity> policyRecords_{};
-    ULONG policyRecordCount_ = 0;
     ULONGLONG alertCursor_ = 0;
-    ULONGLONG alertAcknowledgement_ = 0;
     ULONGLONG eventCursor_ = 0;
     ULONGLONG serviceEvidenceSequence_ = 0;
 };

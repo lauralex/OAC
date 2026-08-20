@@ -7,7 +7,8 @@
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
 WP-01 through WP-10 form the accepted production-control, target-lifetime, local-evidence,
-bounded-scheduling, signed-build, and signed-policy foundation. Acceptance commit
+bounded-scheduling, signed-build, and signed-policy foundation. The WP-11 backend-session source is
+implemented and awaiting its commit-bound runtime campaign. Acceptance commit
 `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the commit-bound disposable-VM and standard
 Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
 remaining production-hardening work packages.
@@ -25,7 +26,7 @@ remaining production-hardening work packages.
 | WP-08 Rule catalog and policy engine | Implemented; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
 | WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
 | WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
-| WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
+| WP-11 Backend session abstraction | Source present; acceptance pending | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, and failure-policy tests are implemented; final VM/Verifier evidence is pending |
 | WP-12 Scanner modularization | Planned | Refactor behind tests; preserve lab behavior |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
 | WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
@@ -90,10 +91,16 @@ The current source is organized around these implementation areas:
 - `shared/oac_manifest.h` and `shared/oac_manifest.c`: fixed canonical manifest and rollback-state
   records, hostile-input validation, exact file/signer identity, and deterministic high-water
   decisions.
+- `shared/oac_backend.h` and `shared/oac_backend.c`: transport-independent session, renewal,
+  evidence, and acknowledgement records; strict correlation and time bounds; replay-window,
+  acknowledgement, and queue-state decisions.
+- `OAC-Service/backend.hpp` and `OAC-Service/backend.cpp`: the nonblocking transport interface,
+  fixed-capacity evidence queue, lease lifecycle, driver binding digest, and protected deterministic
+  test backend. A production network transport and remote persistence are intentionally not supplied.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
-  service-owned target job, bounded two-channel evidence polling, central policy enforcement, and a
-  backend-independent lease-state seam. At startup, the service authenticates the local policy and
+  service-owned target job, bounded two-channel evidence polling, central policy enforcement, and
+  backend-session status. At startup, the service authenticates the local policy and
   commits protected per-game/channel update state. Before arming a launch, it checks policy scope
   and validates a detached signed manifest against the locked executable, an explicitly provisioned
   signer pin, bounded compatibility and expiry, and protected per-game rollback state. It binds the
@@ -114,10 +121,10 @@ the verified manifest digest as correlated session identity rather than parsing 
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `544/544` in each configuration, including signed-policy schema, rule-set, scope, expiry, replay, rollback, emergency-revocation, and staged policy-denial coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `608/608` in each configuration, including backend record/correlation, nonce replay, lease, queue, acknowledgement, signed-policy, and earlier protocol/policy coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
-| Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |
+| WP-07 Release Clang-Tidy baseline | Service and diagnostic scanner projects passed with warnings treated as errors at `865a9f9`; WP-11 changes no scanner source |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
 | `tools/Test-OACRepository.ps1` (seven PowerShell, eleven XML, five YAML, one Python) | Passed |
 | Markdown local-link resolution across the repository | Passed |
@@ -166,9 +173,10 @@ directory were deleted. Under `C:\OAC-VM`, only the verified Windows installatio
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-11 requires an authenticated backend session, lease, evidence acknowledgement, upload, and
-  replay model before local authorization can become an online admission boundary.
+- WP-11 requires its final commit-bound VM/Verifier campaign. A real online admission boundary still
+  requires a production authenticated transport, backend service, and durable evidence storage
+  behind the implemented interface.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
-and revocation metadata, authenticated backend delivery, and the release controls listed above.
+and revocation metadata, production backend deployment, and the release controls listed above.

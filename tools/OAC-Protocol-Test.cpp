@@ -478,6 +478,13 @@ OAC_V5_CLAIM_REQUEST ValidV5Claim(OAC_V5_SESSION_MODE mode)
     request.Header.RequestId = NextRequestId();
     request.Header.MessageType = OAC_V5_MESSAGE_CLAIM_SESSION;
     request.Mode = mode;
+    if (mode == OAC_V5_SESSION_PRODUCTION)
+    {
+        std::fill(
+            std::begin(request.BackendBindingSha256),
+            std::end(request.BackendBindingSha256),
+            UCHAR{0xA5});
+    }
     return request;
 }
 
@@ -3171,6 +3178,23 @@ void RunV5Tests(TestLog& log)
         log, device, L"v5 claim mode", IOCTL_OAC_V5_CLAIM_SESSION,
         &badClaim, sizeof(badClaim), &claimResponse, sizeof(claimResponse),
         {ERROR_INVALID_PARAMETER});
+    badClaim = ValidV5Claim(OAC_V5_SESSION_PRODUCTION);
+    std::fill(
+        std::begin(badClaim.BackendBindingSha256),
+        std::end(badClaim.BackendBindingSha256),
+        UCHAR{0});
+    ExpectIoctlFailure(
+        log, device, L"v5 production claim requires backend binding",
+        IOCTL_OAC_V5_CLAIM_SESSION,
+        &badClaim, sizeof(badClaim), &claimResponse, sizeof(claimResponse),
+        {ERROR_INVALID_PARAMETER});
+    badClaim = ValidV5Claim(OAC_V5_SESSION_DIAGNOSTIC);
+    badClaim.BackendBindingSha256[0] = 1;
+    ExpectIoctlFailure(
+        log, device, L"v5 diagnostic claim rejects backend binding",
+        IOCTL_OAC_V5_CLAIM_SESSION,
+        &badClaim, sizeof(badClaim), &claimResponse, sizeof(claimResponse),
+        {ERROR_INVALID_PARAMETER});
 
     claimRequest = ValidV5Claim(OAC_V5_SESSION_DIAGNOSTIC);
     claimResponse = {};
@@ -3405,11 +3429,15 @@ void RunV5Tests(TestLog& log)
         statusResponse.Header.Status == 0 &&
         statusResponse.Header.Reason == OAC_V5_REASON_NONE &&
         statusResponse.State == OAC_V5_SESSION_CLAIMED &&
+        statusResponse.SessionMode == OAC_V5_SESSION_DIAGNOSTIC &&
         statusResponse.ServiceProcessId == GetCurrentProcessId() &&
         statusResponse.TargetProcessId == 0 &&
         OacV5BufferIsZero(
             statusResponse.ManifestSha256,
-            sizeof(statusResponse.ManifestSha256)))
+            sizeof(statusResponse.ManifestSha256)) &&
+        OacV5BufferIsZero(
+            statusResponse.BackendBindingSha256,
+            sizeof(statusResponse.BackendBindingSha256)))
     {
         log.Pass(L"v5 exact status and correlation");
     }

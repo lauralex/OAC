@@ -52,6 +52,7 @@ struct OAC_SESSION_TAG
     OAC_PENDING_LAUNCH PendingLaunch;
     OAC_LAUNCH_ID BoundLaunchId;
     UCHAR ManifestSha256[OAC_V5_MANIFEST_DIGEST_SIZE];
+    UCHAR BackendBindingSha256[OAC_V5_BACKEND_BINDING_DIGEST_SIZE];
     BOOLEAN Cleaned;
     BOOLEAN ServiceExited;
     BOOLEAN SessionLossRecorded;
@@ -271,10 +272,15 @@ static VOID OacFillSnapshotLocked(
         OacExtension(Session->DeviceObject)->SessionLossSequence;
     Snapshot->LastSessionLossReason =
         OacExtension(Session->DeviceObject)->LastSessionLossReason;
+    Snapshot->Mode = Session->Mode;
     RtlCopyMemory(
         Snapshot->ManifestSha256,
         Session->ManifestSha256,
         sizeof(Snapshot->ManifestSha256));
+    RtlCopyMemory(
+        Snapshot->BackendBindingSha256,
+        Session->BackendBindingSha256,
+        sizeof(Snapshot->BackendBindingSha256));
 }
 
 static BOOLEAN OacRecordSessionLossLocked(
@@ -652,6 +658,8 @@ NTSTATUS OacSessionClaim(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ PFILE_OBJECT FileObject,
     _In_ ULONG Mode,
+    _In_reads_opt_(OAC_V5_BACKEND_BINDING_DIGEST_SIZE)
+        const UCHAR* BackendBindingSha256,
     _In_ BOOLEAN RequireNegotiation,
     _Out_ POAC_SESSION_SNAPSHOT Snapshot)
 {
@@ -680,7 +688,11 @@ NTSTATUS OacSessionClaim(
     }
     if (Mode == OAC_V5_SESSION_PRODUCTION)
     {
-        if (!context->ServiceOwner || !OacIsServiceProcess())
+        if (!context->ServiceOwner || !OacIsServiceProcess() ||
+            BackendBindingSha256 == NULL ||
+            OacV5BufferIsZero(
+                BackendBindingSha256,
+                OAC_V5_BACKEND_BINDING_DIGEST_SIZE))
         {
             return STATUS_ACCESS_DENIED;
         }
@@ -724,6 +736,13 @@ NTSTATUS OacSessionClaim(
     session->Generation = (ULONGLONG)generation;
     session->Mode = Mode;
     session->State = OAC_V5_SESSION_CLAIMED;
+    if (Mode == OAC_V5_SESSION_PRODUCTION)
+    {
+        RtlCopyMemory(
+            session->BackendBindingSha256,
+            BackendBindingSha256,
+            sizeof(session->BackendBindingSha256));
+    }
 
     OacLockExclusive(&extension->SessionLock);
     if (extension->Stopping)
@@ -757,6 +776,11 @@ NTSTATUS OacSessionClaim(
         Snapshot->State = session->State;
         Snapshot->ServiceProcessId =
             (ULONGLONG)(ULONG_PTR)session->ServiceProcessId;
+        Snapshot->Mode = session->Mode;
+        RtlCopyMemory(
+            Snapshot->BackendBindingSha256,
+            session->BackendBindingSha256,
+            sizeof(Snapshot->BackendBindingSha256));
         status = STATUS_SUCCESS;
     }
     OacUnlockExclusive(&extension->SessionLock);

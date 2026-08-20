@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <ClCompile Include="backend.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <Filter Include="Source Files">
       <UniqueIdentifier>{4fc737f1-c7a5-4376-a066-2a32d752a2ff}</UniqueIdentifier>
       <Extensions>cpp;c</Extensions>
@@ -29,6 +32,9 @@
     <ClCompile Include="target_scanner.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\oac_backend.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\oac_manifest.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -40,6 +46,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="backend.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="manifest.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -56,6 +65,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_backend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_lease.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_manifest.h">

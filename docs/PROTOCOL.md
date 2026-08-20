@@ -14,7 +14,7 @@ ABI. All wire headers are C-compatible and have compile-time size and offset ass
 
 ## Production control protocol
 
-`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050005`; the existing `OAC_V5_VERSION` name remains a
+`OAC_PRODUCTION_PROTOCOL_VERSION` is `0x00050006`; the existing `OAC_V5_VERSION` name remains a
 compatibility alias. Every request uses `METHOD_BUFFERED` and requires both read and
 write access. The request and response headers carry an exact size, nonzero request ID, 128-bit
 session ID, generation, flags, and explicit `MessageType`. The message type is tied to the IOCTL
@@ -27,10 +27,10 @@ read, and snapshot management are available:
 | Function | IOCTL | Input | Output | Current behavior |
 |---:|---|---|---|---|
 | `0x810` | `IOCTL_OAC_V5_NEGOTIATE` | 56-byte negotiate request | 88-byte negotiate response | Selects the exact production revision and records negotiation on the file context |
-| `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 56-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session |
+| `0x811` | `IOCTL_OAC_V5_CLAIM_SESSION` | 88-byte claim request | 64-byte claim response | Claims one production or lab diagnostic session; production claim requires a nonzero backend binding digest |
 | `0x814` | `IOCTL_OAC_READ_EVIDENCE` | 80-byte evidence request | 136-byte prefix plus up to 16 fixed records | Reads the retained alert or overwrite-event channel; alert reads acknowledge only previously delivered records |
 | `0x815` | `IOCTL_OAC_MANAGE_SNAPSHOT` | 96-byte snapshot request | 152-byte prefix plus up to 16 fixed records | Opens, reads, or closes one frozen, expiring kernel-module snapshot |
-| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 168-byte status response | Returns correlated session state, identity, capability, counters, manifest digest, and monotonic session-loss latch |
+| `0x816` | `IOCTL_OAC_V5_GET_STATUS` | 48-byte status request | 200-byte status response | Returns correlated session state, mode, capability, counters, manifest and backend digests, and monotonic session-loss latch |
 | `0x817` | `IOCTL_OAC_V5_REVOKE_SESSION` | 56-byte revoke request | 80-byte revoke response | Idempotently revokes the caller's exact session and records requested-shutdown provenance |
 | `0x818` | `IOCTL_OAC_ARM_LAUNCH` | 2144-byte arm request | 88-byte arm response | Arms one bounded canonical-path ticket bound to a nonzero verified-manifest digest |
 | `0x819` | `IOCTL_OAC_CANCEL_LAUNCH` | 64-byte cancel request | 64-byte cancel response | Terminally cancels the exact pending ticket |
@@ -100,21 +100,50 @@ runtime classes, manifest-key rotation, and backend admission remain separate wo
 
 ### Signed policy record
 
-`shared/oac_signed_policy.*` defines a fixed 1024-byte canonical policy record and a fixed 160-byte
+`shared/oac_signed_policy.*` defines a fixed 1024-byte schema-2 canonical policy record and a fixed 160-byte
 persistent cache record. The policy carries game, build, and channel scope; deployment mode;
 component compatibility; a bounded validity interval; a complete typed rule set; a signer identity;
 and explicit emergency-revocation or rollback-authorization fields. Its detached CMS signature is
 verified by the service through the same non-reparse, exact-signer path used for manifests, with an
 independent protected signer pin.
 
-The service records the current policy digest, update sequence, current version, and historic
-high-water version per game and channel. A lower sequence is replay, conflicting content at the
+The policy also carries bounded backend lease, grace, renewal, and evidence-acknowledgement
+intervals. The service records the current policy digest, update sequence, current version, and
+historic high-water version per game and channel. A lower sequence is replay, conflicting content at the
 current sequence is equivocation, and an ordinary version must advance beyond the historic
 high-water mark. A rollback is accepted only when the new signed record names the exact current
 version and digest; the historic high-water mark is preserved. An accepted emergency record is
 committed and then prevents service startup, so replacing it with an older record cannot clear the
 revocation. These records are local service authorization inputs, not production driver messages,
-so they do not change the wire revision.
+so they do not by themselves change the driver wire revision.
+
+### Backend session contract
+
+`shared/oac_backend.*` defines packed, transport-independent records for session open, lease
+renewal, evidence submission, and acknowledgement. Every request carries an exact message type,
+strict size, monotonic request sequence, fresh 256-bit nonce, bounded wall-clock validity, and—after
+open—the exact 128-bit backend session identity. Responses correlate the request sequence, session,
+message type, and SHA-256 of the request nonce. The replay window is bounded and rejects a nonce
+digest already accepted in that backend session.
+
+Open returns a server nonce and bounded lease terms. The service hashes the backend session ID,
+request-nonce digest, and server nonce into one nonzero binding digest, carries that digest in the
+production driver claim, and requires it in every later driver status response. Diagnostic claims
+must keep the field zero. This correlation does not make the kernel a network client: all transport,
+authentication, policy evaluation, queuing, and time-based decisions remain in user mode.
+
+Evaluated evidence uses a monotonic service sequence and a fixed 64-record service queue. Upload
+responses may acknowledge only a sequence actually submitted and may never move backwards. The
+service advances the retained-alert acknowledgement sent to the driver only after the backend has
+acknowledged the corresponding record. Nonce replay, malformed correlation, lease expiry or
+revocation, queue exhaustion, and acknowledgement timeout are terminal service errors; closing the
+service-owned job then contains the target tree.
+
+`BackendTransport` is the production integration seam. The checked-in transport is a protected,
+in-process authenticated test double with deterministic normal, replay, withheld-acknowledgement,
+lease-loss, and revocation scenarios. It proves the lifecycle and failure policy without pretending
+to provide network authentication or durable storage. A deployable transport and backend service
+remain separate production work.
 
 ### Strict validation and correlation
 
@@ -211,30 +240,34 @@ evidence but cannot start new snapshot work.
 The restricted service polls the alert channel first and then the event channel every 250 ms while
 waiting for stop, failure, or target exit. It validates every response and correlation tuple,
 stamps each local copy with an ingestion time and monotonic service sequence, performs a final
-bounded drain on orderly stop or target transition, and acknowledges retained alerts on the
-following poll. Alert loss, a revoked response, or exhausted actionable-result capacity is a
-fail-closed service error. Lower-priority overwrite gaps remain explicit and do not consume alert
-capacity.
+bounded drain on orderly stop or target transition, and queues the evaluated record for backend
+delivery. Alert acknowledgement on the next read advances only through the highest alert
+acknowledged by the backend. Alert loss, a revoked response, backend queue exhaustion, or acknowledgement
+timeout is a fail-closed service error. Lower-priority overwrite gaps remain explicit and do not
+consume alert capacity.
 
 `shared/oac_policy.*` binds every current rule to its exact event type, category, observation range,
 and required provenance. It maps the record through deterministic Observe, Enforce, or Strict
 tables and returns separate action, five-level policy confidence, and policy severity fields. The
-service selects the authenticated policy's rule set and deployment mode. It preserves the observation's original
-confidence and source provenance, retains actionable results with their decision, and ends the
-service runtime for `RevokeSession`. The service implements the `DenyLaunch` action needed by later
-game-specific rules, but no current rule selects it. Authenticated upload and server acknowledgement
-remain later backend work rather than being simulated locally.
+service selects the authenticated policy's rule set and deployment mode. It preserves the
+observation's original confidence and source provenance, queues the record with its exact decision,
+and ends the service runtime for `RevokeSession`. The service implements the `DenyLaunch` action
+needed by later game-specific rules, but no current rule selects it. The included backend transport
+acknowledges this strict local contract; production network delivery and server persistence remain
+later work.
 
 ### Launcher/service IPC
 
-The local launcher/service wire revision is `0x00010005`. Hello and status retain fixed 32-byte
-requests. Status responses are 256 bytes and include the session-loss sequence and cause plus a
-strict 184-byte scanner record. That record reports health-loop iterations and maximum delay,
+The local launcher/service wire revision is `0x00010006`. Hello and status retain fixed 32-byte
+requests. Status responses are 288 bytes and include the session-loss sequence and cause, a strict
+32-byte backend record, and a strict 184-byte scanner record. The backend record reports lease
+state, authenticated/test flags, pending evidence, last error, lease sequence, and acknowledged
+service sequence. The scanner record reports health-loop iterations and maximum delay,
 queued/completed/coalesced/cancelled/failed slices, completed sweeps, memory and thread coverage,
 last-slice timing and resource use, maximum scan and thread-suspension duration, and the current
 worker state/outcome/error. Counts, state, timestamps, reserved fields, and success/error pairs are
-validated by both endpoints. A launch
-request is a fixed 1056-byte message containing one counted absolute drive path with no arguments;
+validated by both endpoints. A launch request is a fixed 1056-byte message containing one counted
+absolute drive path with no arguments;
 its 56-byte response correlates the request, service, client, session, target PID, confirmed binding,
 verified job assignment, and resumed-thread result. A rejection also carries an exact
 launch stage and a bounded detail so failures remain attributable without enabling filesystem
@@ -260,8 +293,10 @@ authenticated diagnostic session; it is not advertised as a production capabilit
 ## Test coverage and acceptance
 
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
-request/response validation, evidence and snapshot correlation, the session transition matrix, and
-hostile binary and UTF-16 event payloads.
+request/response validation, evidence and snapshot correlation, the session transition matrix,
+hostile binary and UTF-16 event payloads, and backend record, replay, lease, queue, and
+acknowledgement behavior. The current Debug and Release runs pass `608/608`; VM acceptance remains
+a separate runtime gate.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,
 bidirectional diagnostic/production per-file exclusion, same-file and wrong-file authorization, a
@@ -291,7 +326,9 @@ termination, recovery, monotonic session-loss reporting, two accepted signed lau
 modified, wrong-build, expired, and rollback manifest rejection in the same named campaign.
 The same production boundary rejected policies with the wrong signature, scope, validity period, or
 rollback state, accepted one explicitly authorized rollback, and persisted emergency revocation
-before refusing startup. Authenticated backend sessions remain a separate pending gate.
+before refusing startup. The current VM harness additionally contains bounded backend replay,
+withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; their
+commit-bound execution is pending.
 The same campaign required bounded scheduler coverage, health latency, slice duration, and
 thread-resume metrics. It accepted 38 completed slices, eight completed sweeps, a 313 ms maximum
 health-loop delay, a 151.377 ms maximum slice duration, and no failed or cancelled slice.

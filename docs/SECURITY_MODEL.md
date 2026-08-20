@@ -1,7 +1,8 @@
 # OAC security model
 
 **Status:** WP-01 through WP-10 controls accepted at commit
-`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign. The WP-11
+backend-session source is implemented; its commit-bound VM acceptance is pending.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -36,16 +37,17 @@ trust boundaries, adversaries, and failure behavior.
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests plus integrated signed-policy VM execution pass |
-| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the current 544-test driver-free suite covers the record and decision rules |
+| Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the driver-free suite covers the record and decision rules |
 | Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Driver-free, signed-package, restricted-service, and Driver Verifier acceptance passed at the named commit |
-| Backend | No authenticated production trust boundary exists | Planned |
+| Backend session | The service requires a correlated session before claiming the driver, binds a digest of the session and nonces into driver status, applies signed lease/renewal/acknowledgement bounds, and stops on replay, expiry, revocation, queue exhaustion, or acknowledgement timeout | Strict source and driver-free tests are present; the included authenticated transport is a protected test double, while production network transport and current VM acceptance remain pending |
 
 ## Production authority
 
 Production file creation and claim require the exact restricted service token, not Administrator
 membership. Negotiation and claim occur on one persistent service handle. Every later accepted production
 request must use that file from the referenced service process and match the session ID, generation,
-and active state. Numeric PIDs are returned only for diagnostics and cannot authorize a request.
+active state, session mode, and backend binding digest. Numeric PIDs are returned only for
+diagnostics and cannot authorize a request.
 
 One active session is allowed. A different file can negotiate but cannot claim or reuse copied
 session values. A duplicated handle used by another process is rejected by process-object identity.
@@ -130,6 +132,12 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   kernel provenance, adds local ingestion ordering, and drains once more before orderly shutdown.
 - Lower-priority event overwrite cannot consume alert capacity, and frozen snapshot work is paged,
   identity-bound, expiring, and unavailable for new work after revocation.
+- Before claiming production authority, the service establishes one authenticated backend session
+  and binds its nonzero digest into the driver session. Nonces, request sequences, response
+  correlation, lease sequences, and evidence acknowledgements are strictly validated. The service
+  queue is fixed-size, launch requires a currently healthy lease, and replay, lease loss,
+  revocation, queue exhaustion, or acknowledgement timeout terminates the service and target job.
+  The kernel performs no network or blocking backend work.
 - Driver producers emit observations with unevaluated policy state. The service polls both evidence
   channels and evaluates stable rule ID, event type, category, severity range, and required
   provenance through the authenticated policy's canonical rule set. Source confidence and
@@ -149,13 +157,14 @@ WP-01 through WP-10 statements combine source behavior with one exact platform a
 current driver-backed production, service installation, lifecycle, race, job/liveness, typed
 evidence, signed-policy, signed-manifest, snapshot, and standard Driver Verifier campaign passed on
 Windows 11 build 26100 with zero crash events and minidumps. That result does not replace the broader
-supported-platform, effective-right, compatibility, or production-deployment matrix.
+supported-platform, effective-right, compatibility, or production-deployment matrix. WP-11 is
+source-present until its own commit-bound campaign completes.
 
 ## Planned controls
 
 - Manifest and policy signer rotation and revocation metadata, approved
-  module/middleware/child-process scope, remote policy delivery, and authenticated backend
-  lease/upload.
+  module/middleware/child-process scope, remote policy delivery, production authenticated network
+  transport, durable evidence storage, and backend operations.
 
 ## Evidence and enforcement
 

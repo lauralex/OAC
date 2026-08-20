@@ -57,6 +57,7 @@ $baselineSpecialTests = @(
     'production-policy-rollback',
     'production-policy-authorized-rollback',
     'production-policy-emergency-revoke',
+    'production-backend-replay',
     'baseline-driver-gate-create',
     'baseline-driver-gate-trigger',
     'baseline-driver-gate-detection',
@@ -73,6 +74,14 @@ $auxiliaryExitValues = [ordered]@{
     'production-service-crash' = @(0)
     'production-service-graceful-stop' = @(0)
     'production-service-post-stop-start' = @(0)
+    'production-backend-recovery-disable' = @(0)
+    'production-backend-recovery-restore' = @(0)
+    'production-backend-ack-status' = @(0)
+    'production-backend-ack-launch' = @(0)
+    'production-backend-ack-recovered' = @(0)
+    'production-backend-lease-status' = @(0)
+    'production-backend-lease-launch' = @(0)
+    'production-backend-lease-recovered' = @(0)
     'production-legacy-driver-start' = @(0, 1056)
     'baseline-sc-stop' = @(0, 1062)
     'baseline-target-stop' = @(0)
@@ -119,6 +128,14 @@ $baselineAuxiliaryRequired = @(
     'production-service-crash',
     'production-service-graceful-stop',
     'production-service-post-stop-start',
+    'production-backend-recovery-disable',
+    'production-backend-recovery-restore',
+    'production-backend-ack-status',
+    'production-backend-ack-launch',
+    'production-backend-ack-recovered',
+    'production-backend-lease-status',
+    'production-backend-lease-launch',
+    'production-backend-lease-recovered',
     'production-legacy-driver-start',
     'baseline-sc-stop',
     'baseline-target-stop')
@@ -989,6 +1006,9 @@ exit `$code
         'client-session=([0-9]+); driver-protocol=0x[0-9a-f]+; ' +
         'capabilities=0x[0-9a-f]+; flags=0x[0-9a-f]+; ' +
         'session-loss-sequence=([0-9]+); last-session-loss=([0-9]+); ' +
+        'backend-lease=([0-9]+); backend-flags=0x([0-9a-f]+); ' +
+        'backend-lease-sequence=([0-9]+); backend-acknowledged=([0-9]+); ' +
+        'backend-pending=([0-9]+); backend-error=([0-9]+); ' +
         'scan-state=([0-9]+); scan-queued=([0-9]+); ' +
         'scan-completed=([0-9]+); scan-coalesced=([0-9]+); ' +
         'scan-cancelled=([0-9]+); scan-failed=([0-9]+); ' +
@@ -1005,16 +1025,38 @@ exit `$code
     [int64]$clientSessionId = -1
     [int64]$lossSequence = -1
     [int64]$lossReason = -1
+    [uint64]$backendLease = 0
+    [uint64]$backendFlags = 0
+    [uint64]$backendLeaseSequence = 0
+    [uint64]$backendAcknowledged = 0
+    [uint64]$backendPending = 0
+    [uint64]$backendError = 0
     $scanValues = [Collections.Generic.List[uint64]]::new()
     if (-not [int64]::TryParse($matches[0].Groups[1].Value, [ref]$serviceProcessId) -or
         -not [int64]::TryParse($matches[0].Groups[2].Value, [ref]$clientSessionId) -or
         -not [int64]::TryParse($matches[0].Groups[3].Value, [ref]$lossSequence) -or
         -not [int64]::TryParse($matches[0].Groups[4].Value, [ref]$lossReason) -or
+        -not [uint64]::TryParse($matches[0].Groups[5].Value, [ref]$backendLease) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[6].Value,
+            [Globalization.NumberStyles]::AllowHexSpecifier,
+            [Globalization.CultureInfo]::InvariantCulture,
+            [ref]$backendFlags) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[7].Value, [ref]$backendLeaseSequence) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[8].Value, [ref]$backendAcknowledged) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[9].Value, [ref]$backendPending) -or
+        -not [uint64]::TryParse(
+            $matches[0].Groups[10].Value, [ref]$backendError) -or
         $serviceProcessId -le 0 -or $clientSessionId -lt 0 -or
-        $lossSequence -lt 0 -or $lossReason -lt 0) {
+        $lossSequence -lt 0 -or $lossReason -lt 0 -or
+        $backendLease -ne 1 -or $backendFlags -ne 3 -or
+        $backendLeaseSequence -eq 0 -or $backendError -ne 0) {
         throw "$Name returned malformed numeric status fields."
     }
-    foreach ($groupIndex in 5..19) {
+    foreach ($groupIndex in 11..25) {
         [uint64]$scanValue = 0
         if (-not [uint64]::TryParse(
                 $matches[0].Groups[$groupIndex].Value,
@@ -1028,6 +1070,12 @@ exit `$code
         ServiceProcessId = $serviceProcessId
         LossSequence = $lossSequence
         LossReason = $lossReason
+        BackendLease = $backendLease
+        BackendFlags = $backendFlags
+        BackendLeaseSequence = $backendLeaseSequence
+        BackendAcknowledged = $backendAcknowledged
+        BackendPending = $backendPending
+        BackendError = $backendError
         ScanState = $scanValues[0]
         ScanQueued = $scanValues[1]
         ScanCompleted = $scanValues[2]
@@ -1162,7 +1210,8 @@ function Set-ProductionSignedRecordFiles(
 
 function Invoke-RejectedServiceStart(
     [string]$Launcher,
-    [string]$Name
+    [string]$Name,
+    [string]$ExpectedStage = 'bootstrap'
 ) {
     $workspace = New-InteractiveTaskWorkspace $Name
     $scriptPath = Join-Path $workspace 'task.ps1'
@@ -1178,14 +1227,169 @@ exit `$code
     Write-TaskScript $scriptPath $scriptText
     $exitCode = [int64](Invoke-InteractiveTask $Name $workspace 'Limited')
     $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
+    $stagePattern = [regex]::Escape($ExpectedStage)
     $matches = [regex]::Matches(
         $output,
-        '(?m)^OACService connection failed during bootstrap: .+\r?$')
+        "(?m)^OACService connection failed during $stagePattern`: .+\r?$")
     if ($exitCode -ne 3 -or $matches.Count -ne 1 -or
         $output -match '(?m)^OACService status;') {
-        throw "$Name did not return the exact signed-policy startup rejection."
+        throw "$Name did not return the expected service-start rejection."
     }
     return $exitCode
+}
+
+function Set-BackendScenario([ValidateSet(0, 1, 2, 3, 4)][int]$Value) {
+    $service = Get-Service -Name OACService -ErrorAction Stop
+    if ($service.Status -ne 'Stopped') {
+        throw 'The backend scenario may only be changed while OACService is stopped.'
+    }
+    $rootPath = 'HKLM:\SOFTWARE\OAC'
+    Set-ItemProperty -LiteralPath $rootPath -Name BackendScenario -Type DWord `
+        -Value $Value
+    $observed = [int](Get-ItemProperty -LiteralPath $rootPath `
+            -Name BackendScenario).BackendScenario
+    if ($observed -ne $Value) {
+        throw "Could not verify backend scenario $Value."
+    }
+}
+
+function Invoke-BackendTerminationCase(
+    [ValidateSet(1, 2)][int]$Scenario,
+    [string]$Name,
+    [string]$Launcher,
+    [string]$Target,
+    [string]$Child
+) {
+    Set-BackendScenario $Scenario
+    [void](Invoke-ProductionStatus $Launcher "$Name-status")
+    $launch = Invoke-ProductionLaunch $Launcher $Target "$Name-launch"
+    $processes = Wait-LivenessProcesses `
+        $Target $Child $launch.TargetProcessId
+    Wait-TestServiceState OACService `
+        ([ServiceProcess.ServiceControllerStatus]::Stopped)
+    Set-BackendScenario 0
+    Wait-ProcessesExited `
+        @($processes.ParentProcessId, $processes.ChildProcessId) `
+        "$Name backend failure"
+    Start-Service -Name OACService -ErrorAction Stop
+    Wait-TestServiceState OACService `
+        ([ServiceProcess.ServiceControllerStatus]::Running)
+    $recovered = Invoke-ProductionStatus $Launcher "$Name-recovered"
+    return [pscustomobject]@{
+        ParentProcessId = $processes.ParentProcessId
+        ChildProcessId = $processes.ChildProcessId
+        ProcessTreeTerminated = $true
+        Recovered = $recovered.BackendLease -eq 1 -and
+            $recovered.BackendFlags -eq 3 -and
+            $recovered.BackendLeaseSequence -gt 0 -and
+            $recovered.BackendError -eq 0
+    }
+}
+
+function Test-BackendBoundary(
+    [string]$Launcher,
+    [string]$Target,
+    [string]$Child
+) {
+    Write-RunLog 'Beginning replay, acknowledgement-loss, and lease-loss tests.'
+    $replayRejected = $false
+    $acknowledgementResult = $null
+    $leaseResult = $null
+    $testError = $null
+    $cleanupErrors = [Collections.Generic.List[string]]::new()
+    try {
+        Stop-Service -Name OACService -Force -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        $disableRecovery = Invoke-ConsoleCapture `
+            'production-backend-recovery-disable' `
+            'sc.exe' @('failureflag', 'OACService', '0')
+        if ($disableRecovery -ne 0) {
+            throw "Could not disable non-crash recovery; exit=$disableRecovery."
+        }
+
+        Set-BackendScenario 3
+        [void](Invoke-RejectedServiceStart `
+            $Launcher 'production-backend-replay' `
+            'backend session initialization')
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        $replayRejected = $true
+        Set-BackendScenario 0
+
+        $acknowledgementResult = Invoke-BackendTerminationCase `
+            1 'production-backend-ack' $Launcher $Target $Child
+        Stop-Service -Name OACService -Force -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        $leaseResult = Invoke-BackendTerminationCase `
+            2 'production-backend-lease' $Launcher $Target $Child
+    } catch {
+        $testError = $_.Exception.Message
+    } finally {
+        try {
+            Stop-Service -Name OACService -Force -ErrorAction SilentlyContinue
+            Wait-TestServiceState OACService `
+                ([ServiceProcess.ServiceControllerStatus]::Stopped)
+        } catch {
+            $cleanupErrors.Add("Stop service: $($_.Exception.Message)")
+        }
+        try {
+            Set-BackendScenario 0
+        } catch {
+            $cleanupErrors.Add("Restore backend scenario: $($_.Exception.Message)")
+        }
+        try {
+            $restoreRecovery = Invoke-ConsoleCapture `
+                'production-backend-recovery-restore' `
+                'sc.exe' @('failureflag', 'OACService', '1')
+            if ($restoreRecovery -ne 0) {
+                throw "sc.exe exited with $restoreRecovery"
+            }
+        } catch {
+            $cleanupErrors.Add("Restore service recovery: $($_.Exception.Message)")
+        }
+        try {
+            Start-Service -Name OACService -ErrorAction Stop
+            Wait-TestServiceState OACService `
+                ([ServiceProcess.ServiceControllerStatus]::Running)
+        } catch {
+            $cleanupErrors.Add("Restore service: $($_.Exception.Message)")
+        }
+    }
+
+    $cleanupError = if ($cleanupErrors.Count -eq 0) {
+        $null
+    } else {
+        $cleanupErrors -join '; '
+    }
+    $passed = $null -eq $testError -and $null -eq $cleanupError -and
+        $replayRejected -and $null -ne $acknowledgementResult -and
+        $acknowledgementResult.ProcessTreeTerminated -and
+        $acknowledgementResult.Recovered -and $null -ne $leaseResult -and
+        $leaseResult.ProcessTreeTerminated -and $leaseResult.Recovered
+    [ordered]@{
+        timestamp_utc = [DateTime]::UtcNow.ToString('o')
+        replay_rejected = $replayRejected
+        acknowledgement_loss_terminated_tree =
+            $null -ne $acknowledgementResult -and
+            $acknowledgementResult.ProcessTreeTerminated
+        acknowledgement_loss_recovered =
+            $null -ne $acknowledgementResult -and
+            $acknowledgementResult.Recovered
+        lease_loss_terminated_tree =
+            $null -ne $leaseResult -and $leaseResult.ProcessTreeTerminated
+        lease_loss_recovered =
+            $null -ne $leaseResult -and $leaseResult.Recovered
+        test_error = $testError
+        cleanup_error = $cleanupError
+        pass = $passed
+    } | ConvertTo-Json | Out-File -LiteralPath `
+        (Join-Path $results 'backend-boundary-summary.json') -Encoding utf8
+    if (-not $passed) {
+        throw "Backend boundary failed; test='$testError' cleanup='$cleanupError'."
+    }
+    Write-RunLog 'Backend replay was rejected; acknowledgement and lease loss each stopped the service and terminated its target job.'
 }
 
 function Wait-LivenessProcesses(
@@ -1357,6 +1561,7 @@ function Test-ProductionBoundary {
     $rollbackPolicyRejected = $false
     $authorizedRollbackPolicyAccepted = $false
     $emergencyPolicyRejected = $false
+    $backendBoundaryPassed = $false
     $testError = $null
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     $livenessSource = $launcher
@@ -1615,6 +1820,9 @@ exit $code
             throw 'The graceful stop did not publish one explicit session revocation.'
         }
 
+        Test-BackendBoundary $launcher $livenessTarget $livenessChild
+        $backendBoundaryPassed = $true
+
         Stop-Service -Name OACService -Force -ErrorAction Stop
         Wait-TestServiceState OACService `
             ([ServiceProcess.ServiceControllerStatus]::Stopped)
@@ -1697,7 +1905,8 @@ exit $code
             -not $expiredPolicyRejected -or
             -not $rollbackPolicyRejected -or
             -not $authorizedRollbackPolicyAccepted -or
-            -not $emergencyPolicyRejected) {
+            -not $emergencyPolicyRejected -or
+            -not $backendBoundaryPassed) {
             throw 'The production service, launch, and liveness boundary did not pass.'
         }
     } catch {
@@ -1774,7 +1983,9 @@ exit $code
         $expiredManifestRejected -and $rollbackManifestRejected -and
         $wrongSignaturePolicyRejected -and $wrongScopePolicyRejected -and
         $expiredPolicyRejected -and $rollbackPolicyRejected -and
+        $authorizedRollbackPolicyAccepted -and
         $emergencyPolicyRejected -and
+        $backendBoundaryPassed -and
         $scanWorkerResponsive -and $scanThreadResumePass -and
         $lossSequences.Count -eq 3 -and $lossSequences[0] -eq 0 -and
         $lossSequences[1] -eq 1 -and $lossSequences[2] -eq 2 -and
@@ -1812,6 +2023,7 @@ exit $code
         rollback_policy_rejected = $rollbackPolicyRejected
         authorized_rollback_policy_accepted = $authorizedRollbackPolicyAccepted
         emergency_policy_rejected = $emergencyPolicyRejected
+        backend_boundary_passed = $backendBoundaryPassed
         session_loss_sequences = @($lossSequences)
         session_loss_reasons = @($lossReasons)
         scan_state = if ($null -ne $scanStatus) { $scanStatus.ScanState } else { -1 }
@@ -2667,6 +2879,7 @@ function Collect-FinalResults {
         'production-policy-rollback' = @(3)
         'production-policy-authorized-rollback' = @(0)
         'production-policy-emergency-revoke' = @(3)
+        'production-backend-replay' = @(3)
         'baseline-driver-gate-create' = @(0)
         'baseline-driver-gate-trigger' = @(0)
         'baseline-driver-gate-detection' = @(1)
@@ -2693,6 +2906,7 @@ function Collect-FinalResults {
     foreach ($summaryName in @(
             'baseline-driver-gate-summary',
             'production-boundary-summary',
+            'backend-boundary-summary',
             'removal-boundary-summary',
             'baseline-provenance-summary')) {
         $summaryPath = Join-Path $results "$summaryName.json"

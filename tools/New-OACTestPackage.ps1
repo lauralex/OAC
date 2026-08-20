@@ -215,9 +215,9 @@ function New-GameManifestBytes(
         $writer.Write($IssuedAtUnixSeconds)
         $writer.Write($ExpiresAtUnixSeconds)
         $writer.Write($ExecutableSize)
-        $writer.Write([uint32]0x00050005)
-        $writer.Write([uint32]0x00010005)
-        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]0x00050006)
+        $writer.Write([uint32]0x00010006)
+        $writer.Write([uint32]0x00010006)
         $writer.Write([uint32]0)
         $writer.Write($ExecutableSha256)
         $writer.Write($SigningKeyId)
@@ -335,7 +335,7 @@ function New-SignedPolicyBytes(
     $writer = [IO.BinaryWriter]::new($stream, [Text.Encoding]::Unicode, $true)
     try {
         $writer.Write([Text.Encoding]::ASCII.GetBytes('OACPOLCY'))
-        $writer.Write([uint32]1)
+        $writer.Write([uint32]2)
         $writer.Write([uint32]1024)
         $writer.Write($Flags)
         $writer.Write([uint32]2)
@@ -347,9 +347,9 @@ function New-SignedPolicyBytes(
         $writer.Write($UpdateSequence)
         $writer.Write($IssuedAtUnixSeconds)
         $writer.Write($ExpiresAtUnixSeconds)
-        $writer.Write([uint32]0x00050005)
-        $writer.Write([uint32]0x00010005)
-        $writer.Write([uint32]0x00010005)
+        $writer.Write([uint32]0x00050006)
+        $writer.Write([uint32]0x00010006)
+        $writer.Write([uint32]0x00010006)
         $writer.Write([uint32]1)
         $writer.Write([uint32]$rules.Count)
         $writer.Write($EmergencyReason)
@@ -365,7 +365,11 @@ function New-SignedPolicyBytes(
             $writer.Write([uint32]$rule[10])
             $writer.Write([uint32]0)
         }
-        $writer.Write([byte[]]::new(24))
+        $writer.Write([uint32]6000)
+        $writer.Write([uint32]2000)
+        $writer.Write([uint32]1000)
+        $writer.Write([uint32]5000)
+        $writer.Write([byte[]]::new(8))
         $writer.Flush()
         $bytes = $stream.ToArray()
         if ($bytes.Length -ne 1024) {
@@ -728,7 +732,7 @@ try {
         created_utc = [DateTime]::UtcNow.ToString('o')
         source_commit = $sourceCommit
         configuration = $Configuration
-        protocol_version = '0x00050005'
+        protocol_version = '0x00050006'
         legacy_protocol_version = '0x00040000'
         certificate_subject = $certificate.Subject
         certificate_thumbprint = $certificateThumbprint

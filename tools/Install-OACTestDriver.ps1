@@ -80,6 +80,10 @@ if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema -ne 1 -or
     $manifest.purpose -ne 'OAC disposable-VM test package; never production' -or
+    [string]$manifest.configuration -cnotin @('Debug', 'Release') -or
+    [string]$manifest.protocol_version -cne '0x00050006' -or
+    [string]$manifest.legacy_protocol_version -cne '0x00040000' -or
+    [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
     -not $manifest.certificate_thumbprint -or -not $manifest.files -or
     -not $manifest.test_files) {
     throw 'Package manifest is missing required OAC test-package metadata.'
@@ -246,7 +250,7 @@ function Assert-SignedPolicyShape(
     $issued = [BitConverter]::ToUInt64($bytes, 104)
     $expires = [BitConverter]::ToUInt64($bytes, 112)
     if ($bytes.Length -ne 1024 -or $magic -cne 'OACPOLCY' -or
-        [BitConverter]::ToUInt32($bytes, 8) -ne 1 -or
+        [BitConverter]::ToUInt32($bytes, 8) -ne 2 -or
         [BitConverter]::ToUInt32($bytes, 12) -ne 1024 -or
         ($flags -band 0xFFFFFFFC) -ne 0 -or
         [BitConverter]::ToUInt32($bytes, 20) -notin @(1, 2, 3) -or
@@ -254,12 +258,16 @@ function Assert-SignedPolicyShape(
         [BitConverter]::ToUInt64($bytes, 96) -eq 0 -or
         $issued -eq 0 -or $expires -le $issued -or
         ($expires - $issued) -gt (31 * 24 * 60 * 60) -or
-        [BitConverter]::ToUInt32($bytes, 120) -ne 0x00050005 -or
-        [BitConverter]::ToUInt32($bytes, 124) -ne 0x00010005 -or
-        [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010005 -or
+        [BitConverter]::ToUInt32($bytes, 120) -ne 0x00050006 -or
+        [BitConverter]::ToUInt32($bytes, 124) -ne 0x00010006 -or
+        [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010006 -or
         [BitConverter]::ToUInt32($bytes, 132) -ne 1 -or
         [BitConverter]::ToUInt32($bytes, 136) -ne 14 -or
-        @($bytes[1000..1023] | Where-Object { $_ -ne 0 }).Count -ne 0) {
+        [BitConverter]::ToUInt32($bytes, 1000) -ne 6000 -or
+        [BitConverter]::ToUInt32($bytes, 1004) -ne 2000 -or
+        [BitConverter]::ToUInt32($bytes, 1008) -ne 1000 -or
+        [BitConverter]::ToUInt32($bytes, 1012) -ne 5000 -or
+        @($bytes[1016..1023] | Where-Object { $_ -ne 0 }).Count -ne 0) {
         throw "Signed-policy canonical fields are invalid: $Path"
     }
     foreach ($range in @(@(24, 39), @(40, 55), @(56, 71), @(72, 87))) {
@@ -1139,27 +1147,41 @@ function Assert-TrustStateRegistry(
         -not $manifestStateExists -and -not $policyStateExists) {
         return
     }
-    $expectedValues = @{
+    $expectedSigners = @{
         ManifestSignerSha256 = $ExpectedManifestSignerSha256
         PolicySignerSha256 = $ExpectedPolicySignerSha256
     }
-    if ($rootValues.Count -ne $expectedValues.Count -or
+    $expectedValueNames = @(
+        'ManifestSignerSha256', 'PolicySignerSha256',
+        'BackendMode', 'BackendScenario')
+    if ($rootValues.Count -ne $expectedValueNames.Count -or
         @($rootValues | Where-Object {
-                -not $expectedValues.ContainsKey($_)
+                $expectedValueNames -cnotcontains $_
             }).Count -ne 0) {
         throw 'The protected OAC registry root contains unexpected values.'
     }
-    foreach ($valueName in $expectedValues.Keys) {
+    foreach ($valueName in $expectedSigners.Keys) {
         if ($root.GetValueKind($valueName) -ne
                 [Microsoft.Win32.RegistryValueKind]::Binary) {
             throw "The protected signer has an invalid registry type: $valueName"
         }
         $observedSigner = [byte[]]$root.GetValue($valueName)
-        $expectedSigner = [byte[]]$expectedValues[$valueName]
+        $expectedSigner = [byte[]]$expectedSigners[$valueName]
         if ($observedSigner.Length -ne $expectedSigner.Length -or
             [Convert]::ToBase64String($observedSigner) -cne
                 [Convert]::ToBase64String($expectedSigner)) {
             throw "The protected OAC registry root has an unexpected signer: $valueName"
+        }
+    }
+    foreach ($backendValue in @{
+            BackendMode = [uint32]1
+            BackendScenario = [uint32]0
+        }.GetEnumerator()) {
+        if ($root.GetValueKind($backendValue.Key) -ne
+                [Microsoft.Win32.RegistryValueKind]::DWord -or
+            [uint32]($root.GetValue($backendValue.Key)) -ne
+                [uint32]$backendValue.Value) {
+            throw "The protected backend setting is invalid: $($backendValue.Key)"
         }
     }
     $rootChildren = @($root.GetSubKeyNames())
@@ -1204,6 +1226,10 @@ function Initialize-TrustStateRegistry(
         -PropertyType Binary -Value $ExpectedManifestSignerSha256 -Force | Out-Null
     New-ItemProperty -LiteralPath $rootPath -Name PolicySignerSha256 `
         -PropertyType Binary -Value $ExpectedPolicySignerSha256 -Force | Out-Null
+    New-ItemProperty -LiteralPath $rootPath -Name BackendMode `
+        -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -LiteralPath $rootPath -Name BackendScenario `
+        -PropertyType DWord -Value 0 -Force | Out-Null
     $acl = New-ProtectedStateAcl
     Set-Acl -LiteralPath $rootPath -AclObject $acl
     foreach ($statePath in $statePaths) {

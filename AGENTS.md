@@ -10,8 +10,8 @@
   it. `docs/hardening-plan.md` is proposed work, not proof of implementation.
 - `shared/protocol/oac_v5.h` is the current production-control ABI header. It defines strict typed
   negotiation, claim, status, launch-ticket, evidence-read, and snapshot messages over a session
-  bound to one file object and one referenced service process. `shared/oac_protocol.h` is the
-  diagnostic compatibility ABI.
+  bound to one file object, one referenced service process, and a nonzero backend binding for
+  production claims. `shared/oac_protocol.h` is the diagnostic compatibility ABI.
 - The restricted service owns one serialized launch transaction: authenticate a local interactive
   client, resolve and lock one executable, arm a bounded driver ticket, create the process suspended
   under the client token, confirm the exact process handle, assign it to the service-owned
@@ -25,7 +25,11 @@
   and the independent health loop with bounded target sampling. The canonical policy binds typed
   rules and deployment mode to game/build/channel scope and component compatibility, expires,
   prevents replay, and supports explicit rollback authorization and emergency revocation.
-  Manifest-key rotation, authenticated backend leases, and authenticated upload are not implemented.
+  The current WP-11 source adds a strict backend transport interface, protected deterministic test
+  backend, nonce replay rejection, bounded leases, fixed evidence queuing, acknowledgement, and
+  driver-session binding; its commit-bound VM acceptance is pending. A production network
+  transport, backend service, durable remote storage, manifest-key rotation, and remote policy
+  delivery are not implemented.
 
 ## Repository map
 
@@ -33,7 +37,7 @@
 |---|---|
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
-| `OAC-Service/` | Restricted production controller; owns the driver session, typed policy enforcement, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
+| `OAC-Service/` | Restricted production controller; owns the backend and driver sessions, typed policy enforcement, evidence queue, target job, one serialized suspended-launch transaction, and bounded target-scan scheduling |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
@@ -41,6 +45,7 @@
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
 | `shared/oac_signed_policy.*` | Canonical signed policy, update decision, and persistent cache-state contracts |
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
+| `shared/oac_backend.*` | Canonical backend-session, lease, evidence, acknowledgement, replay, and failure-state contracts |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
 | `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |

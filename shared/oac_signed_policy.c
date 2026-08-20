@@ -2,6 +2,8 @@
 
 #include <string.h>
 
+#include "oac_backend.h"
+
 static const uint8_t g_PolicyMagic[8] =
     {'O', 'A', 'C', 'P', 'O', 'L', 'C', 'Y'};
 static const uint8_t g_CacheMagic[8] =
@@ -89,6 +91,12 @@ OAC_SIGNED_POLICY_VALIDATION OacSignedPolicyValidate(
         policy->RuleCount != OAC_POLICY_RULE_COUNT ||
         !OacPolicyRuleSetValid(policy->Rules, policy->RuleCount))
         return OAC_SIGNED_POLICY_INVALID_RULES;
+    if (!OacBackendPolicyValid(
+            policy->BackendLeaseMilliseconds,
+            policy->BackendGraceMilliseconds,
+            policy->BackendRenewalMilliseconds,
+            policy->EvidenceAckTimeoutMilliseconds))
+        return OAC_SIGNED_POLICY_INVALID_OPERATION;
     if ((emergency && rollback) ||
         !OacEmergencyReasonValid(policy->EmergencyReason) ||
         (emergency && policy->EmergencyReason == OAC_POLICY_EMERGENCY_NONE) ||
