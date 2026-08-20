@@ -25,8 +25,9 @@ campaign explicitly requires a recoverable key. The script:
    each file digest and signer while requiring the expected untrusted-root result for the newly
    self-signed certificate;
 4. packages `OAC-Client`, `OAC-Service`, `OAC-Launcher`, both protocol tests, the canonical signed
-   game manifest, and signed negative fixtures, then writes a SHA-256 package manifest that
-   distinguishes the production and diagnostic compatibility protocols; and
+   game manifest and policy, and their signed acceptance and rejection fixtures, then writes a
+   SHA-256 package manifest that distinguishes the production and diagnostic compatibility
+   protocols; and
 5. leaves the host trust anchors unchanged, always removes the exact incidental CurrentUser `CA`
    cache entry, and by default deletes the exact CurrentUser `My` certificate and its private key.
    `-KeepCertificateInCurrentUserStore` retains only that `My` certificate and key when explicitly
@@ -81,8 +82,9 @@ The smoke client requires the explicit `-LegacyV4LabMode` switch. Without that s
 sets `LabMode=0`, installs the restricted, manual `OACService`, and leaves it stopped for the
 production-boundary test phase. The service object is assigned to SYSTEM and its exact DACL grants
 interactive users and administrators only query-status and start rights. The installer reads
-and protects the exact manifest-signer SHA-256 plus per-game rollback state under
-`HKLM\SOFTWARE\OAC`; only SYSTEM and the restricted service SID can write that state. It also reads
+and protects independent manifest and policy signer SHA-256 values, per-game manifest state, and
+per-game/channel policy state under `HKLM\SOFTWARE\OAC`; only SYSTEM and the restricted service SID
+can write that state. It also reads
 `HKLM\SYSTEM\CurrentControlSet\Services\OAC\Start` and refuses to load the driver unless the value
 is exactly `3` (`SERVICE_DEMAND_START`). From the same LocalSystem shell, verify both services
 independently with:
@@ -104,17 +106,18 @@ after verifying the complete file set and rejecting PFX/P12/key material. Run
 installation ISO to create a
 networkless Generation 2 VM, retain a clean pre-Verifier checkpoint, run the production service
 boundary including crash and graceful-stop standard-user launches with job-owned child processes,
-signed-manifest acceptance and modified/wrong-build/expired/rollback rejection, protocol
-lifecycle/race, baseline scanner, and standard Driver Verifier phases,
+signed-manifest acceptance and modified/wrong-build/expired/rollback rejection, signed-policy
+signature/scope/expiry/rollback/emergency cases, protocol lifecycle/race, baseline scanner, and
+standard Driver Verifier phases,
 copy the durable result through PowerShell Direct, and shut the guest down. The orchestrator refuses
 to replace an existing VM or VHDX. Membership in Hyper-V Administrators alone is insufficient
 because the read-only VHD validation also requires `SeManageVolumePrivilege`. The current production
-campaign passed at acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` on Windows 11 Pro
-build 26100: 34 exact results, signed-manifest positive and negative cases, verified job ownership
-and process-tree termination, bounded scheduler latency and coverage, typed-evidence and local-policy
-integration, snapshot coverage, standard Driver Verifier, zero crash events/minidumps, and final
-containment were accepted. The validated result ZIP SHA-256 was
-`FC7ADD186A62614573AFD4F9045C4828DAE27E7EA372C305339C7AFA82570CAF`.
+campaign passed at acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` on Windows 11 Pro
+build 26100: 40 exact results, signed-manifest and signed-policy positive and negative cases,
+verified job ownership and process-tree termination, bounded scheduler latency and coverage,
+typed-evidence integration, snapshot coverage, standard Driver Verifier, zero crash events and
+minidumps, and final containment were accepted. The validated result ZIP SHA-256 was
+`6167983A1A6C8CAB53F1F603D816F5D015C9CE9C96CC5AE9F300386B51D7BA49`.
 This is evidence for that exact test configuration, not authorization to use test signing outside
 a disposable VM.
 

@@ -111,9 +111,9 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** The operating system terminates the target tree when the service loses ownership,
   children inherit the same containment boundary, and a replacement service can observe prior
   session loss. The crash and graceful-stop paths passed at implementation commit
-  `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Bounded scheduling,
-  signed runtime policy, and authenticated backend leases remain separate work packages; the local
-  lease-state helper is a backend seam, not a simulated backend.
+  `a30ef78819b865786f6f4e104b7a54f48678da7f` on Windows 11 build 26100. Bounded scheduling and
+  signed policy were delivered by later decisions; authenticated backend leases remain separate,
+  and the local lease-state helper is a backend seam rather than a simulated backend.
 
 ## ADR-011: Separate alerts, events, and snapshots by delivery semantics
 
@@ -156,7 +156,8 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   C-compatible catalog binds each stable rule to its event type, category, observation range, and
   required provenance, then maps it through Observe, Enforce, or Strict mode to a separate action
   and five-level policy confidence. The restricted service polls both evidence channels and applies
-  the fixed Enforce table. Display payload text and signer subject strings are not policy inputs.
+  the authenticated rule set and deployment mode described by ADR-015. Display payload text and
+  signer subject strings are not policy inputs.
   Signer decisions use explicit source, chain, revocation, timestamp, approval, and thumbprint
   fields; the active service uses `unavailable` until authenticated manifest/policy work supplies
   them.
@@ -164,9 +165,8 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   survive evaluation, while actionable local copies retain their exact policy decision. The service
   can terminate its runtime so ordinary cleanup revokes the driver session and target job. It also
   implements the deny-launch action needed by later manifest and signed-policy work, although no
-  current fixed-catalog rule selects it. Lower-priority records can still be overwritten with
-  explicit gap accounting, and externally signed policy selection, durable upload, and server
-  review remain separate work packages. Commit
+  current rule selects it. Lower-priority records can still be overwritten with explicit gap
+  accounting; durable upload and server review remain separate work packages. Commit
   `535730c6828f723c2e42a4721db885fab94505aa` passed the complete Windows 11 build 26100
   disposable-VM and standard Driver Verifier campaign with the policy-enabled service path.
 
@@ -185,9 +185,29 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 - **Consequence:** A valid Windows signature alone cannot self-authorize a build, copied or modified
   manifest bytes cannot authorize a launch, and service restart does not erase rollback state. The
   current schema authorizes only the main executable. Manifest-key rotation/revocation, approved
-  modules and middleware, signed runtime policy, and backend admission remain later work. The
+  modules and middleware, and backend admission remain later work. The
   disposable-VM test package uses its ephemeral test signer only through the isolated installer's
   exact protected pin; it is not a production signing design. Commit
   `535730c6828f723c2e42a4721db885fab94505aa` passed accepted-launch and
   modified/wrong-build/expired/rollback rejection cases in the complete Windows 11 build 26100
   disposable-VM and standard Driver Verifier campaign.
+
+## ADR-015: Authenticate policy and preserve update history
+
+- **Status:** Accepted; source and runtime tested
+- **Date:** 2026-08-20
+- **Decision:** Use one fixed 1024-byte canonical policy record with a detached SHA-256/RSA CMS
+  signature and an independent protected signer pin. Bind its rule set and deployment mode to an
+  exact game, build, and channel, bounded validity period, and minimum component revisions. Store a
+  fixed per-game/channel record containing the current policy digest, sequence and version plus the
+  historic version high-water mark. Reject replay and same-sequence equivocation. Permit rollback
+  only when a newly signed record names the exact current version and digest, without lowering the
+  historic high-water mark. Commit an accepted emergency revocation before refusing service startup.
+- **Consequence:** Local file replacement cannot silently select unsigned rules, service restart
+  cannot erase update history, and an emergency record cannot be cleared by restoring an older
+  package. Policy files remain local deployment inputs; remote delivery, signer rotation metadata,
+  backend admission, durable evidence acknowledgement, and game-specific module approval remain
+  separate work. Driver-free validation and isolated-package fixtures cover canonical validation,
+  scope, expiry, replay, equivocation, explicit rollback, and emergency revocation. Acceptance
+  commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the signed-policy positive and negative cases
+  in the complete Windows 11 build 26100 restricted-service and Driver Verifier campaign.

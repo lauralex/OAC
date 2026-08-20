@@ -11,8 +11,7 @@ $phaseBackupPath = Join-Path $root 'phase.previous.txt'
 $verifierAuthorizationPath = Join-Path $root 'verifier-authorized.json'
 $containmentReadyPath = Join-Path $root 'containment-ready.json'
 $runLog = Join-Path $results 'orchestrator.log'
-$healthDelayLimitMicroseconds = 500000
-$scanSliceWallLimitMicroseconds = 250000
+$workerLatencyLimitMicroseconds = 500000
 $threadSuspensionLimitMicroseconds = 50000
 $validPhases = @(
     'post-testsigning', 'baseline-running', 'baseline-complete',
@@ -52,6 +51,12 @@ $baselineSpecialTests = @(
     'production-manifest-wrong-build',
     'production-manifest-expired',
     'production-manifest-rollback',
+    'production-policy-wrong-signature',
+    'production-policy-wrong-scope',
+    'production-policy-expired',
+    'production-policy-rollback',
+    'production-policy-authorized-rollback',
+    'production-policy-emergency-revoke',
     'baseline-driver-gate-create',
     'baseline-driver-gate-trigger',
     'baseline-driver-gate-detection',
@@ -1077,7 +1082,7 @@ exit `$code
     }
 }
 
-function Invoke-RejectedProductionLaunch(
+function Invoke-RejectedLaunchAuthorization(
     [string]$Launcher,
     [string]$Target,
     [string]$Name,
@@ -1107,31 +1112,33 @@ exit `$code
         "(?m)^OACService rejected the launch during manifest verification \($escapedDetail\): .+\r?$" )
     if ($exitCode -ne 5 -or $matches.Count -ne 1 -or
         $output -match '(?m)^OACService launched target;') {
-        throw "$Name did not return the exact manifest rejection."
+        throw "$Name did not return the exact launch-authorization rejection."
     }
     return $exitCode
 }
 
-function Set-ProductionManifestFiles(
-    [string]$ManifestSource,
+function Set-ProductionSignedRecordFiles(
+    [string]$RecordSource,
     [string]$SignatureSource,
-    [string]$ManifestDestination,
-    [string]$SignatureDestination
+    [string]$RecordDestination,
+    [string]$SignatureDestination,
+    [int64]$ExpectedSize
 ) {
-    $manifestItem = Get-Item -LiteralPath $ManifestSource -Force
+    $recordItem = Get-Item -LiteralPath $RecordSource -Force
     $signatureItem = Get-Item -LiteralPath $SignatureSource -Force
-    if ($manifestItem.PSIsContainer -or $manifestItem.Length -ne 512 -or
+    if ($ExpectedSize -le 0 -or
+        $recordItem.PSIsContainer -or $recordItem.Length -ne $ExpectedSize -or
         $signatureItem.PSIsContainer -or $signatureItem.Length -le 0 -or
         $signatureItem.Length -gt 65536 -or
-        ($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        ($recordItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
         ($signatureItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'A production manifest fixture is unsafe.'
+        throw 'A production signed-record fixture is unsafe.'
     }
-    foreach ($destination in @($ManifestDestination, $SignatureDestination)) {
+    foreach ($destination in @($RecordDestination, $SignatureDestination)) {
         $item = Get-Item -LiteralPath $destination -Force
         if ($item.PSIsContainer -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "An installed production manifest file is unsafe: $destination"
+            throw "An installed production signed-record file is unsafe: $destination"
         }
         if (($item.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
             [IO.File]::SetAttributes(
@@ -1140,17 +1147,45 @@ function Set-ProductionManifestFiles(
         }
     }
     [IO.File]::WriteAllBytes(
-        $ManifestDestination,
-        [IO.File]::ReadAllBytes($ManifestSource))
+        $RecordDestination,
+        [IO.File]::ReadAllBytes($RecordSource))
     [IO.File]::WriteAllBytes(
         $SignatureDestination,
         [IO.File]::ReadAllBytes($SignatureSource))
-    if ((Get-FileHash -LiteralPath $ManifestDestination -Algorithm SHA256).Hash -cne
-            (Get-FileHash -LiteralPath $ManifestSource -Algorithm SHA256).Hash -or
+    if ((Get-FileHash -LiteralPath $RecordDestination -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $RecordSource -Algorithm SHA256).Hash -or
         (Get-FileHash -LiteralPath $SignatureDestination -Algorithm SHA256).Hash -cne
             (Get-FileHash -LiteralPath $SignatureSource -Algorithm SHA256).Hash) {
-        throw 'The installed production manifest fixture changed while copying.'
+        throw 'The installed production signed-record fixture changed while copying.'
     }
+}
+
+function Invoke-RejectedServiceStart(
+    [string]$Launcher,
+    [string]$Name
+) {
+    $workspace = New-InteractiveTaskWorkspace $Name
+    $scriptPath = Join-Path $workspace 'task.ps1'
+    $resultPath = Join-Path $workspace 'result.txt'
+    $outputPath = Join-Path $workspace 'stdout.txt'
+    $scriptText = @"
+`$output = @(& '$Launcher' --status 2>&1 | ForEach-Object { `$_.ToString() })
+`$code = `$LASTEXITCODE
+`$output | Out-File -LiteralPath '$outputPath' -Encoding utf8
+[IO.File]::WriteAllText('$resultPath', [string]`$code, [Text.Encoding]::ASCII)
+exit `$code
+"@
+    Write-TaskScript $scriptPath $scriptText
+    $exitCode = [int64](Invoke-InteractiveTask $Name $workspace 'Limited')
+    $output = Get-Content -LiteralPath (Join-Path $results "$Name.stdout.txt") -Raw
+    $matches = [regex]::Matches(
+        $output,
+        '(?m)^OACService connection failed during bootstrap: .+\r?$')
+    if ($exitCode -ne 3 -or $matches.Count -ne 1 -or
+        $output -match '(?m)^OACService status;') {
+        throw "$Name did not return the exact signed-policy startup rejection."
+    }
+    return $exitCode
 }
 
 function Wait-LivenessProcesses(
@@ -1316,6 +1351,12 @@ function Test-ProductionBoundary {
     $wrongBuildManifestRejected = $false
     $expiredManifestRejected = $false
     $rollbackManifestRejected = $false
+    $wrongSignaturePolicyRejected = $false
+    $wrongScopePolicyRejected = $false
+    $expiredPolicyRejected = $false
+    $rollbackPolicyRejected = $false
+    $authorizedRollbackPolicyAccepted = $false
+    $emergencyPolicyRejected = $false
     $testError = $null
     $cleanupErrors = [Collections.Generic.List[string]]::new()
     $livenessSource = $launcher
@@ -1325,6 +1366,10 @@ function Test-ProductionBoundary {
     $validManifestSource =
         Join-Path $root 'package\OAC-Liveness-Target.exe.oac-manifest'
     $validSignatureSource = "$validManifestSource.p7s"
+    $policyDestination = Join-Path $installDirectory 'OAC.policy'
+    $policySignatureDestination = "$policyDestination.p7s"
+    $validPolicySource = Join-Path $root 'package\OAC.policy'
+    $validPolicySignatureSource = "$validPolicySource.p7s"
     $modifiedManifestSource = Join-Path $root 'OAC-Game-Manifest-Modified.bin'
     $livenessChild = Join-Path $env:SystemRoot 'System32\PING.EXE'
     $livenessAliasCreated = $false
@@ -1424,35 +1469,35 @@ exit $code
         }
         $modifiedBytes[24] = $modifiedBytes[24] -bxor 1
         [IO.File]::WriteAllBytes($modifiedManifestSource, $modifiedBytes)
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $modifiedManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination
-        [void](Invoke-RejectedProductionLaunch `
+            $manifestDestination $signatureDestination 512
+        [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-modified' `
             'game manifest signature is invalid')
         $modifiedManifestRejected = $true
 
         $wrongBuildSource = Join-Path $root 'OAC-Game-Manifest-Wrong-Build.bin'
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $wrongBuildSource "$wrongBuildSource.p7s" `
-            $manifestDestination $signatureDestination
-        [void](Invoke-RejectedProductionLaunch `
+            $manifestDestination $signatureDestination 512
+        [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-wrong-build' `
             'executable identity does not match the game manifest')
         $wrongBuildManifestRejected = $true
 
         $expiredSource = Join-Path $root 'OAC-Game-Manifest-Expired.bin'
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $expiredSource "$expiredSource.p7s" `
-            $manifestDestination $signatureDestination
-        [void](Invoke-RejectedProductionLaunch `
+            $manifestDestination $signatureDestination 512
+        [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-expired' `
             'game manifest is outside its validity period')
         $expiredManifestRejected = $true
 
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $validManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination
+            $manifestDestination $signatureDestination 512
 
         $crashLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch'
@@ -1477,10 +1522,10 @@ exit $code
             $scanStatus.ScanSweeps -lt 1 -or $scanStatus.ScanRegions -lt 1 -or
             $scanStatus.ScanThreads -lt 1 -or
             $scanStatus.HealthIterations -lt 1 -or
-            $scanStatus.HealthMaximumMicroseconds -gt $healthDelayLimitMicroseconds -or
+            $scanStatus.HealthMaximumMicroseconds -gt $workerLatencyLimitMicroseconds -or
             # Cooperative scan work uses a 20 ms deadline. Wall time also includes
             # scheduler delay and bounded native calls on the two-processor test VM.
-            $scanStatus.ScanMaximumMicroseconds -gt $scanSliceWallLimitMicroseconds -or
+            $scanStatus.ScanMaximumMicroseconds -gt $workerLatencyLimitMicroseconds -or
             $scanStatus.SuspensionMaximumMicroseconds -le 0 -or
             $scanStatus.SuspensionMaximumMicroseconds -gt $threadSuspensionLimitMicroseconds) {
             throw 'The bounded scan worker did not meet its health, coverage, or suspension budget.'
@@ -1520,16 +1565,16 @@ exit $code
         }
 
         $rollbackSource = Join-Path $root 'OAC-Game-Manifest-Rollback.bin'
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $rollbackSource "$rollbackSource.p7s" `
-            $manifestDestination $signatureDestination
-        [void](Invoke-RejectedProductionLaunch `
+            $manifestDestination $signatureDestination 512
+        [void](Invoke-RejectedLaunchAuthorization `
             $launcher $livenessTarget 'production-manifest-rollback' `
             'game manifest was superseded or changed without a new sequence')
         $rollbackManifestRejected = $true
-        Set-ProductionManifestFiles `
+        Set-ProductionSignedRecordFiles `
             $validManifestSource $validSignatureSource `
-            $manifestDestination $signatureDestination
+            $manifestDestination $signatureDestination 512
 
         $gracefulLaunch = Invoke-ProductionLaunch `
             $launcher $livenessTarget 'production-launch-graceful'
@@ -1570,6 +1615,73 @@ exit $code
             throw 'The graceful stop did not publish one explicit session revocation.'
         }
 
+        Stop-Service -Name OACService -Force -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+
+        $wrongSignaturePolicySource =
+            Join-Path $root 'OAC-Policy-Wrong-Signature.bin'
+        Set-ProductionSignedRecordFiles `
+            $wrongSignaturePolicySource "$wrongSignaturePolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        [void](Invoke-RejectedServiceStart `
+            $launcher 'production-policy-wrong-signature')
+        $wrongSignaturePolicyRejected = $true
+
+        $expiredPolicySource = Join-Path $root 'OAC-Policy-Expired.bin'
+        Set-ProductionSignedRecordFiles `
+            $expiredPolicySource "$expiredPolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        [void](Invoke-RejectedServiceStart `
+            $launcher 'production-policy-expired')
+        $expiredPolicyRejected = $true
+
+        $wrongScopePolicySource = Join-Path $root 'OAC-Policy-Wrong-Scope.bin'
+        Set-ProductionSignedRecordFiles `
+            $wrongScopePolicySource "$wrongScopePolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        Start-Service -Name OACService -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Running)
+        [void](Invoke-RejectedLaunchAuthorization `
+            $launcher $livenessTarget 'production-policy-wrong-scope' `
+            'signed policy denied the launch')
+        $wrongScopePolicyRejected = $true
+        Stop-Service -Name OACService -Force -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+
+        $rollbackPolicySource = Join-Path $root 'OAC-Policy-Rollback.bin'
+        Set-ProductionSignedRecordFiles `
+            $rollbackPolicySource "$rollbackPolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        [void](Invoke-RejectedServiceStart `
+            $launcher 'production-policy-rollback')
+        $rollbackPolicyRejected = $true
+
+        $authorizedRollbackPolicySource =
+            Join-Path $root 'OAC-Policy-Authorized-Rollback.bin'
+        Set-ProductionSignedRecordFiles `
+            $authorizedRollbackPolicySource `
+            "$authorizedRollbackPolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        $authorizedRollbackStatus = Invoke-ProductionStatus `
+            $launcher 'production-policy-authorized-rollback'
+        $authorizedRollbackPolicyAccepted =
+            $authorizedRollbackStatus.ExitCode -eq 0
+        Stop-Service -Name OACService -Force -ErrorAction Stop
+        Wait-TestServiceState OACService `
+            ([ServiceProcess.ServiceControllerStatus]::Stopped)
+
+        $emergencyPolicySource =
+            Join-Path $root 'OAC-Policy-Emergency-Revoke.bin'
+        Set-ProductionSignedRecordFiles `
+            $emergencyPolicySource "$emergencyPolicySource.p7s" `
+            $policyDestination $policySignatureDestination 1024
+        [void](Invoke-RejectedServiceStart `
+            $launcher 'production-policy-emergency-revoke')
+        $emergencyPolicyRejected = $true
+
         if (@($launcherExits | Where-Object { $_ -ne 0 }).Count -ne 0 -or
             @($launchExits | Where-Object { $_ -ne 0 }).Count -ne 0 -or
             @($probeExits.Values | Where-Object { $_ -ne 0 }).Count -ne 0 -or
@@ -1579,18 +1691,31 @@ exit $code
             -not $modifiedManifestRejected -or
             -not $wrongBuildManifestRejected -or
             -not $expiredManifestRejected -or
-            -not $rollbackManifestRejected) {
+            -not $rollbackManifestRejected -or
+            -not $wrongSignaturePolicyRejected -or
+            -not $wrongScopePolicyRejected -or
+            -not $expiredPolicyRejected -or
+            -not $rollbackPolicyRejected -or
+            -not $authorizedRollbackPolicyAccepted -or
+            -not $emergencyPolicyRejected) {
             throw 'The production service, launch, and liveness boundary did not pass.'
         }
     } catch {
         $testError = $_.Exception.Message
     } finally {
         try {
-            Set-ProductionManifestFiles `
+            Set-ProductionSignedRecordFiles `
                 $validManifestSource $validSignatureSource `
-                $manifestDestination $signatureDestination
+                $manifestDestination $signatureDestination 512
         } catch {
             $cleanupErrors.Add("Restore production manifest: $($_.Exception.Message)")
+        }
+        try {
+            Set-ProductionSignedRecordFiles `
+                $validPolicySource $validPolicySignatureSource `
+                $policyDestination $policySignatureDestination 1024
+        } catch {
+            $cleanupErrors.Add("Restore signed policy: $($_.Exception.Message)")
         }
         try {
             if (Test-Path -LiteralPath $modifiedManifestSource) {
@@ -1647,6 +1772,9 @@ exit $code
         $serviceCrashRestarted -and
         $modifiedManifestRejected -and $wrongBuildManifestRejected -and
         $expiredManifestRejected -and $rollbackManifestRejected -and
+        $wrongSignaturePolicyRejected -and $wrongScopePolicyRejected -and
+        $expiredPolicyRejected -and $rollbackPolicyRejected -and
+        $emergencyPolicyRejected -and
         $scanWorkerResponsive -and $scanThreadResumePass -and
         $lossSequences.Count -eq 3 -and $lossSequences[0] -eq 0 -and
         $lossSequences[1] -eq 1 -and $lossSequences[2] -eq 2 -and
@@ -1678,6 +1806,12 @@ exit $code
         wrong_build_manifest_rejected = $wrongBuildManifestRejected
         expired_manifest_rejected = $expiredManifestRejected
         rollback_manifest_rejected = $rollbackManifestRejected
+        wrong_signature_policy_rejected = $wrongSignaturePolicyRejected
+        wrong_scope_policy_rejected = $wrongScopePolicyRejected
+        expired_policy_rejected = $expiredPolicyRejected
+        rollback_policy_rejected = $rollbackPolicyRejected
+        authorized_rollback_policy_accepted = $authorizedRollbackPolicyAccepted
+        emergency_policy_rejected = $emergencyPolicyRejected
         session_loss_sequences = @($lossSequences)
         session_loss_reasons = @($lossReasons)
         scan_state = if ($null -ne $scanStatus) { $scanStatus.ScanState } else { -1 }
@@ -2527,6 +2661,12 @@ function Collect-FinalResults {
         'production-manifest-wrong-build' = @(5)
         'production-manifest-expired' = @(5)
         'production-manifest-rollback' = @(5)
+        'production-policy-wrong-signature' = @(3)
+        'production-policy-wrong-scope' = @(5)
+        'production-policy-expired' = @(3)
+        'production-policy-rollback' = @(3)
+        'production-policy-authorized-rollback' = @(0)
+        'production-policy-emergency-revoke' = @(3)
         'baseline-driver-gate-create' = @(0)
         'baseline-driver-gate-trigger' = @(0)
         'baseline-driver-gate-detection' = @(1)

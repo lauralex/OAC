@@ -114,6 +114,7 @@ $testFiles = Read-ManifestGroup @($manifest.test_files) $bundle $bundlePrefix
 $requiredPackageFiles = @(
     'OAC.inf', 'OAC.sys', 'OAC.cat', 'OAC-Client.exe',
     'OAC-Service.exe', 'OAC-Launcher.exe',
+    'OAC.policy', 'OAC.policy.p7s',
     'OAC-Liveness-Target.exe.oac-manifest',
     'OAC-Liveness-Target.exe.oac-manifest.p7s')
 $requiredTestFiles = @(
@@ -123,7 +124,19 @@ $requiredTestFiles = @(
     'OAC-Game-Manifest-Wrong-Build.bin',
     'OAC-Game-Manifest-Wrong-Build.bin.p7s',
     'OAC-Game-Manifest-Rollback.bin',
-    'OAC-Game-Manifest-Rollback.bin.p7s')
+    'OAC-Game-Manifest-Rollback.bin.p7s',
+    'OAC-Policy-Wrong-Signature.bin',
+    'OAC-Policy-Wrong-Signature.bin.p7s',
+    'OAC-Policy-Wrong-Scope.bin',
+    'OAC-Policy-Wrong-Scope.bin.p7s',
+    'OAC-Policy-Expired.bin',
+    'OAC-Policy-Expired.bin.p7s',
+    'OAC-Policy-Rollback.bin',
+    'OAC-Policy-Rollback.bin.p7s',
+    'OAC-Policy-Authorized-Rollback.bin',
+    'OAC-Policy-Authorized-Rollback.bin.p7s',
+    'OAC-Policy-Emergency-Revoke.bin',
+    'OAC-Policy-Emergency-Revoke.bin.p7s')
 foreach ($requiredName in $requiredPackageFiles) {
     if (-not $packageFiles.ContainsKey($requiredName)) {
         throw "Package manifest does not cover required file: $requiredName"
@@ -141,6 +154,8 @@ $catalog = $packageFiles['OAC.cat']
 $client = $packageFiles['OAC-Client.exe']
 $serviceSource = $packageFiles['OAC-Service.exe']
 $launcherSource = $packageFiles['OAC-Launcher.exe']
+$policySource = $packageFiles['OAC.policy']
+$policySignatureSource = $packageFiles['OAC.policy.p7s']
 $gameManifestSource = $packageFiles['OAC-Liveness-Target.exe.oac-manifest']
 $gameManifestSignatureSource =
     $packageFiles['OAC-Liveness-Target.exe.oac-manifest.p7s']
@@ -165,6 +180,7 @@ if ($certificateObject.Thumbprint -ne [string]$manifest.certificate_thumbprint -
 $sha256 = [Security.Cryptography.SHA256]::Create()
 try {
 $manifestSignerSha256 = $sha256.ComputeHash($certificateObject.RawData)
+$policySignerSha256 = [byte[]]$manifestSignerSha256.Clone()
 } finally {
     $sha256.Dispose()
 }
@@ -183,21 +199,22 @@ function Import-PkcsAssembly {
     }
 }
 
-function Assert-DetachedManifestSignature(
-    [string]$ManifestPath,
-    [string]$SignaturePath
+function Assert-DetachedRecordSignature(
+    [string]$RecordPath,
+    [string]$SignaturePath,
+    [int]$ExpectedSize
 ) {
     Import-PkcsAssembly
-    $manifestBytes = [IO.File]::ReadAllBytes($ManifestPath)
-    if ($manifestBytes.Length -ne 512) {
-        throw "Game manifest has an invalid size: $ManifestPath"
+    $recordBytes = [IO.File]::ReadAllBytes($RecordPath)
+    if ($recordBytes.Length -ne $ExpectedSize) {
+        throw "Signed record has an invalid size: $RecordPath"
     }
     $signatureBytes = [IO.File]::ReadAllBytes($SignaturePath)
     if ($signatureBytes.Length -eq 0 -or $signatureBytes.Length -gt 65536) {
-        throw "Game-manifest signature has an invalid size: $SignaturePath"
+        throw "Detached signature has an invalid size: $SignaturePath"
     }
     $signed = [Security.Cryptography.Pkcs.SignedCms]::new(
-        [Security.Cryptography.Pkcs.ContentInfo]::new($manifestBytes), $true)
+        [Security.Cryptography.Pkcs.ContentInfo]::new($recordBytes), $true)
     $signed.Decode($signatureBytes)
     $signed.CheckSignature($true)
     if ($signed.SignerInfos.Count -ne 1 -or
@@ -207,16 +224,106 @@ function Assert-DetachedManifestSignature(
         $signed.SignerInfos[0].UnsignedAttributes.Count -ne 0 -or
         [Convert]::ToBase64String($signed.SignerInfos[0].Certificate.RawData) -cne
             [Convert]::ToBase64String($certificateObject.RawData)) {
-        throw "Game-manifest signer validation failed: $ManifestPath"
+        throw "Detached record signer validation failed: $RecordPath"
     }
 }
 
-Assert-DetachedManifestSignature `
-    $gameManifestSource $gameManifestSignatureSource
+Assert-DetachedRecordSignature `
+    $gameManifestSource $gameManifestSignatureSource 512
 foreach ($fixture in @('Expired', 'Wrong-Build', 'Rollback')) {
     $fixtureName = "OAC-Game-Manifest-$fixture.bin"
-    Assert-DetachedManifestSignature `
-        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"]
+    Assert-DetachedRecordSignature `
+        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 512
+}
+
+function Assert-SignedPolicyShape(
+    [string]$Path,
+    [switch]$AllowExpired
+) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $magic = [Text.Encoding]::ASCII.GetString($bytes, 0, 8)
+    $flags = [BitConverter]::ToUInt32($bytes, 16)
+    $issued = [BitConverter]::ToUInt64($bytes, 104)
+    $expires = [BitConverter]::ToUInt64($bytes, 112)
+    if ($bytes.Length -ne 1024 -or $magic -cne 'OACPOLCY' -or
+        [BitConverter]::ToUInt32($bytes, 8) -ne 1 -or
+        [BitConverter]::ToUInt32($bytes, 12) -ne 1024 -or
+        ($flags -band 0xFFFFFFFC) -ne 0 -or
+        [BitConverter]::ToUInt32($bytes, 20) -notin @(1, 2, 3) -or
+        [BitConverter]::ToUInt64($bytes, 88) -eq 0 -or
+        [BitConverter]::ToUInt64($bytes, 96) -eq 0 -or
+        $issued -eq 0 -or $expires -le $issued -or
+        ($expires - $issued) -gt (31 * 24 * 60 * 60) -or
+        [BitConverter]::ToUInt32($bytes, 120) -ne 0x00050005 -or
+        [BitConverter]::ToUInt32($bytes, 124) -ne 0x00010005 -or
+        [BitConverter]::ToUInt32($bytes, 128) -ne 0x00010005 -or
+        [BitConverter]::ToUInt32($bytes, 132) -ne 1 -or
+        [BitConverter]::ToUInt32($bytes, 136) -ne 14 -or
+        @($bytes[1000..1023] | Where-Object { $_ -ne 0 }).Count -ne 0) {
+        throw "Signed-policy canonical fields are invalid: $Path"
+    }
+    foreach ($range in @(@(24, 39), @(40, 55), @(56, 71), @(72, 87))) {
+        if (@($bytes[$range[0]..$range[1]] | Where-Object { $_ -ne 0 }).Count -eq 0) {
+            throw "Signed-policy identity is empty: $Path"
+        }
+    }
+    if ([Convert]::ToBase64String($bytes[144..175]) -cne
+        [Convert]::ToBase64String($policySignerSha256)) {
+        throw "Signed-policy key identity is invalid: $Path"
+    }
+    $emergency = ($flags -band 1) -ne 0
+    $rollback = ($flags -band 2) -ne 0
+    $emergencyReason = [BitConverter]::ToUInt32($bytes, 140)
+    $rollbackVersion = [BitConverter]::ToUInt64($bytes, 176)
+    $rollbackDigestPresent =
+        @($bytes[184..215] | Where-Object { $_ -ne 0 }).Count -ne 0
+    if (($emergency -and ($rollback -or $emergencyReason -notin @(1, 2, 3))) -or
+        (-not $emergency -and $emergencyReason -ne 0) -or
+        ($rollback -and ($rollbackVersion -eq 0 -or -not $rollbackDigestPresent)) -or
+        (-not $rollback -and ($rollbackVersion -ne 0 -or $rollbackDigestPresent))) {
+        throw "Signed-policy operation fields are invalid: $Path"
+    }
+    if (-not $AllowExpired -and
+        $expires + 300 -lt [uint64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) {
+        throw "Signed policy is expired: $Path"
+    }
+    $expectedRuleIds = @(
+        0x00010001, 0x00010002, 0x00010003, 0x00010004,
+        0x00010005, 0x00010006, 0x00020001, 0x00020002,
+        0x00030001, 0x00030002, 0x00030003, 0x00040001,
+        0x00040002, 0x00080001)
+    for ($index = 0; $index -lt $expectedRuleIds.Count; $index++) {
+        $offset = 216 + ($index * 56)
+        if ([BitConverter]::ToUInt32($bytes, $offset) -ne
+            [uint32]$expectedRuleIds[$index] -or
+            [BitConverter]::ToUInt32($bytes, $offset + 36) -ne 0 -or
+            [BitConverter]::ToUInt32($bytes, $offset + 52) -ne 0) {
+            throw "Signed-policy rule layout is invalid: $Path"
+        }
+    }
+}
+Assert-DetachedRecordSignature $policySource $policySignatureSource 1024
+Assert-SignedPolicyShape $policySource
+foreach ($fixture in @(
+        'Wrong-Scope', 'Expired', 'Rollback', 'Authorized-Rollback',
+        'Emergency-Revoke')) {
+    $fixtureName = "OAC-Policy-$fixture.bin"
+    Assert-DetachedRecordSignature `
+        $testFiles[$fixtureName] $testFiles["$fixtureName.p7s"] 1024
+    Assert-SignedPolicyShape `
+        $testFiles[$fixtureName] -AllowExpired:($fixture -eq 'Expired')
+}
+Assert-SignedPolicyShape $testFiles['OAC-Policy-Wrong-Signature.bin']
+$wrongSignatureRejected = $false
+try {
+    Assert-DetachedRecordSignature `
+        $testFiles['OAC-Policy-Wrong-Signature.bin'] `
+        $testFiles['OAC-Policy-Wrong-Signature.bin.p7s'] 1024
+} catch {
+    $wrongSignatureRejected = $true
+}
+if (-not $wrongSignatureRejected) {
+    throw 'The wrong-signature policy fixture unexpectedly verified.'
 }
 
 $signedFiles = @(
@@ -904,7 +1011,7 @@ function Assert-ProtectedFileAcl([string]$Path) {
     }
 }
 
-function New-ManifestStateAcl {
+function New-ProtectedStateAcl {
     $system = [Security.Principal.SecurityIdentifier]::new('S-1-5-18')
     $administrators =
         [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
@@ -927,7 +1034,7 @@ function New-ManifestStateAcl {
     return $acl
 }
 
-function Assert-ManifestStateAcl(
+function Assert-ProtectedStateAcl(
     [string]$Path,
     [switch]$Inherited
 ) {
@@ -957,7 +1064,7 @@ function Assert-ManifestStateAcl(
     if ($owner -ne 'S-1-5-18' -or $group -ne 'S-1-5-18' -or
         $acl.AreAccessRulesProtected -ne $expectedProtection -or
         $rules.Count -ne $expectedRights.Count) {
-        throw "The manifest-state registry ACL is not exact: $Path"
+        throw "The protected OAC registry ACL is not exact: $Path"
     }
     foreach ($rule in $rules) {
         $sid = $rule.IdentityReference.Value
@@ -970,108 +1077,161 @@ function Assert-ManifestStateAcl(
             $rule.PropagationFlags -ne
                 [Security.AccessControl.PropagationFlags]::None -or
             $rule.IsInherited -ne [bool]$Inherited) {
-            throw "The manifest-state registry ACL has an unexpected entry: $Path"
+            throw "The protected OAC registry ACL has an unexpected entry: $Path"
         }
     }
 }
 
-function Assert-ManifestStateRegistry(
-    [byte[]]$ExpectedSignerSha256,
+function Assert-ProtectedStateRoot(
+    [string]$Path,
+    [string]$KeyNamePattern,
+    [int]$RecordSize,
+    [string]$Description
+) {
+    $root = Get-Item -LiteralPath $Path
+    if (@($root.GetValueNames()).Count -ne 0) {
+        throw "The $Description state root contains unexpected values."
+    }
+    foreach ($keyName in @($root.GetSubKeyNames())) {
+        if ($keyName -cnotmatch $KeyNamePattern) {
+            throw "The $Description state has an invalid key: $keyName"
+        }
+        $keyPath = Join-Path $Path $keyName
+        $key = Get-Item -LiteralPath $keyPath
+        $valueNames = @($key.GetValueNames())
+        if (@($key.GetSubKeyNames()).Count -ne 0 -or
+            $valueNames.Count -ne 1 -or $valueNames[0] -cne 'HighWater') {
+            throw "The $Description state has unexpected content: $keyPath"
+        }
+        $value = (Get-ItemProperty -LiteralPath $keyPath -Name HighWater).HighWater
+        if ($value -isnot [byte[]] -or $value.Length -ne $RecordSize) {
+            throw "The $Description high-water record is malformed: $keyPath"
+        }
+        Assert-ProtectedStateAcl $keyPath -Inherited
+    }
+}
+
+function Assert-TrustStateRegistry(
+    [byte[]]$ExpectedManifestSignerSha256,
+    [byte[]]$ExpectedPolicySignerSha256,
     [switch]$AllowMissing
 ) {
-    if ($ExpectedSignerSha256.Length -ne 32 -or
-        @($ExpectedSignerSha256 | Where-Object { $_ -ne 0 }).Count -eq 0) {
-        throw 'The expected manifest signer identity is invalid.'
+    foreach ($signer in @(
+            $ExpectedManifestSignerSha256,
+            $ExpectedPolicySignerSha256)) {
+        if ($signer.Length -ne 32 -or
+            @($signer | Where-Object { $_ -ne 0 }).Count -eq 0) {
+            throw 'A protected signer identity is invalid.'
+        }
     }
     $rootPath = 'HKLM:\SOFTWARE\OAC'
-    $statePath = Join-Path $rootPath 'ManifestState'
+    $manifestStatePath = Join-Path $rootPath 'ManifestState'
+    $policyStatePath = Join-Path $rootPath 'PolicyState'
     if (-not (Test-Path -LiteralPath $rootPath)) {
         if ($AllowMissing) { return }
         throw 'The protected OAC registry root is missing.'
     }
     $root = Get-Item -LiteralPath $rootPath
     $rootValues = @($root.GetValueNames())
-    $stateExists = Test-Path -LiteralPath $statePath
-    if ($rootValues.Count -eq 0 -and $AllowMissing -and -not $stateExists) {
-    } elseif ($rootValues.Count -ne 1 -or
-        $rootValues[0] -cne 'ManifestSignerSha256' -or
-        $root.GetValueKind('ManifestSignerSha256') -ne
-            [Microsoft.Win32.RegistryValueKind]::Binary) {
+    $manifestStateExists = Test-Path -LiteralPath $manifestStatePath
+    $policyStateExists = Test-Path -LiteralPath $policyStatePath
+    if ($rootValues.Count -eq 0 -and $AllowMissing -and
+        -not $manifestStateExists -and -not $policyStateExists) {
+        return
+    }
+    $expectedValues = @{
+        ManifestSignerSha256 = $ExpectedManifestSignerSha256
+        PolicySignerSha256 = $ExpectedPolicySignerSha256
+    }
+    if ($rootValues.Count -ne $expectedValues.Count -or
+        @($rootValues | Where-Object {
+                -not $expectedValues.ContainsKey($_)
+            }).Count -ne 0) {
         throw 'The protected OAC registry root contains unexpected values.'
-    } else {
-        $observedSigner = [byte[]]$root.GetValue('ManifestSignerSha256')
-        if ($observedSigner.Length -ne $ExpectedSignerSha256.Length -or
+    }
+    foreach ($valueName in $expectedValues.Keys) {
+        if ($root.GetValueKind($valueName) -ne
+                [Microsoft.Win32.RegistryValueKind]::Binary) {
+            throw "The protected signer has an invalid registry type: $valueName"
+        }
+        $observedSigner = [byte[]]$root.GetValue($valueName)
+        $expectedSigner = [byte[]]$expectedValues[$valueName]
+        if ($observedSigner.Length -ne $expectedSigner.Length -or
             [Convert]::ToBase64String($observedSigner) -cne
-                [Convert]::ToBase64String($ExpectedSignerSha256)) {
-            throw 'The protected OAC registry root has an unexpected manifest signer.'
+                [Convert]::ToBase64String($expectedSigner)) {
+            throw "The protected OAC registry root has an unexpected signer: $valueName"
         }
     }
     $rootChildren = @($root.GetSubKeyNames())
-    if ($rootChildren.Count -gt 1 -or
-        ($rootChildren.Count -eq 1 -and $rootChildren[0] -cne 'ManifestState')) {
+    if ($rootChildren.Count -ne 2 -or
+        $rootChildren -cnotcontains 'ManifestState' -or
+        $rootChildren -cnotcontains 'PolicyState') {
         throw 'The protected OAC registry root contains unexpected keys.'
     }
-    if (-not $stateExists) {
-        if ($AllowMissing -and $rootChildren.Count -eq 0) { return }
-        throw 'The protected game-manifest state key is missing.'
+    if (-not $manifestStateExists -or -not $policyStateExists) {
+        throw 'A protected OAC state key is missing.'
     }
-    Assert-ManifestStateAcl $rootPath
-    Assert-ManifestStateAcl $statePath
-    $state = Get-Item -LiteralPath $statePath
-    if (@($state.GetValueNames()).Count -ne 0) {
-        throw 'The game-manifest state root contains unexpected values.'
-    }
-    foreach ($gameName in @($state.GetSubKeyNames())) {
-        if ($gameName -cnotmatch '^[0-9A-F]{32}$') {
-            throw "The game-manifest state has an invalid game key: $gameName"
-        }
-        $gamePath = Join-Path $statePath $gameName
-        $game = Get-Item -LiteralPath $gamePath
-        if (@($game.GetSubKeyNames()).Count -ne 0 -or
-            @($game.GetValueNames()).Count -ne 1 -or
-            @($game.GetValueNames())[0] -cne 'HighWater') {
-            throw "The game-manifest state has unexpected content: $gamePath"
-        }
-        $value = (Get-ItemProperty -LiteralPath $gamePath -Name HighWater).HighWater
-        if ($value -isnot [byte[]] -or $value.Length -ne 96) {
-            throw "The game-manifest high-water record is malformed: $gamePath"
-        }
-        Assert-ManifestStateAcl $gamePath -Inherited
-    }
+    Assert-ProtectedStateAcl $rootPath
+    Assert-ProtectedStateAcl $manifestStatePath
+    Assert-ProtectedStateAcl $policyStatePath
+    Assert-ProtectedStateRoot `
+        $manifestStatePath '^[0-9A-F]{32}$' 96 'game-manifest'
+    Assert-ProtectedStateRoot `
+        $policyStatePath '^[0-9A-F]{32}-[0-9A-F]{32}$' 160 'signed-policy'
 }
 
-function Initialize-ManifestStateRegistry([byte[]]$ExpectedSignerSha256) {
+function Initialize-TrustStateRegistry(
+    [byte[]]$ExpectedManifestSignerSha256,
+    [byte[]]$ExpectedPolicySignerSha256
+) {
     $rootPath = 'HKLM:\SOFTWARE\OAC'
-    $statePath = Join-Path $rootPath 'ManifestState'
+    $statePaths = @(
+        (Join-Path $rootPath 'ManifestState'),
+        (Join-Path $rootPath 'PolicyState'))
     if (Test-Path -LiteralPath $rootPath) {
-        Assert-ManifestStateRegistry $ExpectedSignerSha256 -AllowMissing
+        Assert-TrustStateRegistry `
+            $ExpectedManifestSignerSha256 $ExpectedPolicySignerSha256 `
+            -AllowMissing
     } else {
         New-Item -Path $rootPath | Out-Null
     }
-    if (-not (Test-Path -LiteralPath $statePath)) {
-        New-Item -Path $statePath | Out-Null
+    foreach ($statePath in $statePaths) {
+        if (-not (Test-Path -LiteralPath $statePath)) {
+            New-Item -Path $statePath | Out-Null
+        }
     }
     New-ItemProperty -LiteralPath $rootPath -Name ManifestSignerSha256 `
-        -PropertyType Binary -Value $ExpectedSignerSha256 -Force | Out-Null
-    $acl = New-ManifestStateAcl
+        -PropertyType Binary -Value $ExpectedManifestSignerSha256 -Force | Out-Null
+    New-ItemProperty -LiteralPath $rootPath -Name PolicySignerSha256 `
+        -PropertyType Binary -Value $ExpectedPolicySignerSha256 -Force | Out-Null
+    $acl = New-ProtectedStateAcl
     Set-Acl -LiteralPath $rootPath -AclObject $acl
-    $acl = New-ManifestStateAcl
-    Set-Acl -LiteralPath $statePath -AclObject $acl
-    Assert-ManifestStateRegistry $ExpectedSignerSha256
+    foreach ($statePath in $statePaths) {
+        $acl = New-ProtectedStateAcl
+        Set-Acl -LiteralPath $statePath -AclObject $acl
+    }
+    Assert-TrustStateRegistry `
+        $ExpectedManifestSignerSha256 $ExpectedPolicySignerSha256
 }
 
-function Remove-ManifestStateRegistry([byte[]]$ExpectedSignerSha256) {
-    Assert-ManifestStateRegistry $ExpectedSignerSha256
+function Remove-TrustStateRegistry(
+    [byte[]]$ExpectedManifestSignerSha256,
+    [byte[]]$ExpectedPolicySignerSha256
+) {
+    Assert-TrustStateRegistry `
+        $ExpectedManifestSignerSha256 $ExpectedPolicySignerSha256
     $rootPath = 'HKLM:\SOFTWARE\OAC'
-    $statePath = Join-Path $rootPath 'ManifestState'
-    $state = Get-Item -LiteralPath $statePath
-    foreach ($gameName in @($state.GetSubKeyNames())) {
-        Remove-Item -LiteralPath (Join-Path $statePath $gameName) -Confirm:$false
+    foreach ($stateName in @('ManifestState', 'PolicyState')) {
+        $statePath = Join-Path $rootPath $stateName
+        $state = Get-Item -LiteralPath $statePath
+        foreach ($keyName in @($state.GetSubKeyNames())) {
+            Remove-Item -LiteralPath (Join-Path $statePath $keyName) -Confirm:$false
+        }
+        Remove-Item -LiteralPath $statePath -Confirm:$false
     }
-    Remove-Item -LiteralPath $statePath -Confirm:$false
     Remove-Item -LiteralPath $rootPath -Confirm:$false
     if (Test-Path -LiteralPath $rootPath) {
-        throw 'The protected game-manifest state was not removed.'
+        throw 'The protected OAC trust state was not removed.'
     }
 }
 
@@ -1535,17 +1695,21 @@ if ($serviceKeyExists) {
 $expectedInstalledFiles = @{
     'OAC-Service.exe' = $serviceSource
     'OAC-Launcher.exe' = $launcherSource
+    'OAC.policy' = $policySource
+    'OAC.policy.p7s' = $policySignatureSource
     'OAC-Liveness-Target.exe.oac-manifest' = $gameManifestSource
     'OAC-Liveness-Target.exe.oac-manifest.p7s' =
         $gameManifestSignatureSource
 }
 $unsignedInstalledFiles = @(
+    'OAC.policy',
+    'OAC.policy.p7s',
     'OAC-Liveness-Target.exe.oac-manifest',
     'OAC-Liveness-Target.exe.oac-manifest.p7s')
 Assert-ExistingInstallDirectory `
     $installDirectory $expectedInstalledFiles $certificateObject.Thumbprint `
     $unsignedInstalledFiles
-Assert-ManifestStateRegistry $manifestSignerSha256 `
+Assert-TrustStateRegistry $manifestSignerSha256 $policySignerSha256 `
     -AllowMissing:(-not $serviceKeyExists)
 if ($serviceKeyExists -and
     -not (Test-Path -LiteralPath $serviceInstallPath -PathType Leaf)) {
@@ -1599,7 +1763,7 @@ if ($Remove) {
         throw 'Refusing to remove a non-empty OAC-Test directory.'
     }
     [IO.Directory]::Delete($installDirectory)
-    Remove-ManifestStateRegistry $manifestSignerSha256
+    Remove-TrustStateRegistry $manifestSignerSha256 $policySignerSha256
     Remove-TestCertificateStores
     foreach ($storeName in @('Root', 'TrustedPublisher')) {
         if (@(Get-ChildItem -LiteralPath "Cert:\LocalMachine\$storeName" |
@@ -1672,7 +1836,7 @@ if ([int](Get-ItemProperty -LiteralPath $parametersKey -Name LabMode).LabMode -n
 
 $createdDirectory = $false
 $createdService = $false
-$manifestStateExisted = Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC\ManifestState'
+$trustStateExisted = Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC'
 $copiedFiles = [Collections.Generic.List[string]]::new()
 try {
     if (Test-Path -LiteralPath $installDirectory) {
@@ -1726,7 +1890,7 @@ try {
     Assert-ExistingInstallDirectory `
         $installDirectory $expectedInstalledFiles $certificateObject.Thumbprint `
         $unsignedInstalledFiles
-    Initialize-ManifestStateRegistry $manifestSignerSha256
+    Initialize-TrustStateRegistry $manifestSignerSha256 $policySignerSha256
 
     if (-not (Test-Path -LiteralPath $serviceKey)) {
         New-Service -Name 'OACService' -BinaryPathName $quotedServicePath `
@@ -1783,10 +1947,10 @@ try {
             $cleanupErrors.Add($_.Exception.Message)
         }
     }
-    if (-not $manifestStateExisted -and
-        (Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC\ManifestState')) {
+    if (-not $trustStateExisted -and
+        (Test-Path -LiteralPath 'HKLM:\SOFTWARE\OAC')) {
         try {
-            Remove-ManifestStateRegistry $manifestSignerSha256
+            Remove-TrustStateRegistry $manifestSignerSha256 $policySignerSha256
         } catch {
             $cleanupErrors.Add($_.Exception.Message)
         }

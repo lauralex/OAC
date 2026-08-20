@@ -17,7 +17,13 @@
     <ClCompile Include="manifest.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="policy.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="service.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="signed_record.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="target_scanner.cpp">
@@ -29,15 +35,24 @@
     <ClCompile Include="..\shared\oac_policy.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\oac_signed_policy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="manifest.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="policy.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="service.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="target_scanner.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="signed_record.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_ipc.h">
@@ -47,6 +62,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_policy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_signed_policy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_thread_suspension.hpp">

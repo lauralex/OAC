@@ -1,4 +1,5 @@
 #include "manifest.hpp"
+#include "signed_record.hpp"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -23,51 +24,11 @@ static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE);
 constexpr wchar_t kManifestSuffix[] = L".oac-manifest";
 constexpr wchar_t kSignatureSuffix[] = L".p7s";
 constexpr wchar_t kManifestStatePath[] = L"SOFTWARE\\OAC\\ManifestState";
-constexpr wchar_t kManifestTrustPath[] = L"SOFTWARE\\OAC";
 constexpr wchar_t kManifestSignerValue[] = L"ManifestSignerSha256";
 constexpr wchar_t kManifestStateValue[] = L"HighWater";
 constexpr ULONGLONG kMaximumExecutableBytes = 1024ULL * 1024ULL * 1024ULL;
-constexpr DWORD kMaximumSignatureBytes = 64u * 1024u;
-constexpr ULONGLONG kWindowsToUnixEpoch100ns = 116444736000000000ULL;
 constexpr DWORD kInvalidSignatureError =
     static_cast<DWORD>(TRUST_E_BAD_DIGEST);
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE value = INVALID_HANDLE_VALUE) noexcept
-        : value_(value) {}
-    ~UniqueHandle()
-    {
-        if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE)
-            CloseHandle(value_);
-    }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : value_(other.value_)
-    {
-        other.value_ = INVALID_HANDLE_VALUE;
-    }
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept
-    {
-        if (this != &other)
-        {
-            if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE)
-                CloseHandle(value_);
-            value_ = other.value_;
-            other.value_ = INVALID_HANDLE_VALUE;
-        }
-        return *this;
-    }
-    [[nodiscard]] HANDLE get() const noexcept { return value_; }
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return value_ != nullptr && value_ != INVALID_HANDLE_VALUE;
-    }
-
-private:
-    HANDLE value_;
-};
 
 DWORD BcryptError(NTSTATUS status) noexcept
 {
@@ -93,55 +54,6 @@ private:
     HKEY value_ = nullptr;
 };
 
-class CertificateContext
-{
-public:
-    ~CertificateContext()
-    {
-        if (value_ != nullptr) CertFreeCertificateContext(value_);
-    }
-    CertificateContext(const CertificateContext&) = delete;
-    CertificateContext& operator=(const CertificateContext&) = delete;
-    CertificateContext() = default;
-    PCCERT_CONTEXT* put() noexcept { return &value_; }
-    [[nodiscard]] PCCERT_CONTEXT get() const noexcept { return value_; }
-
-private:
-    PCCERT_CONTEXT value_ = nullptr;
-};
-
-class CertificateStore
-{
-public:
-    ~CertificateStore()
-    {
-        if (value_ != nullptr) CertCloseStore(value_, 0);
-    }
-    CertificateStore(const CertificateStore&) = delete;
-    CertificateStore& operator=(const CertificateStore&) = delete;
-    CertificateStore() = default;
-    HCERTSTORE* put() noexcept { return &value_; }
-
-private:
-    HCERTSTORE value_ = nullptr;
-};
-
-class CryptographicMessage
-{
-public:
-    ~CryptographicMessage()
-    {
-        if (value_ != nullptr) CryptMsgClose(value_);
-    }
-    CryptographicMessage(const CryptographicMessage&) = delete;
-    CryptographicMessage& operator=(const CryptographicMessage&) = delete;
-    CryptographicMessage() = default;
-    HCRYPTMSG* put() noexcept { return &value_; }
-    [[nodiscard]] HCRYPTMSG get() const noexcept { return value_; }
-
-private:
-    HCRYPTMSG value_ = nullptr;
-};
 
 class HashProvider
 {
@@ -276,67 +188,6 @@ DWORD HashFile(
     return error;
 }
 
-DWORD OpenDataFile(const std::wstring& path, UniqueHandle& file)
-{
-    file = UniqueHandle();
-    const HANDLE raw = CreateFileW(
-        path.c_str(),
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT |
-            FILE_FLAG_SEQUENTIAL_SCAN,
-        nullptr);
-    if (raw == INVALID_HANDLE_VALUE) return GetLastError();
-
-    if (GetFileType(raw) != FILE_TYPE_DISK)
-    {
-        CloseHandle(raw);
-        return ERROR_FILE_INVALID;
-    }
-    FILE_ATTRIBUTE_TAG_INFO attributes{};
-    if (!GetFileInformationByHandleEx(
-            raw, FileAttributeTagInfo, &attributes, sizeof(attributes)))
-    {
-        const DWORD error = GetLastError();
-        CloseHandle(raw);
-        return error;
-    }
-    if ((attributes.FileAttributes &
-            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
-    {
-        CloseHandle(raw);
-        return ERROR_FILE_INVALID;
-    }
-    file = UniqueHandle(raw);
-    return ERROR_SUCCESS;
-}
-
-DWORD ReadDataFile(HANDLE file, DWORD exactSize, DWORD maximumSize,
-    std::vector<unsigned char>& bytes)
-{
-    LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file, &size)) return GetLastError();
-    if (size.QuadPart <= 0 || size.QuadPart > maximumSize ||
-        (exactSize != 0 && size.QuadPart != exactSize))
-    {
-        return ERROR_INVALID_DATA;
-    }
-    bytes.resize(static_cast<size_t>(size.QuadPart));
-    DWORD read = 0;
-    if (!ReadFile(
-            file,
-            bytes.data(),
-            static_cast<DWORD>(bytes.size()),
-            &read,
-            nullptr))
-    {
-        return GetLastError();
-    }
-    return read == bytes.size() ? ERROR_SUCCESS : ERROR_HANDLE_EOF;
-}
-
 bool CertificateUsesStrongRsa(PCCERT_CONTEXT certificate)
 {
     if (certificate == nullptr || certificate->pCertInfo == nullptr ||
@@ -435,197 +286,6 @@ DWORD VerifyExecutableTrust(
     return error;
 }
 
-bool SameCertificate(
-    PCCERT_CONTEXT certificate,
-    const std::vector<unsigned char>& expected)
-{
-    return certificate != nullptr &&
-        certificate->cbCertEncoded == expected.size() &&
-        std::memcmp(
-            certificate->pbCertEncoded,
-            expected.data(),
-            expected.size()) == 0;
-}
-
-DWORD VerifyDetachedSignature(
-    const std::vector<unsigned char>& signature,
-    const OAC_GAME_MANIFEST& manifest,
-    const std::vector<unsigned char>& expectedCertificate)
-{
-    CRYPT_DATA_BLOB blob{};
-    blob.cbData = static_cast<DWORD>(signature.size());
-    blob.pbData = const_cast<BYTE*>(signature.data());
-    DWORD encoding = 0;
-    DWORD content = 0;
-    DWORD format = 0;
-    CertificateStore store;
-    CryptographicMessage message;
-    if (!CryptQueryObject(
-            CERT_QUERY_OBJECT_BLOB,
-            &blob,
-            CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED |
-                CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-            CERT_QUERY_FORMAT_FLAG_BINARY,
-            0,
-            &encoding,
-            &content,
-            &format,
-            store.put(),
-            message.put(),
-            nullptr) ||
-        message.get() == nullptr ||
-        content != CERT_QUERY_CONTENT_PKCS7_SIGNED ||
-        format != CERT_QUERY_FORMAT_BINARY ||
-        encoding != (X509_ASN_ENCODING | PKCS_7_ASN_ENCODING))
-    {
-        return kInvalidSignatureError;
-    }
-
-    DWORD signerCount = 0;
-    DWORD signerCountSize = sizeof(signerCount);
-    if (!CryptMsgGetParam(
-            message.get(),
-            CMSG_SIGNER_COUNT_PARAM,
-            0,
-            &signerCount,
-            &signerCountSize) ||
-        signerCountSize != sizeof(signerCount) || signerCount != 1)
-    {
-        return kInvalidSignatureError;
-    }
-    DWORD signerInfoSize = 0;
-    if (!CryptMsgGetParam(
-            message.get(), CMSG_SIGNER_INFO_PARAM, 0, nullptr, &signerInfoSize) ||
-        signerInfoSize < sizeof(CMSG_SIGNER_INFO) ||
-        signerInfoSize > kMaximumSignatureBytes)
-    {
-        return kInvalidSignatureError;
-    }
-    std::vector<unsigned char> signerInfoBytes(signerInfoSize);
-    if (!CryptMsgGetParam(
-            message.get(),
-            CMSG_SIGNER_INFO_PARAM,
-            0,
-            signerInfoBytes.data(),
-            &signerInfoSize))
-    {
-        return kInvalidSignatureError;
-    }
-    const auto* signerInfo = reinterpret_cast<const CMSG_SIGNER_INFO*>(
-        signerInfoBytes.data());
-    if (signerInfo->HashAlgorithm.pszObjId == nullptr ||
-        std::strcmp(signerInfo->HashAlgorithm.pszObjId, szOID_NIST_sha256) != 0 ||
-        signerInfo->HashEncryptionAlgorithm.pszObjId == nullptr ||
-        (std::strcmp(
-             signerInfo->HashEncryptionAlgorithm.pszObjId,
-             szOID_RSA_RSA) != 0 &&
-         std::strcmp(
-             signerInfo->HashEncryptionAlgorithm.pszObjId,
-             szOID_RSA_SHA256RSA) != 0) ||
-        signerInfo->UnauthAttrs.cAttr != 0)
-    {
-        return kInvalidSignatureError;
-    }
-
-    CRYPT_VERIFY_MESSAGE_PARA parameters{};
-    parameters.cbSize = sizeof(parameters);
-    parameters.dwMsgAndCertEncodingType =
-        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING;
-    const BYTE* contents[] =
-    {
-        reinterpret_cast<const BYTE*>(&manifest)
-    };
-    DWORD contentSizes[] = {static_cast<DWORD>(sizeof(manifest))};
-    CertificateContext signerCertificate;
-    if (!CryptVerifyDetachedMessageSignature(
-            &parameters,
-            0,
-            signature.data(),
-            static_cast<DWORD>(signature.size()),
-            ARRAYSIZE(contents),
-            contents,
-            contentSizes,
-            signerCertificate.put()) ||
-        !SameCertificate(signerCertificate.get(), expectedCertificate))
-    {
-        return kInvalidSignatureError;
-    }
-
-    CertificateContext unexpectedSigner;
-    if (CryptVerifyDetachedMessageSignature(
-            &parameters,
-            1,
-            signature.data(),
-            static_cast<DWORD>(signature.size()),
-            ARRAYSIZE(contents),
-            contents,
-            contentSizes,
-            unexpectedSigner.put()) ||
-        GetLastError() != static_cast<DWORD>(CRYPT_E_NO_SIGNER))
-    {
-        return kInvalidSignatureError;
-    }
-    return ERROR_SUCCESS;
-}
-
-ULONGLONG CurrentUnixSeconds()
-{
-    FILETIME fileTime{};
-    GetSystemTimePreciseAsFileTime(&fileTime);
-    const ULONGLONG ticks =
-        (static_cast<ULONGLONG>(fileTime.dwHighDateTime) << 32) |
-        fileTime.dwLowDateTime;
-    return ticks <= kWindowsToUnixEpoch100ns
-        ? 0
-        : (ticks - kWindowsToUnixEpoch100ns) / 10000000ULL;
-}
-
-std::wstring GameKeyName(const unsigned char gameId[OAC_MANIFEST_ID_SIZE])
-{
-    constexpr wchar_t digits[] = L"0123456789ABCDEF";
-    std::wstring name;
-    name.reserve(OAC_MANIFEST_ID_SIZE * 2u);
-    for (size_t index = 0; index < OAC_MANIFEST_ID_SIZE; ++index)
-    {
-        name.push_back(digits[gameId[index] >> 4]);
-        name.push_back(digits[gameId[index] & 0xFu]);
-    }
-    return name;
-}
-
-DWORD ReadPinnedManifestSigner(
-    std::array<unsigned char, OAC_MANIFEST_HASH_SIZE>& signerDigest)
-{
-    RegistryKey root;
-    LONG status = RegOpenKeyExW(
-        HKEY_LOCAL_MACHINE,
-        kManifestTrustPath,
-        0,
-        KEY_QUERY_VALUE,
-        root.put());
-    if (status != ERROR_SUCCESS) return static_cast<DWORD>(status);
-
-    DWORD type = 0;
-    DWORD size = static_cast<DWORD>(signerDigest.size());
-    status = RegQueryValueExW(
-        root.get(),
-        kManifestSignerValue,
-        nullptr,
-        &type,
-        signerDigest.data(),
-        &size);
-    if (status != ERROR_SUCCESS) return static_cast<DWORD>(status);
-    if (type != REG_BINARY || size != signerDigest.size() ||
-        std::all_of(
-            signerDigest.begin(),
-            signerDigest.end(),
-            [](unsigned char value) { return value == 0; }))
-    {
-        return ERROR_INVALID_DATA;
-    }
-    return ERROR_SUCCESS;
-}
-
 DWORD ApplyRollbackPolicy(
     const OAC_GAME_MANIFEST& manifest,
     const std::array<unsigned char, OAC_MANIFEST_HASH_SIZE>& digest,
@@ -646,7 +306,8 @@ DWORD ApplyRollbackPolicy(
 
     RegistryKey game;
     DWORD disposition = 0;
-    const std::wstring keyName = GameKeyName(manifest.GameId);
+    const std::wstring keyName =
+        oac::HexIdentity(manifest.GameId, OAC_MANIFEST_ID_SIZE);
     status = RegCreateKeyExW(
         root.get(),
         keyName.c_str(),
@@ -755,45 +416,30 @@ DWORD AuthorizeGameManifest(
         return ERROR_INVALID_PARAMETER;
     }
 
-    UniqueHandle manifestFile;
-    DWORD error = OpenDataFile(
-        finalExecutablePath + kManifestSuffix, manifestFile);
-    if (error != ERROR_SUCCESS)
-    {
-        failure = (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
-            ? ManifestFailure::Missing
-            : ManifestFailure::Invalid;
-        return error;
-    }
-    UniqueHandle signatureFile;
-    error = OpenDataFile(
+    VerifiedSignedRecord signedManifest;
+    DWORD error = VerifySignedRecord(
+        finalExecutablePath + kManifestSuffix,
         finalExecutablePath + kManifestSuffix + kSignatureSuffix,
-        signatureFile);
+        static_cast<DWORD>(sizeof(OAC_GAME_MANIFEST)),
+        kManifestSignerValue,
+        signedManifest);
     if (error != ERROR_SUCCESS)
     {
         failure = (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND)
             ? ManifestFailure::Missing
-            : ManifestFailure::Invalid;
+            : (error == static_cast<DWORD>(TRUST_E_BAD_DIGEST) ||
+               error == ERROR_ACCESS_DISABLED_BY_POLICY)
+                ? ManifestFailure::Signature
+                : ManifestFailure::Invalid;
         return error;
     }
-
-    std::vector<unsigned char> manifestBytes;
-    error = ReadDataFile(
-        manifestFile.get(),
-        sizeof(OAC_GAME_MANIFEST),
-        sizeof(OAC_GAME_MANIFEST),
-        manifestBytes);
-    if (error != ERROR_SUCCESS) return error;
+    if (signedManifest.Bytes.size() != sizeof(verified.Record))
+        return ERROR_INVALID_DATA;
     std::memcpy(
-        &verified.Record, manifestBytes.data(), sizeof(verified.Record));
-    error = HashBytes(
-        &verified.Record, sizeof(verified.Record), verified.Digest);
-    if (error != ERROR_SUCCESS) return error;
-
-    std::vector<unsigned char> signature;
-    error = ReadDataFile(
-        signatureFile.get(), 0, kMaximumSignatureBytes, signature);
-    if (error != ERROR_SUCCESS) return error;
+        &verified.Record,
+        signedManifest.Bytes.data(),
+        sizeof(verified.Record));
+    verified.Digest = signedManifest.Digest;
 
     std::array<unsigned char, OAC_MANIFEST_HASH_SIZE> signerDigest{};
     std::vector<unsigned char> signerCertificate;
@@ -807,24 +453,14 @@ DWORD AuthorizeGameManifest(
         failure = ManifestFailure::Signature;
         return error;
     }
-    std::array<unsigned char, OAC_MANIFEST_HASH_SIZE> pinnedSigner{};
-    error = ReadPinnedManifestSigner(pinnedSigner);
-    if (error != ERROR_SUCCESS || signerDigest != pinnedSigner)
+    if (signerDigest != signedManifest.SignerDigest ||
+        signerCertificate != signedManifest.SignerCertificate)
     {
         failure = ManifestFailure::Signature;
-        return error == ERROR_SUCCESS
-            ? ERROR_ACCESS_DISABLED_BY_POLICY
-            : error;
-    }
-    error = VerifyDetachedSignature(
-        signature, verified.Record, signerCertificate);
-    if (error != ERROR_SUCCESS)
-    {
-        failure = ManifestFailure::Signature;
-        return error;
+        return ERROR_ACCESS_DISABLED_BY_POLICY;
     }
 
-    const ULONGLONG now = CurrentUnixSeconds();
+    const ULONGLONG now = oac::CurrentUnixSeconds();
     const OAC_MANIFEST_VALIDATION validation = OacManifestValidate(
         &verified.Record,
         sizeof(verified.Record),

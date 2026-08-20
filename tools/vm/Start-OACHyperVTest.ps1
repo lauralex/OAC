@@ -22,6 +22,9 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$workerLatencyLimitMicroseconds = 500000
+$threadSuspensionLimitMicroseconds = 50000
+
 if (-not [Environment]::Is64BitProcess) {
     throw 'Run the Hyper-V campaign from a 64-bit elevated PowerShell host.'
 }
@@ -75,6 +78,12 @@ $specialTests = [ordered]@{
     'production-manifest-wrong-build' = @(5)
     'production-manifest-expired' = @(5)
     'production-manifest-rollback' = @(5)
+    'production-policy-wrong-signature' = @(3)
+    'production-policy-wrong-scope' = @(5)
+    'production-policy-expired' = @(3)
+    'production-policy-rollback' = @(3)
+    'production-policy-authorized-rollback' = @(0)
+    'production-policy-emergency-revoke' = @(3)
     'baseline-driver-gate-create' = @(0)
     'baseline-driver-gate-trigger' = @(0)
     'baseline-driver-gate-detection' = @(1)
@@ -698,6 +707,12 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
             'wrong_build_manifest_rejected',
             'expired_manifest_rejected',
             'rollback_manifest_rejected',
+            'wrong_signature_policy_rejected',
+            'wrong_scope_policy_rejected',
+            'expired_policy_rejected',
+            'rollback_policy_rejected',
+            'authorized_rollback_policy_accepted',
+            'emergency_policy_rejected',
             'crash_processes_terminated',
             'graceful_processes_terminated',
             'service_crash_restarted',
@@ -768,11 +783,11 @@ function Assert-ProductionBoundarySummary([object]$Summary, [string]$Context) {
         throw "$Context scanner slice counts are inconsistent."
     }
     if ([int64](Get-RequiredValue `
-            $Summary 'maximum_health_delay_us' $Context) -gt 500000 -or
+            $Summary 'maximum_health_delay_us' $Context) -gt $workerLatencyLimitMicroseconds -or
         [int64](Get-RequiredValue `
-            $Summary 'maximum_scan_slice_us' $Context) -gt 100000 -or
+            $Summary 'maximum_scan_slice_us' $Context) -gt $workerLatencyLimitMicroseconds -or
         [int64](Get-RequiredValue `
-            $Summary 'maximum_thread_suspension_us' $Context) -gt 50000) {
+            $Summary 'maximum_thread_suspension_us' $Context) -gt $threadSuspensionLimitMicroseconds) {
         throw "$Context exceeded a health, scan, or suspension budget."
     }
     foreach ($name in @('scan_worker_responsive', 'scan_thread_resume_pass')) {

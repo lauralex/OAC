@@ -1,14 +1,14 @@
 # OAC hardening progress
 
-**Status date:** 2026-08-19
+**Status date:** 2026-08-20
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
 **Reviewed source baseline:** `90dfdfaa9178cbc0274394d1aec77b40ef643762`
 
-WP-01 through WP-09 form the accepted production-control, target-lifetime, local-evidence,
-bounded-scheduling, local-policy, and signed-build MVP. Acceptance commit
-`535730c6828f723c2e42a4721db885fab94505aa` passed the commit-bound disposable-VM and standard
+WP-01 through WP-10 form the accepted production-control, target-lifetime, local-evidence,
+bounded-scheduling, signed-build, and signed-policy foundation. Acceptance commit
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the commit-bound disposable-VM and standard
 Driver Verifier campaign described below. Status still distinguishes source, evidence, and the
 remaining production-hardening work packages.
 
@@ -18,13 +18,13 @@ remaining production-hardening work packages.
 | WP-01 Production protocol foundations | Tested foundation | Production ABI, explicit message types, validators, stable IDs, event schema, pure units, driver dispatch, and driver-backed protocol execution passed on the named campaign |
 | WP-02 Service and device identity | VM-tested foundation | Restricted service, identity-checked launcher IPC, production device ACL, exact install/remove, standard-user status, and direct-open denials passed on the named campaign |
 | WP-03 Per-file session state | VM-tested foundation | File/process/session identity, protocol exclusion, rundown, cleanup/close, generation, runtime race, live-target tombstone, and owner-exit cases passed on the named campaign |
-| WP-04 Launch ticket and early binding | Working MVP; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
-| WP-05 Job and liveness | Working MVP; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
-| WP-06 Alert/event/snapshot transport | Working MVP; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
-| WP-07 Bounded service scheduler | Working MVP; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
-| WP-08 Rule catalog and policy engine | Working MVP; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
-| WP-09 Signed game manifest | Working MVP; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
-| WP-10 Signed policy/update model | Planned | Existing vulnerable-driver hash snapshot is not the planned signed policy channel |
+| WP-04 Launch ticket and early binding | Implemented; VM tested | One-use ticket, creation-time creator/path binding, suspended caller-token launch, exact process-handle confirmation, resume, hostile units, and Driver Verifier passed on the named campaign |
+| WP-05 Job and liveness | Implemented; VM tested | Service-owned kill-on-close job, pre-resume assignment, explicit idempotent revoke, session-loss latch, lease-state evaluator, and bounded crash/stop process-tree tests passed on the named campaign |
+| WP-06 Alert/event/snapshot transport | Implemented; VM tested | Separate retained-alert and overwrite-event queues, strict acknowledgement/cursor rules, persistent loss provenance, production loss revocation, service polling, and frozen paged kernel-module snapshots passed the named campaign |
+| WP-07 Bounded service scheduler | Implemented; VM tested | Independent health loop, one-slot worker queue, cancellation, incremental memory/thread sampling, fixed budgets, strict metrics, and shared resume guard passed the named campaign |
+| WP-08 Rule catalog and policy engine | Implemented; VM tested | Fixed catalog, five-level confidence, seven actions, three deployment modes, typed signer state, service enforcement, display-text independence, and integrated VM/Verifier execution passed on the named campaign |
+| WP-09 Signed game manifest | Implemented; VM tested | Canonical record, detached CMS verification, protected signer pin, exact build/signer checks, expiry, rollback state, launch integration, and negative VM cases passed on the named campaign |
+| WP-10 Signed policy/update model | Implemented; VM tested | Canonical signed policy, protected signer pin, game/build/channel scope, expiry, component compatibility, persistent replay state, explicit rollback authorization, emergency revocation, and integrated VM/Verifier execution passed on the named campaign |
 | WP-11 Backend session abstraction | Planned | No backend lease, authenticated upload, or replay service |
 | WP-12 Scanner modularization | Planned | Refactor behind tests; preserve lab behavior |
 | WP-13 Game/server integration | Planned | No current game-specific server detector |
@@ -81,28 +81,32 @@ The current source is organized around these implementation areas:
 - `OAC/evidence.c`, `OAC/protection.c`, and `OAC/scanner.c`: callback-safe typed publication,
   independent retained-alert and overwrite-event queues, explicit loss accounting, and frozen
   paged kernel-module snapshots.
-- `shared/oac_policy.h` and `shared/oac_policy.c`: C-compatible stable catalog, Observe/Enforce/Strict
-  decisions, five-level policy confidence, signer classification, strict typed-record matching, and
-  display-text-independent evaluation.
+- `shared/oac_policy.h` and `shared/oac_policy.c`: C-compatible stable rule identities,
+  Observe/Enforce/Strict decisions, five-level policy confidence, signer classification, strict
+  typed-record matching, and display-text-independent evaluation.
+- `shared/oac_signed_policy.h` and `shared/oac_signed_policy.c`: fixed canonical policy and cache
+  records, bounded scope/time/component validation, replay and equivocation rejection, explicit
+  rollback authorization, preserved historic high-water state, and emergency revocation.
 - `shared/oac_manifest.h` and `shared/oac_manifest.c`: fixed canonical manifest and rollback-state
   records, hostile-input validation, exact file/signer identity, and deterministic high-water
   decisions.
 - `OAC-Service/`, `OAC-Launcher/`, `shared/oac_ipc.h`, and `shared/oac_lease.h`: restricted
   controller, identity-checked status IPC, one serialized caller-token launch transaction,
   service-owned target job, bounded two-channel evidence polling, central policy enforcement, and a
-  backend-independent lease-state seam. Before arming a launch, the service validates a detached
-  signed manifest against the locked executable, an explicitly provisioned signer pin, bounded
-  compatibility and expiry, and protected per-game rollback state. It binds the verified manifest
-  digest into driver session status. The service keeps target inspection off the health loop,
+  backend-independent lease-state seam. At startup, the service authenticates the local policy and
+  commits protected per-game/channel update state. Before arming a launch, it checks policy scope
+  and validates a detached signed manifest against the locked executable, an explicitly provisioned
+  signer pin, bounded compatibility and expiry, and protected per-game rollback state. It binds the
+  verified manifest digest into driver session status. The service keeps target inspection off the health loop,
   queues incremental memory/thread slices through one coalescing worker slot, and reports strict
   coverage and latency metrics to the launcher.
 - Package/install and VM harness support for the service boundary, production session lifecycle and
   race tests, and Driver Verifier acceptance.
 
 The current driver advertises production session control, launch tickets, session liveness, typed
-evidence, and paged snapshots. Production configuration/scan, signed-policy, and backend
-capabilities remain unavailable. Manifest verification remains a service responsibility; the
-driver carries the verified digest as correlated session identity rather than parsing signatures.
+evidence, and paged snapshots. Production configuration/scan and backend capabilities remain
+unavailable. Manifest and policy verification remain service responsibilities; the driver carries
+the verified manifest digest as correlated session identity rather than parsing signatures.
 
 ## Current local validation
 
@@ -110,7 +114,7 @@ driver carries the verified digest as correlated session identity rather than pa
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `518/518` in each configuration, including manifest schema, identity, compatibility, expiry, and rollback coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `544/544` in each configuration, including signed-policy schema, rule-set, scope, expiry, replay, rollback, emergency-revocation, and staged policy-denial coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Release Clang-Tidy for the service and diagnostic scanner projects | Passed with warnings treated as errors |
@@ -126,43 +130,45 @@ static-analysis gaps rather than implied passes.
 
 ## Current disposable-VM validation
 
-Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed on Microsoft Windows
+Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
-and Secure Boot disabled. The host accepted 34 exact result records, including five protocol
+and Secure Boot disabled. The host accepted 40 exact result records, including five protocol
 executions and thirteen client, launcher, and preflight executions. The campaign accepted two
 standard-user launches authorized by the canonical signed manifest and rejected modified,
-wrong-build, expired, and rollback manifests before launch. Both successful launches completed
-creation-time binding, exact-handle confirmation, verified job assignment, and first-thread resume.
+wrong-build, expired, and rollback manifests before launch. It also rejected signed policies with
+the wrong signer, scope, validity period, or rollback state, accepted one explicitly authorized
+rollback, and committed an emergency revocation before refusing startup. Both successful launches
+completed creation-time binding, exact-handle confirmation, verified job assignment, and first-
+thread resume.
 The campaign also proved service-crash and graceful-stop termination of target and child, SCM
 recovery, idempotent explicit revoke, and monotonic session-loss transitions from sequence `0` to
 `1` to `2` with reasons `none`, `service exit`, and `requested shutdown`.
 
-The restricted service completed 27 queued scan slices and six full memory/thread sweeps with no
-coalesced, cancelled, or failed slice. It inspected 1,246 memory regions and 21 threads; the maximum
-measured health-loop delay was 391 ms, scan-slice duration 80.048 ms, and thread suspension 0.172 ms,
-all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone races, the
-armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed. Final
+The restricted service completed 38 queued scan slices and eight full memory/thread sweeps with no
+coalesced, cancelled, or failed slice. It inspected 1,504 memory regions and 24 threads; the maximum
+measured health-loop delay was 313 ms, scan-slice duration 151.377 ms, and thread suspension
+36.533 ms, all within the campaign bounds. Exact remove/reinstall, per-file cleanup and tombstone
+races, the armed renamed-driver load gate, kernel provenance, and standard Driver Verifier passed. Final
 Verifier flags were clear, both OAC services were stopped, the VM was Off with zero adapters, and
-there were zero crash events and zero minidumps. The driver-free unit suite passed `518/518`; each
+there were zero crash events and zero minidumps. The driver-free unit suite passed `544/544`; each
 of four driver-backed protocol executions passed `130/130`. Driver Verifier recorded three OAC
 loads and three unloads. The validated result ZIP SHA-256 was
-`FC7ADD186A62614573AFD4F9045C4828DAE27E7EA372C305339C7AFA82570CAF`.
+`6167983A1A6C8CAB53F1F603D816F5D015C9CE9C96CC5AE9F300386B51D7BA49`.
 
 The exact status, host-manifest, and host-log SHA-256 values are
-`490363A2FEF52F38865DC847B6CDB06C9FB6C064A4814DC7D460D6BA08D0AF24`,
-`3CA2EB1E1434BF2513E870DDB90FB9F4BC17D9B3520E6150AB871A1F44A4F3DD`, and
-`6B7A8E24DA289530CD1E69ED3866B83467C9F4E2F43DF1DBE84FA162DB100BFD`.
+`74AD825D4AE6DDCD8424468390BC3667C3F3B078C5FB9737DC768369C72DCCA9`,
+`B3FF7DDF83792C0CC2AB1A2EDB5FE42089DFC1DFF2B02445F9BA4D8EE3CAF381`, and
+`3FC226F15632E1296CE243611844DAC8A66FB1D5125E6A396730D767482A0754`.
 After recording these values, the exact VM, checkpoint, VHD/AVHDX, package, seed, and full campaign
-directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO and the compact
-hash-verified success bundle remain.
+directory were deleted. Under `C:\OAC-VM`, only the verified Windows installation ISO remains.
 
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks passed on PR #13 and remain
   required for each merge.
-- WP-10 requires authenticated signed-policy selection with wrong-key/scope/build, expiry, rollback,
-  and update/recovery coverage before runtime policy can be called deployable.
+- WP-11 requires an authenticated backend session, lease, evidence acknowledgement, upload, and
+  replay model before local authorization can become an online admission boundary.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
-No milestone is described as production-ready. The control plane still lacks signed runtime
-policy, manifest-key rotation/revocation metadata, and authenticated backend delivery listed above.
+No milestone is described as production-ready. The control plane still lacks manifest-key rotation
+and revocation metadata, authenticated backend delivery, and the release controls listed above.

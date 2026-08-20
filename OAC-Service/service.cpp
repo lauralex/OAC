@@ -1,5 +1,6 @@
 #include "service.hpp"
 #include "manifest.hpp"
+#include "policy.hpp"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -1270,6 +1271,7 @@ DWORD LaunchTarget(
     HANDLE targetJob,
     const OAC_V5_SESSION_ID& sessionId,
     ULONGLONG generation,
+    const oac::VerifiedPolicy& policy,
     const OAC_IPC_LAUNCH_REQUEST& request,
     ClientIdentity& client,
     HANDLE& targetProcess,
@@ -1320,6 +1322,12 @@ DWORD LaunchTarget(
     {
         failureDetail = ManifestFailureDetail(manifestFailure);
         return error;
+    }
+    if (!oac::PolicyScopeMatchesManifest(policy, verifiedManifest.Record) ||
+        oac::PolicyHasExpiredNow(policy))
+    {
+        failureDetail = OAC_IPC_LAUNCH_DETAIL_POLICY;
+        return ERROR_ACCESS_DISABLED_BY_POLICY;
     }
 
     failureStage = OAC_IPC_LAUNCH_STAGE_CREATE_ENVIRONMENT;
@@ -1653,6 +1661,12 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
         if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
             return ERROR_OPERATION_ABORTED;
 
+        failureStage = OAC_SERVICE_STAGE_BOOTSTRAP;
+        error = oac::LoadPolicy(policy_);
+        if (error != ERROR_SUCCESS) return error;
+        if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0)
+            return ERROR_OPERATION_ABORTED;
+
         failureStage = OAC_SERVICE_STAGE_TARGET_JOB;
         error = CreateTargetJob(targetJob_);
         if (error != ERROR_SUCCESS) return error;
@@ -1732,8 +1746,10 @@ DWORD ServiceHost::PollEvidenceChannel(ULONG channel) noexcept
             : record.Timestamp100ns;
         record.ServiceSequence = ++serviceEvidenceSequence_;
         OAC_POLICY_DECISION decision{};
-        if (!OacPolicyEvaluate(
-                OAC_POLICY_DEFAULT_MODE,
+        if (!OacPolicyEvaluateRules(
+                policy_.Record.Mode,
+                policy_.Record.Rules,
+                policy_.Record.RuleCount,
                 &record,
                 nullptr,
                 &decision) ||
@@ -1792,6 +1808,8 @@ DWORD ServiceHost::Wait() noexcept
         lastHealthTime = now;
         targetScanner_.RecordHealthIteration(
             elapsed * oac::kHundredNanosecondsPerMillisecond);
+        if (oac::PolicyHasExpiredNow(policy_))
+            return ERROR_ACCESS_DISABLED_BY_POLICY;
         return PollEvidence();
     };
     for (;;)
@@ -2031,6 +2049,7 @@ DWORD ServiceHost::PipeLoop() noexcept
                             targetJob_,
                             driverSessionId_,
                             driverSessionGeneration_,
+                            policy_,
                             request,
                             client,
                             launchedProcess,

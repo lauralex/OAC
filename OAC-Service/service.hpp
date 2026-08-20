@@ -8,6 +8,7 @@
 #include "..\shared\oac_ipc.h"
 #include "..\shared\oac_policy.h"
 #include "..\shared\protocol\oac_v5.h"
+#include "policy.hpp"
 #include "target_scanner.hpp"
 
 class ServiceHost final
@@ -56,6 +57,7 @@ private:
     ULONGLONG driverCapabilities_ = 0;
     OAC_V5_SESSION_ID driverSessionId_{};
     ULONGLONG driverSessionGeneration_ = 0;
+    oac::VerifiedPolicy policy_{};
     // Actionable policy results remain in a bounded handoff until
     // authenticated upload exists. Filling it is a fail-closed error.
     std::array<EvaluatedEvidence, kPolicyRecordCapacity> policyRecords_{};

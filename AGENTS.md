@@ -17,14 +17,15 @@
   under the client token, confirm the exact process handle, assign it to the service-owned
   kill-on-close job, and resume it. The per-file session, cleanup/close rundown, creation-time
   binding, live-target tombstone, explicit revoke, and session-loss latch are implemented in source.
-  Acceptance commit `535730c6828f723c2e42a4721db885fab94505aa` passed the complete
+  Acceptance commit `865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the complete
   networkless Windows 11 build 26100 disposable-VM and standard Driver Verifier campaign for
-  WP-01 through WP-09. The campaign covered signed-manifest authorization and rejection, target-tree
-  containment after service crash and graceful stop, session-loss reporting, retained-alert
-  delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots, and the
-  independent health loop with bounded target sampling. The service applies the fixed typed policy
-  catalog to both evidence channels. Externally signed policy, manifest-key rotation, authenticated
-  backend leases, and authenticated upload are not implemented.
+  WP-01 through WP-10. The campaign covered signed-manifest and signed-policy authorization and
+  rejection, target-tree containment after service crash and graceful stop, session-loss reporting,
+  retained-alert delivery, event-gap accounting, overflow behavior, paged kernel-module snapshots,
+  and the independent health loop with bounded target sampling. The canonical policy binds typed
+  rules and deployment mode to game/build/channel scope and component compatibility, expires,
+  prevents replay, and supports explicit rollback authorization and emergency revocation.
+  Manifest-key rotation, authenticated backend leases, and authenticated upload are not implemented.
 
 ## Repository map
 
@@ -38,6 +39,7 @@
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |
 | `shared/oac_ipc.h` | Fixed launcher-to-service status, scan-metrics, and launch IPC ABI |
 | `shared/oac_policy.*` | C-compatible stable rule catalog, deployment modes, signer classification, and deterministic policy evaluation |
+| `shared/oac_signed_policy.*` | Canonical signed policy, update decision, and persistent cache-state contracts |
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |

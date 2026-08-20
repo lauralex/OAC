@@ -218,15 +218,18 @@ static int OacPolicyBytesAreZero(const uint8_t* bytes, size_t count)
     return 1;
 }
 
-static const OAC_POLICY_RULE* OacPolicyFindRule(OAC_V5_RULE_ID ruleId)
+static const OAC_POLICY_RULE* OacPolicyFindRule(
+    const OAC_POLICY_RULE* rules,
+    size_t count,
+    OAC_V5_RULE_ID ruleId)
 {
     size_t low = 0;
-    size_t high = OAC_POLICY_RULE_COUNT;
+    size_t high = count;
 
     while (low < high)
     {
         size_t middle = low + (high - low) / 2;
-        const OAC_POLICY_RULE* rule = &g_OacPolicyRules[middle];
+        const OAC_POLICY_RULE* rule = &rules[middle];
         if (rule->RuleId == ruleId) return rule;
         if (rule->RuleId < ruleId)
             low = middle + 1;
@@ -349,6 +352,39 @@ const OAC_POLICY_RULE* OacPolicyRuleCatalog(size_t* count)
     return g_OacPolicyRules;
 }
 
+int OacPolicyRuleSetValid(
+    const OAC_POLICY_RULE* rules,
+    size_t count)
+{
+    size_t index;
+    if (rules == NULL || count != OAC_POLICY_RULE_COUNT) return 0;
+    for (index = 0; index < count; ++index)
+    {
+        const OAC_POLICY_RULE* rule = &rules[index];
+        if (rule->RuleId != g_OacPolicyRules[index].RuleId ||
+            !OacV5EventTypeValid(rule->EventType) ||
+            !OacV5CategoryValid(rule->Category) ||
+            !OacV5ObservationSeverityValid(
+                rule->MinimumObservationSeverity) ||
+            !OacV5ObservationSeverityValid(
+                rule->MaximumObservationSeverity) ||
+            rule->MinimumObservationSeverity >
+                rule->MaximumObservationSeverity ||
+            !OacPolicyConfidenceValid(rule->Confidence) ||
+            !OacPolicyActionValid(rule->ObserveAction) ||
+            !OacPolicyActionValid(rule->EnforceAction) ||
+            !OacPolicyActionValid(rule->StrictAction) ||
+            (rule->RequiredEvidenceFlags & ~OAC_V5_EVIDENCE_FLAGS) != 0 ||
+            rule->RequiredEvidenceFlags == 0 ||
+            (rule->Flags & ~OAC_POLICY_RULE_FLAGS) != 0 ||
+            rule->Reserved != 0)
+        {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int OacPolicyModeValid(OAC_POLICY_MODE mode)
 {
     return mode >= OAC_POLICY_MODE_OBSERVE &&
@@ -421,13 +457,32 @@ int OacPolicyEvaluate(
     const OAC_POLICY_SIGNER_CLASSIFICATION* signer,
     OAC_POLICY_DECISION* decision)
 {
+    return OacPolicyEvaluateRules(
+        mode,
+        g_OacPolicyRules,
+        OAC_POLICY_RULE_COUNT,
+        observation,
+        signer,
+        decision);
+}
+
+int OacPolicyEvaluateRules(
+    OAC_POLICY_MODE mode,
+    const OAC_POLICY_RULE* rules,
+    size_t ruleCount,
+    const OAC_V5_EVENT_RECORD* observation,
+    const OAC_POLICY_SIGNER_CLASSIFICATION* signer,
+    OAC_POLICY_DECISION* decision)
+{
     OAC_POLICY_SIGNER_CLASSIFICATION unavailableSigner = { 0 };
     const OAC_POLICY_RULE* rule;
     OAC_POLICY_DECISION result = { 0 };
     OAC_POLICY_ACTION action;
     OAC_POLICY_CONFIDENCE confidence;
 
-    if (!OacPolicyModeValid(mode) || observation == NULL || decision == NULL ||
+    if (!OacPolicyModeValid(mode) ||
+        !OacPolicyRuleSetValid(rules, ruleCount) ||
+        observation == NULL || decision == NULL ||
         OacV5ValidateEventRecord(observation, sizeof(*observation)) !=
             OAC_V5_VALID ||
         observation->PolicySeverity != OAC_V5_POLICY_NOT_EVALUATED ||
@@ -435,7 +490,7 @@ int OacPolicyEvaluate(
     {
         return 0;
     }
-    rule = OacPolicyFindRule(observation->RuleId);
+    rule = OacPolicyFindRule(rules, ruleCount, observation->RuleId);
     if (rule == NULL || observation->EventType != rule->EventType ||
         observation->Category != rule->Category ||
         observation->ObservationSeverity < rule->MinimumObservationSeverity ||

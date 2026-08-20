@@ -1,7 +1,7 @@
 # OAC architecture
 
-**Status:** WP-01 through WP-09 accepted at commit
-`535730c6828f723c2e42a4721db885fab94505aa` on the named Windows 11 build 26100 campaign
+**Status:** WP-01 through WP-10 accepted at commit
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` on the named Windows 11 build 26100 campaign.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -11,6 +11,7 @@
 flowchart TD
     L["Standard-user OAC-Launcher"] -->|"status and one launch request"| S["Restricted OACService"]
     M["Signed game manifest"] -->|"authorize exact build"| S
+    P["Signed rule policy"] -->|"scope, mode, expiry, update"| S
     S -->|"one file-bound production session"| D["Demand-start OAC driver"]
     D --> C["Session status and retained typed alerts"]
     C --> S
@@ -36,11 +37,12 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | Component | Current responsibility | Boundary |
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
-| `OACService` | Verify its restricted identity, signed game build, and rollback state; own the production driver session and target job; evaluate typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OACService` | Verify its restricted identity, signed policy, signed game build, and persistent update state; own the production driver session and target job; evaluate typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
-| `shared/oac_policy.*` | Fixed rule catalog, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module; not an external policy format |
+| `shared/oac_policy.*` | Stable rule identities, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module |
+| `shared/oac_signed_policy.*` | Canonical policy record, strict validation, scope, update decisions, and persistent high-water state | C-compatible service and driver-free test module; detached signature verification remains in user mode |
 | `shared/oac_manifest.*` | Canonical manifest and rollback records, strict validation, exact build identity, and monotonic high-water decisions | C-compatible service and driver-free test module; signature verification remains in user mode |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
@@ -57,7 +59,11 @@ binaries, and keeps the service stopped until a test explicitly starts the produ
 phase. Production deployment tooling must reproduce and verify this policy.
 
 At startup, the service fails closed unless its primary token is session 0, restricted, and contains
-the exact reviewed service SID in both enabled groups and restricted SIDs. It opens the driver,
+the exact reviewed service SID in both enabled groups and restricted SIDs. It verifies the local
+canonical policy and detached signature through non-reparse handles, requires the protected signer
+pin, validates component compatibility and expiry, and flushes and rereads the scoped update state.
+Replay, same-sequence equivocation, unauthorized rollback, and emergency revocation are terminal.
+It then opens the driver,
 negotiates the exact production revision and evidence bounds, claims a production session,
 validates a correlated status response, then keeps that driver handle for its lifetime. While
 waiting for stop, failure, or target exit, it polls retained alerts and lower-priority events on a
@@ -67,11 +73,10 @@ evidence drain before the session is revoked.
 
 Every current driver producer emits a typed observation with policy severity set to
 `NOT_EVALUATED`. The service validates the stable rule ID, event type, category, observation range,
-and required provenance against one fixed catalog, then evaluates it in the compiled Enforce mode.
-Observe and Strict modes use the same catalog and are covered by driver-free regression tests; a
-signed runtime policy selector belongs to WP-10. Actionable results enter a bounded service handoff.
-The service supports a deny-launch latch for signed-policy decisions; no current fixed-catalog rule
-selects it. Game-manifest rejection occurs directly at the launch-authorization boundary.
+and required provenance against the authenticated policy's canonical rule set, then evaluates it in
+the signed Observe, Enforce, or Strict mode. Actionable results enter a bounded service handoff. The
+service supports a deny-launch latch for policy decisions; game-manifest and policy-scope rejection
+also occur directly at the launch-authorization boundary.
 Revoke-session terminates the service runtime so normal
 cleanup revokes the driver session and closes the target job. Display payload text is validated as
 transport data but never read by the policy evaluator.
@@ -109,7 +114,7 @@ creates the process suspended under the client's primary token, confirms the exa
 validates monitoring state, assigns the process to a service-owned kill-on-close job, and resumes
 the initial thread. Child processes inherit that job. Graceful stop explicitly revokes the driver
 session before closing the job; unexpected service exit closes both driver and job handles through
-normal Windows handle teardown. There is no argument transport, signed policy transfer,
+normal Windows handle teardown. There is no argument transport, remote policy delivery,
 authenticated evidence upload, backend lease, manifest-key rotation, or service-session reuse after
 the target exits.
 
@@ -149,7 +154,7 @@ transferring control while stale protection state survives the original handle.
 
 The tombstone invariant applies to both diagnostic binding and the one-use production launch ticket.
 The service drives the serialized production transaction; acceptance commit
-`535730c6828f723c2e42a4721db885fab94505aa` passed the driver-backed target-live, cleanup,
+`865a9f9b5d665c1c69fcf8b39486722046d6647f` passed the driver-backed target-live, cleanup,
 standard-user launch, job-owned child, service-crash recovery, graceful revoke, and session-loss
 cases under the baseline and Driver Verifier phases.
 
@@ -174,7 +179,7 @@ named baseline and Driver Verifier campaign.
 
 ## Planned sequence
 
-1. Add authenticated signed-policy selection, then backend leases and evidence upload.
+1. Add backend leases, replay-safe evidence upload, and acknowledgement.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

@@ -1,5 +1,6 @@
 #include "../../shared/oac_ipc.h"
 #include "../../shared/oac_manifest.h"
+#include "../../shared/oac_signed_policy.h"
 #include "../../shared/protocol/oac_v5.h"
 #include "../../shared/protocol/oac_validate.h"
 
@@ -36,6 +37,10 @@ _Static_assert(OAC_MANIFEST_HASH_SIZE == OAC_V5_MANIFEST_DIGEST_SIZE,
     "C manifest digest size drifted from the production protocol");
 _Static_assert(sizeof(OAC_MANIFEST_ROLLBACK_STATE) == 96,
     "C manifest rollback-state layout changed");
+_Static_assert(sizeof(OAC_SIGNED_POLICY) == 1024,
+    "C signed-policy layout changed");
+_Static_assert(sizeof(OAC_POLICY_CACHE_STATE) == 160,
+    "C policy-cache layout changed");
 
 int OacV5CProbe(void)
 {
