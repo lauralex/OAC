@@ -11,8 +11,7 @@ $phaseBackupPath = Join-Path $root 'phase.previous.txt'
 $verifierAuthorizationPath = Join-Path $root 'verifier-authorized.json'
 $containmentReadyPath = Join-Path $root 'containment-ready.json'
 $runLog = Join-Path $results 'orchestrator.log'
-$healthDelayLimitMicroseconds = 500000
-$scanSliceWallLimitMicroseconds = 250000
+$workerLatencyLimitMicroseconds = 500000
 $threadSuspensionLimitMicroseconds = 50000
 $validPhases = @(
     'post-testsigning', 'baseline-running', 'baseline-complete',
@@ -1523,10 +1522,10 @@ exit $code
             $scanStatus.ScanSweeps -lt 1 -or $scanStatus.ScanRegions -lt 1 -or
             $scanStatus.ScanThreads -lt 1 -or
             $scanStatus.HealthIterations -lt 1 -or
-            $scanStatus.HealthMaximumMicroseconds -gt $healthDelayLimitMicroseconds -or
+            $scanStatus.HealthMaximumMicroseconds -gt $workerLatencyLimitMicroseconds -or
             # Cooperative scan work uses a 20 ms deadline. Wall time also includes
             # scheduler delay and bounded native calls on the two-processor test VM.
-            $scanStatus.ScanMaximumMicroseconds -gt $scanSliceWallLimitMicroseconds -or
+            $scanStatus.ScanMaximumMicroseconds -gt $workerLatencyLimitMicroseconds -or
             $scanStatus.SuspensionMaximumMicroseconds -le 0 -or
             $scanStatus.SuspensionMaximumMicroseconds -gt $threadSuspensionLimitMicroseconds) {
             throw 'The bounded scan worker did not meet its health, coverage, or suspension budget.'
