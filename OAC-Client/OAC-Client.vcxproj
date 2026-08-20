@@ -57,6 +57,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="client_options.cpp" />
     <ClCompile Include="driver_client.cpp" />
     <ClCompile Include="hardware_identity.cpp" />
     <ClCompile Include="OAC-Client.cpp" />
@@ -66,11 +67,13 @@
     <ClCompile Include="system_scanner.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="client_options.hpp" />
     <ClInclude Include="driver_hash_policy.inc" />
     <ClInclude Include="scanner.hpp" />
     <ClInclude Include="..\shared\oac_driver_policy.h" />
     <ClInclude Include="..\shared\oac_protocol.h" />
     <ClInclude Include="..\shared\oac_thread_suspension.hpp" />
+    <ClInclude Include="..\shared\oac_windows.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

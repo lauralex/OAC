@@ -33,32 +33,6 @@ const wchar_t* SeverityName(FindingSeverity severity)
     }
 }
 
-std::string Utf8(const std::wstring& value)
-{
-    if (value.empty()) return {};
-    const int required = WideCharToMultiByte(
-        CP_UTF8,
-        WC_ERR_INVALID_CHARS,
-        value.data(),
-        static_cast<int>(value.size()),
-        nullptr,
-        0,
-        nullptr,
-        nullptr);
-    if (required <= 0) return {};
-    std::string result(static_cast<size_t>(required), '\0');
-    (void)WideCharToMultiByte(
-        CP_UTF8,
-        WC_ERR_INVALID_CHARS,
-        value.data(),
-        static_cast<int>(value.size()),
-        result.data(),
-        required,
-        nullptr,
-        nullptr);
-    return result;
-}
-
 std::wstring SanitizeLine(std::wstring value)
 {
     std::replace(value.begin(), value.end(), L'\r', L' ');
@@ -69,7 +43,7 @@ std::wstring SanitizeLine(std::wstring value)
 unsigned long long CurrentTimestamp100ns()
 {
     using PreciseTimeFn = VOID(WINAPI*)(LPFILETIME);
-    static const PreciseTimeFn precise = ResolveFunction<PreciseTimeFn>(
+    static const PreciseTimeFn precise = oac::ResolveFunction<PreciseTimeFn>(
         GetModuleHandleW(L"kernel32.dll"), "GetSystemTimePreciseAsFileTime");
     FILETIME time{};
     if (precise != nullptr) precise(&time);
@@ -206,7 +180,7 @@ std::optional<std::array<unsigned char, kSha256Bytes>> InitialChain(
 {
     static constexpr unsigned char domain[] = "OAC-REPORT-CHAIN-V4";
     Sha256Hasher hasher;
-    const std::string challengeUtf8 = Utf8(challenge);
+    const std::string challengeUtf8 = oac::Utf8(challenge);
     if (!hasher.Update(std::span(domain, sizeof(domain) - 1)) ||
         !hasher.Update(runId) ||
         !hasher.Update(std::span(
@@ -220,8 +194,8 @@ std::optional<std::array<unsigned char, kSha256Bytes>> NextChain(
     const std::array<unsigned char, kSha256Bytes>& previous,
     const ClientFinding& finding)
 {
-    const std::string category = Utf8(finding.category);
-    const std::string message = Utf8(finding.message);
+    const std::string category = oac::Utf8(finding.category);
+    const std::string message = oac::Utf8(finding.message);
     if (category.size() > std::numeric_limits<ULONG>::max() ||
         message.size() > std::numeric_limits<ULONG>::max()) return std::nullopt;
     std::vector<unsigned char> canonical;
@@ -389,16 +363,16 @@ bool Reporter::Save(const std::filesystem::path& path) const
     output << "OAC defensive scan report\r\n"
            << "schema=4\r\n"
            << "generated_timestamp_100ns=" << CurrentTimestamp100ns() << "\r\n"
-           << "deployment_mode=" << Utf8(deploymentMode_) << "\r\n"
-           << "failure_threshold=" << Utf8(SeverityName(failureThreshold_)) << "\r\n"
+           << "deployment_mode=" << oac::Utf8(deploymentMode_) << "\r\n"
+           << "failure_threshold=" << oac::Utf8(SeverityName(failureThreshold_)) << "\r\n"
            << "run_id=" << Hex(runId_) << "\r\n"
-           << "challenge=" << (challenge_.empty() ? "none" : Utf8(challenge_)) << "\r\n"
+           << "challenge=" << (challenge_.empty() ? "none" : oac::Utf8(challenge_)) << "\r\n"
            << "findings=" << findings_.size()
            << " actionable=" << SuspiciousCount() << "\r\n"
            << "artifact_count=" << artifacts.size() << "\r\n\r\n"
            << "artifacts:\r\n";
     for (const auto& artifact : artifacts)
-        output << Utf8(artifact.name.wstring()) << " size=" << artifact.size
+        output << oac::Utf8(artifact.name.wstring()) << " size=" << artifact.size
                << " sha256=" << Hex(artifact.digest) << "\r\n";
     output << "\r\nfindings:\r\n";
 
@@ -424,7 +398,7 @@ bool Reporter::Save(const std::filesystem::path& path) const
         if (finding.address != 0)
             line << L" address=0x" << std::hex << finding.address;
         line << L"\r\n";
-        output << Utf8(line.str());
+        output << oac::Utf8(line.str());
     }
     output << "\r\nchain_root=" << Hex(chain) << "\r\n"
            << "integrity_scope=unkeyed SHA-256 chain plus artifact digests; "
@@ -439,7 +413,7 @@ bool Reporter::Save(const std::filesystem::path& path) const
 
     const std::filesystem::path sidecar = path.wstring() + L".sha256";
     const std::string sidecarText = Hex(*reportDigest) + " *" +
-        Utf8(path.filename().wstring()) + "\r\n";
+        oac::Utf8(path.filename().wstring()) + "\r\n";
     return AtomicWrite(sidecar, sidecarText, suffix);
 }
 

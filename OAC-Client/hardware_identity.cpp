@@ -31,6 +31,9 @@
 
 namespace
 {
+using oac::UniqueHandle;
+using UniqueRegKey = oac::RegistryKey;
+
 constexpr DWORD FirmwareProvider(char a, char b, char c, char d) noexcept
 {
     return (static_cast<DWORD>(static_cast<unsigned char>(a)) << 24) |
@@ -79,26 +82,6 @@ struct IdentitySignal
     bool peripheral = false;
 };
 
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueHandle()
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_);
-    }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-
-private:
-    HANDLE handle_;
-};
-
 class UniqueDevInfo
 {
 public:
@@ -114,20 +97,6 @@ public:
 
 private:
     HDEVINFO set_;
-};
-
-class UniqueRegKey
-{
-public:
-    explicit UniqueRegKey(HKEY key = nullptr) noexcept : key_(key) {}
-    ~UniqueRegKey() { if (key_ != nullptr) RegCloseKey(key_); }
-    UniqueRegKey(const UniqueRegKey&) = delete;
-    UniqueRegKey& operator=(const UniqueRegKey&) = delete;
-    HKEY get() const noexcept { return key_; }
-    explicit operator bool() const noexcept { return key_ != nullptr; }
-
-private:
-    HKEY key_;
 };
 
 void Wipe(std::wstring& value) noexcept

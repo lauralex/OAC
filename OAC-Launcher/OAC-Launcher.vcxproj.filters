@@ -19,5 +19,8 @@
     <ClInclude Include="..\shared\oac_ipc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\shared\oac_windows.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -76,6 +76,8 @@
     <ClCompile Include="main.c" />
     <ClCompile Include="protection.c" />
     <ClCompile Include="scanner.c" />
+    <ClCompile Include="scanner_modules.c" />
+    <ClCompile Include="scanner_process.c" />
     <ClCompile Include="session.c" />
     <ClCompile Include="telemetry.c" />
   </ItemGroup>
@@ -86,6 +88,7 @@
     <ClInclude Include="evidence.h" />
     <ClInclude Include="protection.h" />
     <ClInclude Include="scanner.h" />
+    <ClInclude Include="scanner_internal.h" />
     <ClInclude Include="session.h" />
     <ClInclude Include="telemetry.h" />
     <ClInclude Include="..\shared\oac_driver_policy.h" />

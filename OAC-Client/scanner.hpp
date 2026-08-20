@@ -8,13 +8,7 @@
 #include <string>
 #include <vector>
 
-template<typename Function>
-Function ResolveFunction(HMODULE module, const char* name) noexcept
-{
-    const FARPROC raw = module != nullptr ? GetProcAddress(module, name) : nullptr;
-    static_assert(sizeof(Function) == sizeof(raw));
-    return reinterpret_cast<Function>(raw);
-}
+#include "..\shared\oac_windows.hpp"
 
 enum class FindingSeverity : std::uint8_t
 {

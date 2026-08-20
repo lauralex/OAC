@@ -1,7 +1,8 @@
 # OAC architecture
 
 **Status:** WP-01 through WP-11 accepted at implementation commit
-`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on the named Windows 11 build 26100 campaign.
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on the named Windows 11 build 26100 campaign. WP-12 is
+implemented in the current source; its runtime and hosted acceptance gates are pending.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -38,10 +39,10 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 
 | Component | Current responsibility | Boundary |
 |---|---|---|
-| `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility | Unsigned by default; demand-start only |
+| `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, paged snapshots, bounded kernel work, and diagnostic compatibility; scanner internals are separated into integrity, module, and process/handle responsibilities | Unsigned by default; demand-start only |
 | `OACService` | Verify its restricted identity, signed policy, signed game build, persistent update state, and backend lease; own the production driver session and target job; evaluate and queue typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target sampling | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
-| `OAC-Client` | Legacy system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
+| `OAC-Client` | Laboratory system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
 | `shared/oac_policy.*` | Stable rule identities, deployment modes, signer classification, and deterministic policy evaluation | C-compatible service and driver-free test module |
 | `shared/oac_signed_policy.*` | Canonical policy record, strict validation, scope, update decisions, and persistent high-water state | C-compatible service and driver-free test module; detached signature verification remains in user mode |
@@ -50,7 +51,23 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | `OAC-Service/backend.*` | Fixed-capacity service queue, lease lifecycle, driver binding digest, transport interface, and deterministic test backend | The included implementation is a protected test double; production transport remains a deployment component |
 | `shared/oac_ipc.h` | Fixed launcher/service status and launch messages | Local named pipe |
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
+| `shared/oac_windows.hpp` | Move-only Win32/SCM/registry ownership and small text or optional-API helpers shared by user-mode components | User mode only; no protocol or policy semantics |
 | Protocol tests | Driver-free schema tests and driver-backed malformed/lifecycle/race tests | Host-safe unit or disposable VM as appropriate |
+
+## Scanner organization
+
+The refactored scanner keeps one public kernel interface while separating implementation details by
+the Windows data they own:
+
+| Source | Responsibility |
+|---|---|
+| `OAC/scanner.c` | Lifecycle, top-level orchestration, CPU and kernel integrity, debugger, hypervisor, and build-gated private observations |
+| `OAC/scanner_modules.c` | AuxKlib and system-module cross-views, driver-family classification, and immutable kernel-module snapshots |
+| `OAC/scanner_process.c` | Process/thread and system-handle cross-views, target-handle inspection, and physical-memory handle detection |
+| `OAC-Client/client_options.*` | Pure parsing and validation of diagnostic-client options, independently exercised by the driver-free unit suite |
+
+This is an internal responsibility split, not a new detection claim. The diagnostic ABI, finding
+categories, scan ordering, and report contract remain unchanged.
 
 ## Production service boundary
 
@@ -191,7 +208,9 @@ named baseline and Driver Verifier campaign.
 
 1. Implement the production authenticated transport and remote persistence behind the existing
    backend-session interface.
-2. Modularize the diagnostic scanner behind its current tests without changing lab behavior.
+2. Add one game integration and a server-side detector against the existing signed-build, policy,
+   backend-session, and evidence contracts.
+3. Complete production signing, compatibility, release, privacy, and operational controls.
 
 The complete target and migration rationale is in [`hardening-plan.md`](hardening-plan.md).
 

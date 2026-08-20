@@ -7,84 +7,15 @@
 #include <vector>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\oac_windows.hpp"
 #include "..\shared\protocol\oac_v5.h"
 
 namespace
 {
+using oac::UniqueHandle;
+using oac::UniqueServiceHandle;
+
 constexpr DWORD kRequestTimeoutMs = 5000;
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = INVALID_HANDLE_VALUE) noexcept
-        : handle_(handle)
-    {
-    }
-
-    ~UniqueHandle()
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
-            CloseHandle(handle_);
-    }
-
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : handle_(other.release()) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept
-    {
-        if (this != &other) reset(other.release());
-        return *this;
-    }
-
-    [[nodiscard]] HANDLE get() const noexcept { return handle_; }
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-
-    HANDLE release() noexcept
-    {
-        const HANDLE result = handle_;
-        handle_ = nullptr;
-        return result;
-    }
-
-    void reset(HANDLE handle = nullptr) noexcept
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
-            CloseHandle(handle_);
-        handle_ = handle;
-    }
-
-private:
-    HANDLE handle_;
-};
-
-class UniqueServiceHandle
-{
-public:
-    explicit UniqueServiceHandle(SC_HANDLE handle = nullptr) noexcept
-        : handle_(handle)
-    {
-    }
-
-    ~UniqueServiceHandle()
-    {
-        if (handle_ != nullptr) CloseServiceHandle(handle_);
-    }
-
-    UniqueServiceHandle(const UniqueServiceHandle&) = delete;
-    UniqueServiceHandle& operator=(const UniqueServiceHandle&) = delete;
-
-    [[nodiscard]] SC_HANDLE get() const noexcept { return handle_; }
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr;
-    }
-
-private:
-    SC_HANDLE handle_;
-};
 
 std::wstring ErrorText(DWORD error)
 {

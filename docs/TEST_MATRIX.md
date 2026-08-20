@@ -1,7 +1,8 @@
 # OAC test matrix
 
 **Status:** WP-01 through WP-11 tested at implementation commit
-`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 build 26100.
+`47c04005e66f1fd61ae9fe9a35260f19ee447dd1` on Windows 11 build 26100. WP-12 source and host-safe
+gates are present; its commit-bound VM/Verifier and hosted acceptance are pending.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,11 +20,11 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Local and PR #13 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `608/608`; PR #13 previously passed `428/428` |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current local Debug/Release runs passed `623/623`, including the diagnostic-client parser and shared helpers; PR #13 previously passed `428/428` |
 | Protocol layout assertions | Diagnostic and production compile-time sizes/offsets | Compiled in both local configurations and on PR #13 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
-| Clang-Tidy | Required for scanner changes | Service and diagnostic scanner projects passed with warnings treated as errors at the accepted WP-07 baseline; WP-11 changes no scanner source |
+| Clang-Tidy | Required for scanner changes | Current `OAC-Client` analysis passed across all eight translation units with warnings treated as errors; the four changed service translation units passed targeted analysis |
 | Driver PREfast | Required for driver/lifetime changes | Current local `DriverMinimumRules` run passed with zero warnings/errors |
 | Secret scan | GitGuardian branch check configured | Required repository check |
 
@@ -156,7 +157,7 @@ negative effective-service-right and reboot-persistence cases remain pending.
 | Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `47c0400`; both process trees terminated and SCM recovery completed |
 | Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `47c0400`; four driver-backed executions passed |
 | Independent health loop and bounded target worker | Tested at `47c0400`; 36 slices, eight sweeps, 360 ms maximum health delay, 55.677 ms maximum slice duration, 5.219 ms maximum suspension |
-| Typed policy rules and service evaluation | Current driver-free tests pass `608/608`; integrated signed-policy service execution passed at `47c0400` |
+| Typed policy rules and service evaluation | Current driver-free tests pass `623/623`; integrated signed-policy service execution passed at `47c0400` |
 | Signed main-executable manifest authorization | Tested at `47c0400`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
 | Signed policy selection and update state | Tested at `47c0400`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
 | Backend session, lease, replay, and acknowledgement failure | Tested at `47c0400`; replay was rejected, withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
@@ -182,15 +183,16 @@ is universal Windows, hardware, HVCI/VBS, or game-compatibility evidence.
 | WP-03 per-file session | Claim, wrong file/process, cleanup/close, rundown race, tombstone, PID reuse, unload | Lifecycle, owner-exit, tombstone, race, and unload cases tested at `47c0400`; literal numeric PID reuse remains unforced |
 | WP-04 launch ticket | Success, mismatch, creator/path mismatch, expiry, cancel, replay | Hostile units and successful driver/service launch tested at `47c0400` |
 | WP-05 liveness | Launcher/service/target/handle exit order, job kill, idempotent revoke | Unit, crash, recovery, graceful-stop, child-process, and session-loss cases tested at `47c0400` |
-| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `608/608`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `47c0400` |
+| WP-06 transport | Critical retention, overflow latch, acknowledgement, snapshot paging/stress | Current `623/623`, Debug/Release, PREfast, driver-backed runtime, and VM/Verifier acceptance passed at `47c0400` |
 | WP-07 scheduling | Event latency during slow scans, budgets, cancellation, thread resume | Driver-free budgets/metrics/resume, Clang-Tidy baseline, restricted-service metrics, and Driver Verifier passed at `47c0400` |
-| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `608/608`, static analysis, repository checks, and integrated VM/Verifier execution passed at `47c0400` |
+| WP-08 policy | Stable rule decisions, deployment modes, signer classification, typed drift, display-text independence | Debug/Release `623/623`, static analysis, repository checks, and integrated VM/Verifier execution passed at `47c0400` |
 | WP-09 manifest authorization | Canonical serialization, signer/build scope, expiry, rollback, accepted launch | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
 | WP-10 signed policy | Wrong signature/scope, expiry, replay, equivocation, explicit rollback, emergency revoke, authenticated selection | Driver-free, signed-package, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
 | WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `47c0400` |
+| WP-12 scanner modularization | Coherent kernel scanner responsibilities, common user-mode ownership helpers, parser/helper units, no behavioral regression | Current Debug/Release `623/623`, driver PREfast, scanner Clang-Tidy, and repository checks passed locally; VM/Verifier and hosted checks pending |
 
 WP-02 through WP-11 acceptance is recorded only for the exact implementation commit and environment
-above.
+above. WP-12 remains source-present until its own exact-commit runtime and hosted gates pass.
 
 ## Exact host commands
 

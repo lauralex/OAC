@@ -11,7 +11,6 @@
 #include <array>
 #include <cctype>
 #include <cstddef>
-#include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -26,6 +25,8 @@
 
 namespace
 {
+using oac::UniqueHandle;
+
 using NtQueryInformationProcessFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 using NtQueryInformationThreadFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
 using NtSetInformationThreadFn = LONG(NTAPI*)(HANDLE, ULONG, PVOID, ULONG);
@@ -55,27 +56,6 @@ struct ModuleRecord
     bool psapi = false;
     bool memoryImage = false;
 };
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueHandle() { if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE) CloseHandle(handle_); }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept { return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE; }
-
-private:
-    HANDLE handle_;
-};
-
-std::wstring Lower(std::wstring value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-        [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
-    return value;
-}
 
 std::wstring BaseName(const std::wstring& path)
 {
@@ -164,7 +144,7 @@ bool RvaRangeValid(const ModuleRecord& module, ULONGLONG rva, size_t size)
 bool IsSupportedTargetArchitecture(HANDLE process, DWORD processId, Reporter& reporter)
 {
     using IsWow64Process2Fn = BOOL(WINAPI*)(HANDLE, USHORT*, USHORT*);
-    const auto isWow64Process2 = ResolveFunction<IsWow64Process2Fn>(
+    const auto isWow64Process2 = oac::ResolveFunction<IsWow64Process2Fn>(
         GetModuleHandleW(L"kernel32.dll"),
         "IsWow64Process2");
     if (isWow64Process2 != nullptr)
@@ -321,7 +301,7 @@ std::vector<ModuleRecord> EnumerateModules(HANDLE process, DWORD processId, Repo
                     (record.path.empty() ? std::wstring(L"<unnamed>") : record.path),
                 processId, 0, record.base);
         }
-        const std::wstring lowerName = Lower(BaseName(record.path));
+        const std::wstring lowerName = oac::Lowercase(BaseName(record.path));
         for (const auto indicator : suspiciousDlls)
         {
             if (lowerName.find(indicator) != std::wstring::npos)
@@ -785,7 +765,7 @@ void ScanExportHooks(HANDLE process, DWORD processId,
     size_t expectedForwarders = 0;
     for (const auto& module : modules)
     {
-        const std::wstring name = Lower(BaseName(module.path));
+        const std::wstring name = oac::Lowercase(BaseName(module.path));
         if (name != L"ntdll.dll" && name != L"kernel32.dll" &&
             name != L"kernelbase.dll" && name != L"win32u.dll" &&
             name != L"dxgi.dll" && name != L"d3d11.dll") continue;
@@ -866,7 +846,7 @@ void ScanExportHooks(HANDLE process, DWORD processId,
             }
             else
             {
-                const std::wstring targetName = Lower(BaseName(targetModule->path));
+                const std::wstring targetName = oac::Lowercase(BaseName(targetModule->path));
                 if (ExpectedSystemForwarder(name, targetName))
                 {
                     ++expectedForwarders;
@@ -901,7 +881,7 @@ void ScanDebuggerAndInstrumentation(HANDLE process, DWORD processId,
         reporter.Add(FindingSeverity::High, L"process/debugger",
             L"The OAC client itself is being debugged", GetCurrentProcessId());
 
-    const auto query = ResolveFunction<NtQueryInformationProcessFn>(
+    const auto query = oac::ResolveFunction<NtQueryInformationProcessFn>(
         GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
     if (query == nullptr) return;
     ULONG returned = 0;
@@ -959,9 +939,9 @@ void ScanDebuggerAndInstrumentation(HANDLE process, DWORD processId,
 void ScanThreads(HANDLE process, DWORD processId, const std::vector<ModuleRecord>& modules,
     bool applyHardening, Reporter& reporter)
 {
-    const auto queryThread = ResolveFunction<NtQueryInformationThreadFn>(
+    const auto queryThread = oac::ResolveFunction<NtQueryInformationThreadFn>(
         GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationThread");
-    const auto setThread = ResolveFunction<NtSetInformationThreadFn>(
+    const auto setThread = oac::ResolveFunction<NtSetInformationThreadFn>(
         GetModuleHandleW(L"ntdll.dll"), "NtSetInformationThread");
     UniqueHandle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
     if (!snapshot)
@@ -1101,7 +1081,11 @@ bool PatchRemoteBreakin(HANDLE process, DWORD processId,
 {
     const ModuleRecord* remoteNtdll = nullptr;
     for (const auto& module : modules)
-        if (Lower(BaseName(module.path)) == L"ntdll.dll") { remoteNtdll = &module; break; }
+        if (oac::Lowercase(BaseName(module.path)) == L"ntdll.dll")
+        {
+            remoteNtdll = &module;
+            break;
+        }
     HMODULE localNtdll = GetModuleHandleW(L"ntdll.dll");
     if (remoteNtdll == nullptr || localNtdll == nullptr) return false;
     const FARPROC localBreakin = GetProcAddress(localNtdll, "DbgUiRemoteBreakin");

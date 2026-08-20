@@ -7,33 +7,19 @@
 #include <string>
 
 #include "..\shared\oac_ipc.h"
+#include "..\shared\oac_windows.hpp"
 #include "..\shared\protocol\oac_v5.h"
 #include "signed_record.hpp"
 
 namespace
 {
+using oac::RegistryKey;
+
 constexpr wchar_t kPolicyFileName[] = L"OAC.policy";
 constexpr wchar_t kPolicySignatureFileName[] = L"OAC.policy.p7s";
 constexpr wchar_t kPolicySignerValue[] = L"PolicySignerSha256";
 constexpr wchar_t kPolicyStatePath[] = L"SOFTWARE\\OAC\\PolicyState";
 constexpr wchar_t kPolicyStateValue[] = L"HighWater";
-
-class RegistryKey
-{
-public:
-    ~RegistryKey()
-    {
-        if (value_ != nullptr) RegCloseKey(value_);
-    }
-    RegistryKey(const RegistryKey&) = delete;
-    RegistryKey& operator=(const RegistryKey&) = delete;
-    RegistryKey() = default;
-    HKEY* put() noexcept { return &value_; }
-    [[nodiscard]] HKEY get() const noexcept { return value_; }
-
-private:
-    HKEY value_ = nullptr;
-};
 
 DWORD ModuleDirectory(std::wstring& directory)
 {

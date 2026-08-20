@@ -1,4 +1,4 @@
-#include "scanner.hpp"
+#include "client_options.hpp"
 
 #include <Windows.h>
 
@@ -11,49 +11,13 @@
 
 namespace
 {
-constexpr DWORD kMinimumMonitorIntervalMs = 250;
-constexpr DWORD kMaximumMonitorIntervalMs = 60000;
+using oac::UniqueHandle;
+
 constexpr ULONGLONG kDriverRescanMs = 2000;
 constexpr ULONGLONG kKernelRescanIntervalMs = 15000;
 constexpr ULONGLONG kTargetRescanIntervalMs = 30000;
 constexpr ULONGLONG kReportCheckpointIntervalMs = 30000;
 constexpr UINT kRevokedProcessExitCode = 0xE0AC0001U;
-
-class UniqueHandle
-{
-public:
-    explicit UniqueHandle(HANDLE handle = nullptr) noexcept : handle_(handle) {}
-    ~UniqueHandle() { reset(); }
-    UniqueHandle(const UniqueHandle&) = delete;
-    UniqueHandle& operator=(const UniqueHandle&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : handle_(other.release()) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept
-    {
-        if (this != &other) reset(other.release());
-        return *this;
-    }
-
-    HANDLE get() const noexcept { return handle_; }
-    explicit operator bool() const noexcept
-    {
-        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
-    }
-    HANDLE release() noexcept
-    {
-        const HANDLE result = handle_;
-        handle_ = nullptr;
-        return result;
-    }
-    void reset(HANDLE handle = nullptr) noexcept
-    {
-        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
-            CloseHandle(handle_);
-        handle_ = handle;
-    }
-
-private:
-    HANDLE handle_;
-};
 
 struct LaunchedTarget
 {
@@ -91,115 +55,6 @@ void PrintUsage()
         << L"  --require-hvci             Treat inactive HVCI as an explicit policy failure\n"
         << L"  --challenge <hex>          Bind the report to a server-issued 16-64 byte nonce\n"
         << L"  --output <directory>       Report/inventory output directory\n";
-}
-
-std::wstring DeploymentModeName(DeploymentMode mode)
-{
-    switch (mode)
-    {
-    case DeploymentMode::Test: return L"test";
-    case DeploymentMode::Production: return L"production";
-    default: return L"audit";
-    }
-}
-
-bool ParseSeverity(const std::wstring& text, FindingSeverity& severity)
-{
-    if (text == L"low") severity = FindingSeverity::Low;
-    else if (text == L"medium") severity = FindingSeverity::Medium;
-    else if (text == L"high") severity = FindingSeverity::High;
-    else if (text == L"critical") severity = FindingSeverity::Critical;
-    else return false;
-    return true;
-}
-
-bool ParseChallenge(const std::wstring& text)
-{
-    if (text.size() < 32 || text.size() > 128 || (text.size() & 1) != 0) return false;
-    for (const wchar_t character : text)
-        if (!((character >= L'0' && character <= L'9') ||
-              (character >= L'a' && character <= L'f') ||
-              (character >= L'A' && character <= L'F')))
-            return false;
-    return true;
-}
-
-bool ParseUnsigned(const wchar_t* text, DWORD& value)
-{
-    if (text == nullptr || *text == L'\0') return false;
-    DWORD parsed = 0;
-    for (const wchar_t* current = text; *current != L'\0'; ++current)
-    {
-        if (*current < L'0' || *current > L'9') return false;
-        const DWORD digit = static_cast<DWORD>(*current - L'0');
-        if (parsed > (MAXDWORD - digit) / 10) return false;
-        parsed = parsed * 10 + digit;
-    }
-    if (parsed == 0) return false;
-    value = parsed;
-    return true;
-}
-
-bool ParseOptions(int argumentCount, wchar_t** arguments, ScanOptions& options)
-{
-    for (int index = 1; index < argumentCount; ++index)
-    {
-        const std::wstring argument = arguments[index];
-        if (argument == L"--pid" && index + 1 < argumentCount)
-        {
-            if (!ParseUnsigned(arguments[++index], options.targetProcessId)) return false;
-        }
-        else if (argument == L"--preflight") options.preflightOnly = true;
-        else if (argument == L"--monitor") options.monitor = true;
-        else if (argument == L"--launch" && index + 1 < argumentCount)
-            options.launchExecutable = arguments[++index];
-        else if (argument == L"--launch-args" && index + 1 < argumentCount)
-            options.launchArguments = arguments[++index];
-        else if (argument == L"--monitor-interval-ms" && index + 1 < argumentCount)
-        {
-            if (!ParseUnsigned(arguments[++index], options.monitorIntervalMs) ||
-                options.monitorIntervalMs < kMinimumMonitorIntervalMs ||
-                options.monitorIntervalMs > kMaximumMonitorIntervalMs)
-                return false;
-        }
-        else if (argument == L"--apply-hardening") options.applyHardening = true;
-        else if (argument == L"--verbose-handles") options.verboseHandles = true;
-        else if (argument == L"--no-private-kernel-traces") options.privateKernelTraces = false;
-        else if (argument == L"--require-hvci") options.requireHvci = true;
-        else if (argument == L"--mode" && index + 1 < argumentCount)
-        {
-            const std::wstring mode = arguments[++index];
-            if (mode == L"audit") options.deploymentMode = DeploymentMode::Audit;
-            else if (mode == L"test") options.deploymentMode = DeploymentMode::Test;
-            else if (mode == L"production") options.deploymentMode = DeploymentMode::Production;
-            else return false;
-        }
-        else if (argument == L"--fail-on" && index + 1 < argumentCount)
-        {
-            if (!ParseSeverity(arguments[++index], options.failureThreshold)) return false;
-        }
-        else if (argument == L"--challenge" && index + 1 < argumentCount)
-        {
-            options.challenge = arguments[++index];
-            if (!ParseChallenge(options.challenge)) return false;
-        }
-        else if (argument == L"--output" && index + 1 < argumentCount)
-        {
-            options.outputDirectory = arguments[++index];
-            if (options.outputDirectory.empty()) return false;
-        }
-        else return false;
-    }
-
-    if (options.preflightOnly &&
-        (options.targetProcessId != 0 || !options.launchExecutable.empty() || options.monitor))
-        return false;
-    if (!options.launchExecutable.empty() && options.targetProcessId != 0) return false;
-    if (options.launchExecutable.empty() && !options.launchArguments.empty()) return false;
-    if (!options.launchExecutable.empty()) options.monitor = true;
-    if (options.monitor && options.targetProcessId == 0 && options.launchExecutable.empty())
-        return false;
-    return true;
 }
 
 bool IsAdministrator()
@@ -396,7 +251,14 @@ int wmain(int argumentCount, wchar_t** arguments)
     }
 
     ScanOptions options;
-    if (!ParseOptions(argumentCount, arguments, options))
+    std::vector<std::wstring_view> optionArguments;
+    optionArguments.reserve(argumentCount > 1
+        ? static_cast<size_t>(argumentCount - 1)
+        : 0);
+    for (int index = 1; index < argumentCount; ++index)
+        optionArguments.emplace_back(arguments[index]);
+
+    if (!oac::client::ParseOptions(optionArguments, options))
     {
         if (argumentCount > 1) PrintUsage();
         return argumentCount > 1 ? 2 : 0;
@@ -414,7 +276,7 @@ int wmain(int argumentCount, wchar_t** arguments)
         std::wcout << L"Target process ID: ";
         std::wstring input;
         std::getline(std::wcin, input);
-        if (!ParseUnsigned(input.c_str(), options.targetProcessId))
+        if (!oac::client::ParsePositiveDword(input, options.targetProcessId))
         {
             std::wcerr << L"Invalid process ID.\n";
             return 2;
@@ -438,9 +300,9 @@ int wmain(int argumentCount, wchar_t** arguments)
         std::wcout << L"Hardening mode is enabled: the target process will be modified.\n";
 
     Reporter reporter(options.failureThreshold,
-        DeploymentModeName(options.deploymentMode), options.challenge);
+        oac::client::DeploymentModeName(options.deploymentMode), options.challenge);
     reporter.Add(FindingSeverity::Info, L"policy",
-        L"Deployment mode=" + DeploymentModeName(options.deploymentMode) +
+        L"Deployment mode=" + oac::client::DeploymentModeName(options.deploymentMode) +
             L"; HVCI required=" + (options.requireHvci ? std::wstring(L"true") : L"false") +
             L"; server challenge=" +
                 (options.challenge.empty() ? std::wstring(L"absent") : L"present") +

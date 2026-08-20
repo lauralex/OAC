@@ -111,21 +111,23 @@ target, not evidence that a feature already exists.
 
 | Path | Responsibility |
 |---|---|
-| [`OAC/`](OAC/) | C17 WDM driver: sessions, callbacks, bounded scans, and telemetry |
+| [`OAC/`](OAC/) | C17 WDM driver: sessions, callbacks, integrity checks, module/process scans, and telemetry |
 | [`OAC-Service/`](OAC-Service/) | Restricted controller, signed authorization, launch ownership, and scheduling |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated laboratory scanner and diagnostic reports |
-| [`shared/`](shared/) | Wire contracts, canonical records, policy rules, and strict validators |
+| [`shared/`](shared/) | Wire contracts, canonical records, policy rules, strict validators, and common Windows support |
 | [`tests/unit/`](tests/unit/) | Driver-free layout, validation, transition, and policy regression tests |
 | [`tools/`](tools/) | Integration tests, packaging, installation, and repository checks |
 | [`tools/vm/`](tools/vm/) | Networkless Hyper-V and Driver Verifier acceptance workflow |
 
-For architecture and security details, start with:
+### Explore the design
 
-- [Architecture](docs/ARCHITECTURE.md)
-- [Security model](docs/SECURITY_MODEL.md)
-- [Production protocol](docs/PROTOCOL.md)
-- [Capabilities and limitations](docs/CAPABILITIES.md)
+| Guide | What it explains |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | Components, trust boundaries, launch ownership, and scanner organization |
+| [Security model](docs/SECURITY_MODEL.md) | Threat assumptions, enforced invariants, and deliberate limitations |
+| [Production protocol](docs/PROTOCOL.md) | Typed messages, session states, correlation, evidence, and snapshots |
+| [Capabilities](docs/CAPABILITIES.md) | Production controls and the detailed laboratory-scanner matrix |
 
 Exact campaign hashes, work-package bookkeeping, historical baselines, and maintainer decisions are
 kept separately in the [development records](docs/development/README.md).

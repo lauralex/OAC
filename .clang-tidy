@@ -10,5 +10,5 @@ Checks: >
   -performance-no-int-to-ptr,
   -clang-analyzer-optin.core.EnumCastOutOfRange
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*[\\/]OAC-Client[\\/].*'
+HeaderFilterRegex: '.*[\\/](OAC-Client[\\/].*|shared[\\/]oac_windows\.hpp)$'
 ...
