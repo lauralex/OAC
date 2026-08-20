@@ -1,0 +1,4 @@
+#define OAC_FILE_DESCRIPTION "OAC control service"
+#define OAC_INTERNAL_NAME "OAC-Service"
+#define OAC_ORIGINAL_FILENAME "OAC-Service.exe"
+#include "../shared/oac_version.rc"

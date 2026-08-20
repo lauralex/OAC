@@ -69,40 +69,39 @@ jobs:
           throw "${{ matrix.configuration }} unit tests failed with exit code $LASTEXITCODE"
         }
 
-    - name: Verify unsigned artifact set
+    - name: Create and validate unsigned release candidate
       if: matrix.configuration == 'Release'
       shell: pwsh
       run: |
-        $expected = @(
-          '.\x64\Release\OAC\OAC.sys'
-          '.\x64\Release\OAC\OAC.inf'
-          '.\x64\Release\OAC\oac.cat'
-          '.\x64\Release\OAC-Client.exe'
-          '.\x64\Release\OAC-Service.exe'
-          '.\x64\Release\OAC-Launcher.exe'
-          '.\x64\Release\OAC-Protocol-Unit.exe'
-          '.\x64\Release\OAC-Protocol-Test.exe'
-        )
-        $missing = @($expected | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Leaf) })
-        if ($missing.Count -ne 0) {
-          throw "Release artifact set is incomplete: $($missing -join ', ')"
-        }
+        $releaseRoot = Join-Path $env:RUNNER_TEMP 'oac-release'
+        .\tools\New-OACReleaseCandidate.ps1 `
+          -BuildDirectory .\x64\Release `
+          -OutputDirectory $releaseRoot
+        .\tools\New-OACReleaseCandidate.ps1 `
+          -BuildDirectory .\x64\Release `
+          -OutputDirectory $releaseRoot `
+          -ValidateOnly
+        .\tools\Test-OACReleaseCandidate.ps1 `
+          -BuildDirectory .\x64\Release `
+          -CandidateDirectory $releaseRoot
 
-    - name: Upload unsigned build artifacts
+    - name: Upload unsigned production candidate
       if: matrix.configuration == 'Release'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: oac-release-x64-unsigned
+        name: oac-production-candidate-x64-unsigned
         if-no-files-found: error
-        path: |
-          ${{ env.PLATFORM }}/Release/OAC/OAC.sys
-          ${{ env.PLATFORM }}/Release/OAC-Client.exe
-          ${{ env.PLATFORM }}/Release/OAC-Service.exe
-          ${{ env.PLATFORM }}/Release/OAC-Launcher.exe
-          ${{ env.PLATFORM }}/Release/OAC-Protocol-Unit.exe
-          ${{ env.PLATFORM }}/Release/OAC-Protocol-Test.exe
-          ${{ env.PLATFORM }}/Release/OAC/OAC.inf
-          ${{ env.PLATFORM }}/Release/OAC/oac.cat
+        retention-days: 14
+        path: ${{ runner.temp }}/oac-release/public
+
+    - name: Upload isolated lab tools
+      if: matrix.configuration == 'Release'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: oac-lab-tools-x64-unsigned
+        if-no-files-found: error
+        retention-days: 14
+        path: ${{ runner.temp }}/oac-release/lab
 
   build:
     name: build

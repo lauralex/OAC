@@ -33,6 +33,8 @@ try {
         }
     }
 
+    & (Join-Path $root 'tools\Test-OACReleaseProfile.ps1')
+
     $xmlFiles = @($files | Where-Object {
             $_ -match '\.(xml|vcxproj|filters|props|targets)$'
         })

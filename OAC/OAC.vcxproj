@@ -67,7 +67,13 @@
     <FilesToPackage Include="$(TargetPath)" />
   </ItemGroup>
   <ItemGroup>
-    <Inf Include="OAC.inf" />
+    <Inf Include="OAC.inf">
+      <SpecifyDriverVerDirectiveDate>false</SpecifyDriverVerDirectiveDate>
+      <SpecifyDriverVerDirectiveVersion>false</SpecifyDriverVerDirectiveVersion>
+    </Inf>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="OAC.rc" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="compat.c" />

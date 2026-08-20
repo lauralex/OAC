@@ -4,6 +4,8 @@
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
 passed. WP-13 game/server contracts and the reference detector passed local and PR #19 hosted
 driver-free acceptance at implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`.
+WP-14 unsigned-candidate, metadata, SBOM, artifact-separation, and hostile-mutation checks pass in
+both supported PowerShell engines; hosted acceptance is required at merge.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -28,11 +30,17 @@ Labels in this document are evidence states:
 | Clang-Tidy | Required for scanner changes | Current `OAC-Client` analysis passed across all eight translation units with warnings treated as errors; the four changed service translation units passed targeted analysis |
 | Driver PREfast | Required for driver/lifetime changes | Current local `DriverMinimumRules` run passed with zero warnings/errors |
 | Secret scan | GitGuardian branch check configured | Required repository check |
+| Release profile | Exact source/header/INF/SDK/artifact binding | Windows PowerShell 5.1 and PowerShell 7 validation passed |
+| Release candidate | Canonical public/lab/private-symbol trees, manifests, SPDX SBOM, checksums, and CodeView/PDB matching | Creation and byte-exact reconstruction passed in both PowerShell engines |
+| Candidate hostility | Payload, manifest, PDB, extra public file, and missing lab marker | All five mutations were rejected in both PowerShell engines |
+| SPDX 2.3 | Generated public inventory against official Draft 7 JSON schema | Passed locally |
 
 The workflow builds Debug and Release, runs
-`x64/<Configuration>/OAC-Protocol-Unit.exe`, uploads unsigned Release artifacts without PDBs, and
-keeps the stable aggregate job name `build`. A green hosted workflow is compile and pure-unit
-evidence; it does not load the driver or test Windows service security.
+`x64/<Configuration>/OAC-Protocol-Unit.exe`, creates and hostile-tests the exact unsigned candidate,
+uploads only its public and isolated-lab trees, and keeps the stable aggregate job name `build`.
+The private symbol tree is not uploaded. A green hosted workflow is compile, pure-unit, SBOM, and
+artifact-boundary evidence; it does not load the driver, sign a production release, or test Windows
+service security.
 
 ### Driver-free production protocol coverage
 
@@ -198,11 +206,14 @@ or game-compatibility evidence.
 | WP-11 backend | Nonce replay, lease expiry/revocation, fixed queue, evidence acknowledgement, driver binding, protected mock, target-tree containment | Driver-free, restricted-service failure/recovery, production-boundary, and VM/Verifier acceptance passed at `67d3f61` |
 | WP-12 scanner modularization | Coherent kernel scanner responsibilities, common user-mode ownership helpers, parser/helper units, no behavioral regression | Debug/Release `623/623`, driver PREfast, scanner Clang-Tidy, repository checks, VM/Verifier acceptance at `67d3f61`, and PR #18 hosted checks passed |
 | WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
+| WP-14 production release engineering | Signing/HLK plan, deterministic metadata, SPDX SBOM, symbol separation, update/rollback and key-rotation design, support, privacy, and runbooks | Source profile, exact unsigned candidate, schema and five hostile mutation checks pass locally; production certification/signing and deployed operations remain external promotion gates; hosted acceptance pending |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation
 evidence. PR #19 supplies WP-13's portable hosted build, unit, and repository-validation evidence.
-WP-13 does not modify or extend the Windows runtime claim.
+WP-13 does not modify or extend the Windows runtime claim. WP-14 changes build metadata and
+packaging boundaries rather than privileged runtime behavior; it requires build, INF/catalog,
+signature-state, package-manifest, candidate, and hosted checks, not another unchanged VM campaign.
 
 ## Exact host commands
 

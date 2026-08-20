@@ -4,7 +4,9 @@
 commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build 26100. PR #18 hosted checks also
 passed. WP-13's portable game-event contract and reference server detector passed local and PR #19
 hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`; production game and
-backend deployment remain external integration work.
+backend deployment remain external integration work. The current WP-14 source adds an exact
+unsigned candidate, source-bound build metadata, SPDX inventory, and private-symbol separation;
+production certification and signing remain external promotion gates.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -61,6 +63,7 @@ earlier scanner and suspended/attach flows only for explicit disposable-VM lab u
 | `shared/oac_protocol.h` | Diagnostic scanner ABI | Lab compatibility only |
 | `shared/oac_windows.hpp` | Move-only Win32/SCM/registry ownership and small text or optional-API helpers shared by user-mode components | User mode only; no protocol or policy semantics |
 | Protocol tests | Driver-free schema tests and driver-backed malformed/lifecycle/race tests | Host-safe unit or disposable VM as appropriate |
+| Release profile and candidate tools | Bind versions and compatibility to source; create exact public, private-symbol, and lab bundles; emit manifests, SPDX SBOM, and checksums; reject hostile mutations | Unsigned build boundary only; production signing and publication are separate controlled operations |
 
 ## Scanner organization
 
@@ -234,12 +237,25 @@ persistence. The retained-alert, event-gap, overflow, concurrent-publication, an
 paths and the backend replay, acknowledgement-loss, lease-loss, and recovery boundaries passed the
 named baseline and Driver Verifier campaign.
 
+## Release boundary
+
+The release workflow deliberately produces three disjoint trees: the public production-component
+candidate, private full symbols, and isolated lab tools. A checked-in profile binds the release and
+driver versions, compatibility revisions, SDK, and exact artifact names to source. The public
+manifest and SPDX document are reconstructed from current build inputs; CI tests the boundary with
+payload, metadata, symbol, allowlist, and lab-marker mutations. Release binaries embed only the PDB
+leaf name, and public CI never uploads the private symbol tree.
+
+This boundary does not confer trust. Microsoft driver certification, protected user-mode signing,
+final signed-artifact manifests, compatibility admission, and staged publication happen in a
+separate controlled environment described in [`RELEASE.md`](RELEASE.md).
+
 ## Planned sequence
 
-1. Complete WP-14 production release engineering: signing and HLK planning, reproducible metadata,
-   an SBOM, symbol handling, update and key-rotation design, support scope, privacy, and runbooks.
-2. Implement production authenticated transport, durable backend and replay persistence, and a real
+1. Implement production authenticated transport, durable backend and replay persistence, and a real
    game-engine adapter behind the existing contracts.
+2. Add signed manifest-key rotation metadata and a production updater that implements the reviewed
+   release and rollback contract.
 3. Add game-specific combat, economy, input, and protocol detectors and validate them against
    representative workloads and the supported-platform matrix.
 
@@ -251,3 +267,4 @@ Portable checks use documented interfaces and dynamically resolved optional APIs
 produce an explicit unavailable or degraded capability. Private offsets are never guessed. The x64
 implementation passed one exact Windows 11 Pro build 26100 VM configuration; it does not establish
 x86, ARM64, historical Windows, other security configurations, hardware, or game compatibility.
+[`SUPPORT.md`](SUPPORT.md) is the public compatibility boundary.

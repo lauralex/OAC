@@ -9,7 +9,9 @@
 WP-01 through WP-12 form the accepted production-control, target-lifetime, evidence,
 bounded-scheduling, signed-build, signed-policy, backend-session, and scanner-organization
 foundation. WP-13 adds a portable game/server event interface and one deterministic behavioral
-detector. Windows-runtime implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c`
+detector. WP-14 adds a source-bound unsigned release candidate, deterministic metadata, SPDX SBOM,
+private-symbol separation, support/privacy policy, and operational promotion controls.
+Windows-runtime implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c`
 passed the commit-bound disposable-VM and standard Driver Verifier campaign described below.
 Portable game-integration implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`
 passed local and PR #19 hosted acceptance. Status still distinguishes source, evidence, and the
@@ -31,7 +33,7 @@ remaining production-hardening work.
 | WP-11 Backend session abstraction | Implemented; VM tested | Strict transport records and interface, protected mock backend, nonce replay rejection, bounded lease and acknowledgement state, fixed evidence queue, driver binding, target-tree failure policy, and fresh recovery passed on the named campaign |
 | WP-12 Scanner modularization | Implemented; tested | Kernel inventory and process/handle scans are separated from integrity orchestration; common Windows ownership helpers and a tested client-option parser replace duplicate code; Debug/Release, static analysis, package, VM, Driver Verifier, and PR #18 hosted gates passed |
 | WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
-| WP-14 Production release engineering | Planned | Signing/HLK, SBOM, updates, privacy, and operations remain prerequisites |
+| WP-14 Production release engineering | Implemented; local acceptance | Exact unsigned public/lab/private-symbol bundles, source and toolchain metadata, SPDX SBOM, hostile candidate validation, CI artifact separation, and reviewed signing, update, support, privacy, and operations contracts are present; production certification/signing and deployed operations remain external gates |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
 certification or production readiness.
@@ -121,6 +123,11 @@ The current source is organized around these implementation areas:
   scanner executable and its unit tests.
 - Package/install and VM harness support for the service boundary, production session lifecycle and
   race tests, and Driver Verifier acceptance.
+- `config/release-profile.json`, `Directory.Build.targets`, and the release-candidate tools: exact
+  release/driver/compatibility binding, reviewed INF metadata, leaf-only PDB records, canonical
+  manifests and checksums, shared Windows file-version resources, SPDX 2.3 inventory,
+  private-symbol separation, and hostile artifact validation. Public CI uploads only the unsigned
+  production-component and isolated-lab bundles.
 
 The current driver advertises production session control, launch tickets, session liveness, typed
 evidence, and paged snapshots. Production configuration/scan and backend capabilities remain
@@ -138,14 +145,32 @@ the verified manifest digest as correlated session identity rather than parsing 
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
 | Current Clang-Tidy | All eight `OAC-Client` translation units passed with warnings treated as errors; the four changed service translation units also passed targeted analysis |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
-| `tools/Test-OACRepository.ps1` (seven PowerShell, eleven XML, five YAML, one Python) | Passed |
+| `tools/Test-OACRepository.ps1` (ten PowerShell, twelve XML, five YAML, one Python) | Passed |
+| Release profile and candidate reconstruction under Windows PowerShell 5.1 and PowerShell 7 | Passed; all five hostile mutations rejected in both engines |
+| Generated `sbom.spdx.json` against the official SPDX 2.3 Draft 7 JSON schema | Passed |
 | Markdown local-link resolution across the repository | Passed |
 | Parse all five `.github` YAML files with PyYAML | Passed |
 | `git diff --check` across the shared working tree | Passed |
 
-`actionlint` and PSScriptAnalyzer are not installed on this workstation. The current CI workflow
-does not yet provide CodeQL or SBOM-generation evidence. These are explicit remaining CI and
-static-analysis gaps rather than implied passes.
+`actionlint` and PSScriptAnalyzer are not installed on this workstation. The current workflow now
+generates and hostile-tests the unsigned Release candidate and SPDX SBOM; it still does not provide
+CodeQL or production artifact attestation. Those are explicit remaining CI and static-analysis
+gaps rather than implied passes.
+
+## Current release-engineering validation
+
+The WP-14 candidate has three exact trees: unsigned production components, private full symbols,
+and isolated lab tools. Release binaries record only their PDB leaf name. The public manifest binds
+the clean source commit, normalized source timestamp, exact toolchain and compatibility values, and
+every artifact size and SHA-256. The SPDX 2.3 document covers the same public files and passed the
+official JSON schema.
+
+Both supported PowerShell engines created and reconstructed the candidate, then rejected payload,
+manifest, symbol, extra-public-file, and missing-lab-marker mutations. Public CI is configured to
+upload only `public/` and `lab/`; private symbols remain available to a controlled promotion runner
+but are not published. Microsoft certification, protected signing keys, final signed-artifact
+manifests, platform admission, and staged deployment are documented promotion gates rather than
+claims about the unsigned CI output.
 
 ## Current game/server integration validation
 
@@ -210,8 +235,11 @@ bundle remains at `C:\OAC-VM\evidence\20260820-47c0400-backend-session`.
 - WP-13 game/server integration passed its local and PR #19 hosted acceptance. A real game still
   needs an authenticated adapter, signed rules, representative workload tuning, and additional
   gameplay detectors.
-- WP-14 production release engineering is the next work package.
+- WP-14 source controls and operating contracts are implemented; hosted candidate generation and
+  repository checks must pass before merge, while real certification/signing and operational
+  approval remain deployment gates.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
-and revocation metadata, production backend deployment, and the release controls listed above.
+and revocation metadata, production backend deployment, protected signing/certification, and an
+approved supported-platform rollout.

@@ -64,5 +64,8 @@
     <ClInclude Include="..\shared\oac_ipc.h" />
     <ClInclude Include="..\shared\oac_windows.hpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="OAC-Launcher.rc" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

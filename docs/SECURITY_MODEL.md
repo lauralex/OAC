@@ -4,7 +4,9 @@
 campaign at implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c` on Windows 11 build
 26100. PR #18 hosted checks also passed. WP-13's portable game/server records and reference movement
 detector passed local and PR #19 hosted driver-free acceptance at
-`8eca1747680f7dc9ad084d1e1897f30bfec08d83`; they are not a deployed game backend.
+`8eca1747680f7dc9ad084d1e1897f30bfec08d83`; they are not a deployed game backend. The current
+WP-14 source adds an unsigned release-candidate boundary, deterministic metadata, SPDX inventory,
+and symbol separation; production certification, keys, and distribution remain external.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -44,6 +46,8 @@ trust boundaries, adversaries, and failure behavior.
 | Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Driver-free, signed-package, restricted-service, and Driver Verifier acceptance passed at the named commit |
 | Backend session | The service requires a correlated session before claiming the driver, binds a digest of the session and nonces into driver status, applies signed lease/renewal/acknowledgement bounds, and stops on replay, expiry, revocation, queue exhaustion, or acknowledgement timeout | Driver-free and Windows 11 VM/Verifier cases passed replay rejection, acknowledgement-loss and lease-loss target-tree containment, and fresh-session recovery; the included transport remains a protected test double rather than a production network service |
 | Game/server behavior | Portable canonical records bind authoritative movement to game, build, backend session, match, player pseudonym, replay, sequence, and server tick; a deterministic detector enforces replay ordering, movement and velocity bounds, and typed risk | Driver-free C/C++ coverage exercises hostile records and rules, replay, identity, gaps, exact bounds, server corrections, coordinate extremes, and combined behavior/endpoint risk; no production transport or game deployment is implied |
+| Release supply chain | A checked-in profile binds versions, compatibility revisions, SDK, and exact public/lab artifacts to source; the candidate carries hashes and an SPDX SBOM, embeds leaf-only PDB references, and separates private symbols | Local and hosted candidate validation can prove the unsigned boundary; only Microsoft certification, protected production signatures, final signed manifests, and platform admission can establish publication trust |
+| Privacy operations | Raw hardware values stay out of reports; typed evidence, pseudonymous game records, role separation, bounded retention, access/deletion, appeal, and incident requirements are documented | Source enforces the local HWID/report boundary; a production operator and backend are still required to implement and audit the operational policy |
 
 ## Production authority
 
@@ -162,6 +166,8 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   threads under the authenticated target-owner identity, reverts immediately, and uses one shared
   RAII guard so every successful suspension has an explicit resume and cleanup fallback.
 - Raw hardware serials are not written to reports; removable devices do not become core anchors.
+- Public candidates contain no private symbols, signing material, lab executables, reports, or raw
+  evidence. Every included file is exact-name and hash allowlisted.
 
 WP-01 through WP-12 statements combine source behavior with one exact platform acceptance run. The
 current driver-backed production, service installation, lifecycle, race, job/liveness, typed
@@ -176,7 +182,7 @@ recorded Windows runtime claim.
 - Manifest and policy signer rotation and revocation metadata, approved
   module/middleware/child-process scope, remote policy delivery, production authenticated network
   transport, durable evidence and replay storage, a production game adapter, broader game-specific
-  detectors, and backend operations.
+  detectors, production certification/signing, and backend operations.
 
 ## Evidence and enforcement
 
@@ -209,8 +215,8 @@ backend controls.
 - Authentication from the current unkeyed local report chain.
 
 Compatibility must be stated per tested Windows build, architecture, security configuration, and
-game workload. The maintained design target is native x64 Windows 10, Windows 11, and corresponding
-supported Server releases; the verified support matrix remains incomplete.
+game workload. The current evidence and production admission criteria are listed in
+[`SUPPORT.md`](SUPPORT.md); the verified support matrix remains incomplete.
 
 ## Lab-only operations
 

@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "release": "3.0.0",
+  "configuration": "Release",
+  "platform": "x64",
+  "windows_sdk": "10.0.26100.0",
+  "driver_version": "3.0.0.0",
+  "repository": "https://github.com/lauralex/OAC",
+  "compatibility": {
+    "production_protocol": "0x00050006",
+    "diagnostic_protocol": "0x00040000",
+    "launcher_ipc": "0x00010006",
+    "backend_protocol": "0x00010000",
+    "manifest_schema": 1,
+    "signed_policy_schema": 2,
+    "game_event_schema": 1
+  },
+  "public_artifacts": [
+    {
+      "component": "kernel-driver",
+      "source": "OAC/OAC.sys",
+      "target": "driver/OAC.sys",
+      "symbol": "OAC.pdb"
+    },
+    {
+      "component": "driver-setup",
+      "source": "OAC/OAC.inf",
+      "target": "driver/OAC.inf",
+      "symbol": null
+    },
+    {
+      "component": "driver-catalog",
+      "source": "OAC/oac.cat",
+      "target": "driver/OAC.cat",
+      "symbol": null
+    },
+    {
+      "component": "control-service",
+      "source": "OAC-Service.exe",
+      "target": "OAC-Service.exe",
+      "symbol": "OAC-Service.pdb"
+    },
+    {
+      "component": "user-launcher",
+      "source": "OAC-Launcher.exe",
+      "target": "OAC-Launcher.exe",
+      "symbol": "OAC-Launcher.pdb"
+    }
+  ],
+  "lab_artifacts": [
+    {
+      "component": "diagnostic-client",
+      "source": "OAC-Client.exe",
+      "target": "OAC-Client.exe"
+    },
+    {
+      "component": "protocol-integration-test",
+      "source": "OAC-Protocol-Test.exe",
+      "target": "OAC-Protocol-Test.exe"
+    },
+    {
+      "component": "driver-free-unit-test",
+      "source": "OAC-Protocol-Unit.exe",
+      "target": "OAC-Protocol-Unit.exe"
+    }
+  ]
+}

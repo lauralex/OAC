@@ -33,8 +33,12 @@
   velocity invariant, and explainable behavior/endpoint risk decisions. Implementation commit
   `8eca1747680f7dc9ad084d1e1897f30bfec08d83` passed local and PR #19 hosted Debug/Release builds,
   `663/663` driver-free tests in each configuration, static analysis, and repository validation.
+  The release-engineering milestone adds a checked-in release profile, exact unsigned public/lab/
+  private-symbol bundles, deterministic source and toolchain metadata, an SPDX 2.3 SBOM, hostile
+  candidate validation, and documented signing, update, support, privacy, and incident boundaries.
   A production network transport, backend service, durable remote and replay storage, real game
-  adapter, manifest-key rotation, and remote policy delivery are not implemented.
+  adapter, manifest-key rotation, remote policy delivery, Microsoft certification, protected
+  production signing, and an approved platform rollout are not implemented.
 
 ## Repository map
 
@@ -52,9 +56,10 @@
 | `shared/oac_manifest.*` | Canonical game-manifest schema, strict validation, file-identity matching, and rollback decisions |
 | `shared/oac_backend.*` | Canonical backend-session, lease, evidence, acknowledgement, replay, and failure-state contracts |
 | `shared/oac_game.*` | Portable authoritative game-event construction, replay-safe detector state, bounded movement rules, and risk decisions |
+| `config/release-profile.json` | Release, driver, compatibility, SDK, and exact public/lab artifact contract |
 | `tools/OAC-Protocol-Test.cpp` | Elevated, driver-backed diagnostic/production malformed-request, lifecycle, and cleanup-race tests |
 | `tests/unit/` | Driver-free C/C++ protocol layout, validation, transition, event-schema, and policy regression tests |
-| `tools/*.ps1` | Pinned driver-policy generation and disposable-VM package/install workflows |
+| `tools/*.ps1` | Repository/release validation, pinned driver-policy generation, and disposable-VM package/install workflows |
 | `tools/vm/` | Networkless Hyper-V and Driver Verifier test harness |
 | `docs/` | Public technical references, current procedures, reviewed research, and separated maintainer records |
 

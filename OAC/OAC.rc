@@ -1,0 +1,6 @@
+#define OAC_FILE_DESCRIPTION "OAC kernel driver"
+#define OAC_INTERNAL_NAME "OAC"
+#define OAC_ORIGINAL_FILENAME "OAC.sys"
+#define OAC_FILE_TYPE VFT_DRV
+#define OAC_FILE_SUBTYPE VFT2_DRV_SYSTEM
+#include "../shared/oac_version.rc"
