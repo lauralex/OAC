@@ -20,6 +20,9 @@ typedef struct OAC_SYSTEM_THREAD_INFORMATION_TAG
     ULONG WaitReason;
 } OAC_SYSTEM_THREAD_INFORMATION, *POAC_SYSTEM_THREAD_INFORMATION;
 
+C_ASSERT(sizeof(OAC_SYSTEM_THREAD_INFORMATION) == 80);
+C_ASSERT(FIELD_OFFSET(OAC_SYSTEM_THREAD_INFORMATION, StartAddress) == 32);
+
 typedef struct OAC_SYSTEM_PROCESS_INFORMATION_TAG
 {
     ULONG NextEntryOffset;
@@ -46,6 +49,9 @@ typedef struct OAC_SYSTEM_PROCESS_INFORMATION_TAG
     SIZE_T PrivatePageCount;
     LARGE_INTEGER Reserved7[6];
 } OAC_SYSTEM_PROCESS_INFORMATION, *POAC_SYSTEM_PROCESS_INFORMATION;
+
+C_ASSERT(sizeof(OAC_SYSTEM_PROCESS_INFORMATION) == 256);
+C_ASSERT(FIELD_OFFSET(OAC_SYSTEM_PROCESS_INFORMATION, UniqueProcessId) == 80);
 
 typedef struct OAC_SYSTEM_HANDLE_ENTRY_TAG
 {
@@ -188,11 +194,13 @@ static BOOLEAN OacScanProcessesAndSystemThreads(
             ExFreePoolWithTag(bitmapBuffer, OAC_SCAN_TAG);
             return FALSE;
         }
-        threadCount += availableThreads;
+        /* The entry may contain OS-owned extension data after the reported
+         * thread array.  Use the derived capacity only as a bounds check. */
+        threadCount += process->NumberOfThreads;
 
         if (pid == 4)
         {
-            for (i = 0; i < availableThreads; ++i)
+            for (i = 0; i < process->NumberOfThreads; ++i)
             {
                 if (threads[i].StartAddress != NULL &&
                     !OacAddressInModules(
