@@ -8,8 +8,8 @@ WP-14 adds the reviewed unsigned release boundary. WP-15 endpoint admission, loa
 runtime-module authorization, and target observation passed local gates plus the exact signed-package,
 networkless Windows 11 build 26100, and standard Driver Verifier campaign at
 `974d2c474ff9515c5f11ab313bf644bf7dcbe89a`.
-WP-16 backend admission passed its managed mutual-TLS/durability suites and the complete endpoint
-regression campaign at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`.
+WP-16 backend admission passed its managed mutual-TLS/durability suites, the complete endpoint
+regression campaign at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`, and PR #22 hosted checks.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -220,7 +220,7 @@ or game-compatibility evidence.
 | WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
 | WP-14 production release engineering | Signing/HLK plan, deterministic metadata, SPDX SBOM, symbol separation, update/rollback and key-rotation design, support, privacy, and runbooks | Source profile, exact unsigned candidate, schema and five hostile mutation checks pass locally; production certification/signing and deployed operations remain external promotion gates; hosted acceptance pending |
 | WP-15 production endpoint trust | Correlated complete scan, frozen module inventory, driver trust/hash/family policy, signed runtime-module scope, typed target memory/thread/lifecycle findings, explicit degraded state, backend acknowledgement | Debug/Release `727/727`, full solution analysis, PREfast, complete service/client Clang-Tidy, repository validation, release-candidate hostility, exact signed package, and Windows 11/Driver Verifier acceptance passed at `974d2c4` |
-| WP-16 production backend admission | Native mutual-TLS transport, exact certificate rotation, signed remote policy and crash-safe cache, durable lease/replay/evidence/game state, revocation/expiry/restart behavior, and typed game adapter | Managed Debug/Release `26/26`, real loopback mutual TLS, role separation, direct durable-restart tests, shared C/C++ protocol tests, and the exact Windows 11/Driver Verifier endpoint regression passed at `085c8fe`; hosted checks remain before merge |
+| WP-16 production backend admission | Native mutual-TLS transport, exact certificate rotation, signed remote policy and crash-safe cache, durable lease/replay/evidence/game state, revocation/expiry/restart behavior, and typed game adapter | Managed Debug/Release `26/26`, real loopback mutual TLS, role separation, direct durable-restart tests, shared C/C++ protocol tests, the exact Windows 11/Driver Verifier endpoint regression at `085c8fe`, and PR #22 hosted checks passed |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation

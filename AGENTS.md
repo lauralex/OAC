@@ -47,8 +47,9 @@
   crash-safe caching, a separate .NET 8 admission service with durable lease/replay/evidence/game
   state, and a typed .NET game-server adapter. Its managed suites and full endpoint-regression VM
   campaign passed; the latter again accepted 41 formal results under standard Driver Verifier with
-  zero crashes or dumps. The backend remains a bounded single-node reference deployment rather
-  than a managed production service.
+  zero crashes or dumps. PR #22 also passed the hosted managed-backend, Debug, Release, aggregate
+  build, repository-validation, and secret-scanning checks. The backend remains a bounded
+  single-node reference deployment rather than a managed production service.
   Stable mapped-file identity, create-time job assignment, manifest-key rotation metadata,
   Microsoft certification, protected production signing, representative middleware/JIT tuning,
   managed multi-node backend operations, and an approved platform rollout are not implemented.

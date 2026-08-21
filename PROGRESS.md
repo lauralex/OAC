@@ -44,7 +44,7 @@ remaining production-hardening work.
 | WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
 | WP-14 Production release engineering | Implemented; local acceptance | Exact unsigned public/lab/private-symbol bundles, source and toolchain metadata, SPDX SBOM, hostile candidate validation, CI artifact separation, and reviewed signing, update, support, privacy, and operations contracts are present; production certification/signing and deployed operations remain external gates |
 | WP-15 Production endpoint trust | Implemented; VM tested | Exact production scan/configuration, explicit completeness, frozen loaded-driver inventory, trust/hash/family policy, runtime-module authorization, typed memory/thread/lifecycle observations, and fail-closed evidence handling passed the complete local and Windows 11/Driver Verifier acceptance gates at `974d2c4` |
-| WP-16 Production backend admission | Implemented; VM tested | HTTPS mutual TLS, role-separated certificate rotation, signed remote-policy refresh and crash-safe cache selection, durable lease/replay/evidence/game state, backend restart recovery, and the typed game adapter passed the managed and shared-contract suites; the exact endpoint package passed the full Windows 11 and Driver Verifier regression campaign at `085c8fe` |
+| WP-16 Production backend admission | Implemented; accepted | HTTPS mutual TLS, role-separated certificate rotation, signed remote-policy refresh and crash-safe cache selection, durable lease/replay/evidence/game state, backend restart recovery, and the typed game adapter passed the managed and shared-contract suites; the exact endpoint package passed the full Windows 11 and Driver Verifier regression campaign at `085c8fe`, and PR #22 passed hosted checks |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
 certification or production readiness.
@@ -321,10 +321,10 @@ was also removed during the requested workspace cleanup.
   approval remain deployment gates.
 - WP-15 passed the complete local build, unit, analysis, release-profile, hostile-candidate,
   signed-package, Windows 11, and standard Driver Verifier gates at `974d2c4`.
-- WP-16 passed its local managed suites and exact endpoint-regression VM/Verifier campaign. Hosted
-  checks remain required before merge. WP-17 create-time job assignment, stable mapped-file
-  identity, durable local evidence recovery, and manifest-key rotation is the next engineering
-  milestone; representative module/JIT tuning remains separate deployment work.
+- WP-16 passed its local managed suites, exact endpoint-regression VM/Verifier campaign, and PR #22
+  hosted checks. WP-17 create-time job assignment, stable mapped-file identity, durable local
+  evidence recovery, and manifest-key rotation is the next engineering milestone; representative
+  module/JIT tuning remains separate deployment work.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
