@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>OAC.GameAdapter</AssemblyName>
+    <RootNamespace>Oac.GameAdapter</RootNamespace>
+    <PackageId>OAC.GameAdapter</PackageId>
+    <Version>3.0.0</Version>
+    <Authors>OAC contributors</Authors>
+    <Description>Typed mutually authenticated game-server adapter for OAC backend admission.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/lauralex/OAC</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+</Project>

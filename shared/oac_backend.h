@@ -10,13 +10,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "oac_game.h"
 #include "oac_signed_policy.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define OAC_BACKEND_PROTOCOL_REVISION 0x00010001u
+#define OAC_BACKEND_PROTOCOL_REVISION 0x00010002u
 #define OAC_BACKEND_SESSION_ID_SIZE 16u
 #define OAC_BACKEND_NONCE_SIZE 32u
 #define OAC_BACKEND_DIGEST_SIZE 32u
@@ -34,6 +35,10 @@ extern "C" {
 #define OAC_BACKEND_MESSAGE_OPEN_SESSION 1u
 #define OAC_BACKEND_MESSAGE_RENEW_LEASE 2u
 #define OAC_BACKEND_MESSAGE_UPLOAD_EVIDENCE 3u
+#define OAC_BACKEND_MESSAGE_FETCH_POLICY 4u
+#define OAC_BACKEND_MESSAGE_SUBMIT_GAME_EVENT 5u
+
+#define OAC_BACKEND_POLICY_SIGNATURE_CAPACITY 8192u
 
 #define OAC_BACKEND_EVIDENCE_SOURCE_SERVICE 3u
 
@@ -150,6 +155,41 @@ typedef struct OAC_BACKEND_UPLOAD_RESPONSE_TAG
     uint64_t AcknowledgedThrough;
 } OAC_BACKEND_UPLOAD_RESPONSE;
 
+typedef struct OAC_BACKEND_POLICY_REQUEST_TAG
+{
+    OAC_BACKEND_REQUEST_HEADER Header;
+    uint8_t GameId[OAC_POLICY_ID_SIZE];
+    uint8_t BuildId[OAC_POLICY_ID_SIZE];
+    uint8_t ChannelId[OAC_POLICY_ID_SIZE];
+    uint64_t CurrentPolicyVersion;
+    uint8_t CurrentPolicySha256[OAC_POLICY_HASH_SIZE];
+    uint8_t Reserved[8];
+} OAC_BACKEND_POLICY_REQUEST;
+
+typedef struct OAC_BACKEND_POLICY_RESPONSE_TAG
+{
+    OAC_BACKEND_RESPONSE_HEADER Header;
+    uint32_t PolicySize;
+    uint32_t SignatureSize;
+    OAC_SIGNED_POLICY Policy;
+    uint8_t Signature[OAC_BACKEND_POLICY_SIGNATURE_CAPACITY];
+} OAC_BACKEND_POLICY_RESPONSE;
+
+typedef struct OAC_BACKEND_GAME_REQUEST_TAG
+{
+    OAC_BACKEND_REQUEST_HEADER Header;
+    OAC_GAME_MOVEMENT_EVENT Event;
+    uint32_t EndpointRisk;
+    uint32_t Reserved;
+} OAC_BACKEND_GAME_REQUEST;
+
+typedef struct OAC_BACKEND_GAME_RESPONSE_TAG
+{
+    OAC_BACKEND_RESPONSE_HEADER Header;
+    OAC_GAME_DETECTOR_RESULT Result;
+    uint64_t DurableSequence;
+} OAC_BACKEND_GAME_RESPONSE;
+
 typedef struct OAC_BACKEND_BINDING_MATERIAL_TAG
 {
     uint8_t SessionId[OAC_BACKEND_SESSION_ID_SIZE];
@@ -208,6 +248,28 @@ int OacBackendValidateUploadResponse(
     size_t length,
     const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
     uint64_t previousAcknowledgement);
+int OacBackendValidatePolicyRequest(
+    const OAC_BACKEND_POLICY_REQUEST* request,
+    size_t length,
+    uint64_t nowUnixSeconds);
+int OacBackendValidatePolicyResponse(
+    const OAC_BACKEND_POLICY_REQUEST* request,
+    const OAC_BACKEND_POLICY_RESPONSE* response,
+    size_t length,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
+    uint64_t nowUnixSeconds,
+    uint32_t driverProtocol,
+    uint32_t serviceProtocol,
+    uint32_t launcherProtocol);
+int OacBackendValidateGameRequest(
+    const OAC_BACKEND_GAME_REQUEST* request,
+    size_t length,
+    uint64_t nowUnixSeconds);
+int OacBackendValidateGameResponse(
+    const OAC_BACKEND_GAME_REQUEST* request,
+    const OAC_BACKEND_GAME_RESPONSE* response,
+    size_t length,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE]);
 int OacBackendAcceptNonceDigest(
     OAC_BACKEND_REPLAY_WINDOW* window,
     const uint8_t nonceSha256[OAC_BACKEND_DIGEST_SIZE]);
@@ -309,6 +371,41 @@ OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_UPLOAD_RESPONSE) == 88,
 OAC_BACKEND_STATIC_ASSERT(
     offsetof(OAC_BACKEND_UPLOAD_RESPONSE, AcknowledgedThrough) == 80,
     "backend upload acknowledgement moved");
+OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_POLICY_REQUEST) == 184,
+    "backend policy request layout changed");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_POLICY_REQUEST, GameId) == 88,
+    "backend policy scope moved");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_POLICY_REQUEST, CurrentPolicyVersion) == 136,
+    "backend policy version moved");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_POLICY_REQUEST, CurrentPolicySha256) == 144,
+    "backend policy digest moved");
+OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_POLICY_RESPONSE) == 10760,
+    "backend policy response layout changed");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_POLICY_RESPONSE, Policy) == 88,
+    "backend policy payload moved");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_POLICY_RESPONSE, Signature) == 2568,
+    "backend policy signature moved");
+OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_GAME_REQUEST) == 352,
+    "backend game request layout changed");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_GAME_REQUEST, Event) == 88,
+    "backend game event moved");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_GAME_REQUEST, EndpointRisk) == 344,
+    "backend endpoint risk moved");
+OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_GAME_RESPONSE) == 184,
+    "backend game response layout changed");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_GAME_RESPONSE, Result) == 80,
+    "backend game decision moved");
+OAC_BACKEND_STATIC_ASSERT(
+    offsetof(OAC_BACKEND_GAME_RESPONSE, DurableSequence) == 176,
+    "backend game durability sequence moved");
 OAC_BACKEND_STATIC_ASSERT(sizeof(OAC_BACKEND_BINDING_MATERIAL) == 80,
     "backend binding material layout changed");
 OAC_BACKEND_STATIC_ASSERT(

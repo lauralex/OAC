@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "backend_http.hpp"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -15,6 +16,7 @@ constexpr wchar_t kBackendStatePath[] = L"SOFTWARE\\OAC";
 constexpr wchar_t kBackendModeValue[] = L"BackendMode";
 constexpr wchar_t kBackendScenarioValue[] = L"BackendScenario";
 constexpr DWORD kMockBackendMode = 1;
+constexpr DWORD kHttpBackendMode = 2;
 
 bool BytesAreZero(const void* value, std::size_t size) noexcept
 {
@@ -170,6 +172,17 @@ DWORD ReadBackendConfiguration(
         &modeSize);
     if (status != ERROR_SUCCESS) return static_cast<DWORD>(status);
 
+    if (modeType != REG_DWORD || modeSize != sizeof(mode) ||
+        (mode != kMockBackendMode && mode != kHttpBackendMode))
+    {
+        return ERROR_INVALID_DATA;
+    }
+    if (mode == kHttpBackendMode)
+    {
+        scenario = oac::BackendScenario::Normal;
+        return ERROR_SUCCESS;
+    }
+
     DWORD rawScenario = 0;
     DWORD scenarioType = 0;
     DWORD scenarioSize = sizeof(rawScenario);
@@ -182,8 +195,7 @@ DWORD ReadBackendConfiguration(
         &rawScenario,
         &scenarioSize);
     if (status != ERROR_SUCCESS) return static_cast<DWORD>(status);
-    if (modeType != REG_DWORD || scenarioType != REG_DWORD ||
-        modeSize != sizeof(mode) || scenarioSize != sizeof(rawScenario) ||
+    if (scenarioType != REG_DWORD || scenarioSize != sizeof(rawScenario) ||
         rawScenario > static_cast<DWORD>(oac::BackendScenario::RevokeLease))
     {
         return ERROR_INVALID_DATA;
@@ -195,6 +207,26 @@ DWORD ReadBackendConfiguration(
 
 namespace oac
 {
+DWORD ComputeBackendSha256(
+    const void* bytes,
+    std::size_t size,
+    std::uint8_t digest[OAC_BACKEND_DIGEST_SIZE]) noexcept
+{
+    return digest == nullptr
+        ? ERROR_INVALID_PARAMETER
+        : Sha256(bytes, size, digest);
+}
+
+DWORD InitializeBackendRequestHeader(
+    OAC_BACKEND_REQUEST_HEADER& header,
+    ULONG size,
+    ULONG type,
+    ULONGLONG sequence,
+    const std::uint8_t sessionId[OAC_BACKEND_SESSION_ID_SIZE]) noexcept
+{
+    return InitializeRequestHeader(header, size, type, sequence, sessionId);
+}
+
 MockBackendTransport::MockBackendTransport(BackendScenario scenario) noexcept
     : scenario_(scenario)
 {
@@ -203,6 +235,14 @@ MockBackendTransport::MockBackendTransport(BackendScenario scenario) noexcept
 MockBackendTransport::~MockBackendTransport()
 {
     Close();
+}
+
+DWORD MockBackendTransport::FetchPolicy(
+    const OAC_BACKEND_POLICY_REQUEST&,
+    OAC_BACKEND_POLICY_RESPONSE& response) noexcept
+{
+    response = {};
+    return ERROR_NOT_SUPPORTED;
 }
 
 DWORD MockBackendTransport::Open(
@@ -372,20 +412,24 @@ DWORD MockBackendTransport::SubmitEvidence(
 }
 
 bool MockBackendTransport::TakeRenewal(
-    OAC_BACKEND_RENEW_RESPONSE& response) noexcept
+    OAC_BACKEND_RENEW_RESPONSE& response,
+    DWORD& error) noexcept
 {
     if (!renewalReady_) return false;
     response = renewalResponse_;
+    error = ERROR_SUCCESS;
     renewalResponse_ = {};
     renewalReady_ = false;
     return true;
 }
 
 bool MockBackendTransport::TakeUpload(
-    OAC_BACKEND_UPLOAD_RESPONSE& response) noexcept
+    OAC_BACKEND_UPLOAD_RESPONSE& response,
+    DWORD& error) noexcept
 {
     if (!uploadReady_) return false;
     response = uploadResponse_;
+    error = ERROR_SUCCESS;
     uploadResponse_ = {};
     uploadReady_ = false;
     return true;
@@ -539,8 +583,10 @@ DWORD BackendSession::ProcessCompletions(
     ULONGLONG currentMilliseconds) noexcept
 {
     OAC_BACKEND_RENEW_RESPONSE renewal{};
-    if (transport_->TakeRenewal(renewal))
+    DWORD completionError = ERROR_SUCCESS;
+    if (transport_->TakeRenewal(renewal, completionError))
     {
+        if (completionError != ERROR_SUCCESS) return completionError;
         if (!renewalOutstanding_ ||
             !OacBackendValidateRenewResponse(
                 &renewalRequest_,
@@ -576,8 +622,10 @@ DWORD BackendSession::ProcessCompletions(
     }
 
     OAC_BACKEND_UPLOAD_RESPONSE upload{};
-    if (transport_->TakeUpload(upload))
+    completionError = ERROR_SUCCESS;
+    if (transport_->TakeUpload(upload, completionError))
     {
+        if (completionError != ERROR_SUCCESS) return completionError;
         if (!uploadOutstanding_ ||
             !OacBackendValidateUploadResponse(
                 &uploadRequest_,
@@ -804,10 +852,9 @@ std::unique_ptr<BackendTransport> CreateConfiguredBackendTransport(
     BackendScenario scenario = BackendScenario::Normal;
     error = ReadBackendConfiguration(mode, scenario);
     if (error != ERROR_SUCCESS) return {};
-    if (mode != kMockBackendMode)
+    if (mode == kHttpBackendMode)
     {
-        error = ERROR_NOT_SUPPORTED;
-        return {};
+        return CreateHttpBackendTransport(error);
     }
     try
     {

@@ -25,11 +25,13 @@ Labels in this document are evidence states:
 |---|---|---|
 | `Debug|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
 | `Release|x64` solution build | Workflow matrix configured | Current local and PR #19 hosted builds passed with zero warnings/errors |
-| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current source contains more than 700 checks; the final Debug/Release count is recorded after the milestone build |
+| `OAC-Protocol-Unit.exe` | C/C++ driver-free unit project included in both configurations | Current Debug and Release executables pass `739/739` |
+| `OAC.Backend.Tests` | .NET 8 Debug/Release build with locked restore, nullable analysis, analyzers, and warnings as errors | Current suite has 26 configuration, direct-store, and real loopback mutual-TLS checks in each configuration |
+| Managed deliverables | Framework-dependent backend publish and typed game-adapter package | CI builds and uploads both separately from the native endpoint candidate |
 | Protocol layout assertions | Diagnostic, production, and game-event compile-time sizes/offsets | Compiled in both local configurations and on PR #19 |
 | `InfVerif /w` | Required for package changes | Current local validation passed |
 | PowerShell/Python/XML/YAML parse | Required repository checks | Current Windows PowerShell and PowerShell 7 validation passed |
-| Clang-Tidy | Required for scanner changes | Current `OAC-Client` analysis passed across all eight translation units with warnings treated as errors; the four changed service translation units passed targeted analysis |
+| Clang-Tidy | Required for scanner changes | All sixteen current `OAC-Service` build translation units passed with warnings treated as errors; the unchanged nine-translation-unit `OAC-Client` baseline remains current |
 | Driver PREfast | Required for driver/lifetime changes | Current local `DriverMinimumRules` run passed with zero warnings/errors |
 | Secret scan | GitGuardian branch check configured | Required repository check |
 | Release profile | Exact source/header/INF/SDK/artifact binding | Windows PowerShell 5.1 and PowerShell 7 validation passed |
@@ -70,9 +72,10 @@ The pure C/C++ unit source covers:
 - canonical signed-policy and cache layouts, hostile identity/time/component/rule/operation fields,
   scope matching, replay, equivocation, explicit rollback, preserved historic high-water state, and
   emergency revocation; and
-- backend open, renewal, evidence, and acknowledgement layouts; strict size/type/session/nonce/time
-  correlation; replay-window bounds; sequence and acknowledgement monotonicity; fixed-queue and
-  timeout outcomes; binding digest; mock restart; lease expiry; and revocation; and
+- backend policy, open, renewal, evidence, acknowledgement, and game-decision layouts; strict
+  size/type/session/nonce/time correlation; replay-window bounds; sequence and acknowledgement
+  monotonicity; fixed-queue and timeout outcomes; binding digest; mock restart; lease expiry; and
+  revocation; and
 - canonical server-authoritative movement layouts and construction; exact game/build/session/match/
   pseudonym/replay scope; hostile fields and rules; replay and state immutability; sequence/tick
   gaps; movement and velocity bounds; server correction; coordinate extremes; combined risk; and
@@ -214,6 +217,7 @@ or game-compatibility evidence.
 | WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
 | WP-14 production release engineering | Signing/HLK plan, deterministic metadata, SPDX SBOM, symbol separation, update/rollback and key-rotation design, support, privacy, and runbooks | Source profile, exact unsigned candidate, schema and five hostile mutation checks pass locally; production certification/signing and deployed operations remain external promotion gates; hosted acceptance pending |
 | WP-15 production endpoint trust | Correlated complete scan, frozen module inventory, driver trust/hash/family policy, signed runtime-module scope, typed target memory/thread/lifecycle findings, explicit degraded state, backend acknowledgement | Debug/Release `727/727`, full solution analysis, PREfast, complete service/client Clang-Tidy, repository validation, release-candidate hostility, exact signed package, and Windows 11/Driver Verifier acceptance passed at `974d2c4` |
+| WP-16 production backend admission | Native mutual-TLS transport, exact certificate rotation, signed remote policy and crash-safe cache, durable lease/replay/evidence/game state, revocation/expiry/restart behavior, and typed game adapter | Managed Debug/Release `26/26`, real loopback mutual TLS, role separation, direct durable-restart tests, and shared C/C++ protocol tests pass locally; hosted and final endpoint regression evidence are recorded before merge |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation

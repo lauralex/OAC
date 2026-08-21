@@ -333,6 +333,37 @@ DWORD VerifyDetachedSignature(
 
 namespace oac
 {
+DWORD VerifySignedRecordBytes(
+    const std::vector<unsigned char>& recordBytes,
+    const std::vector<unsigned char>& signatureBytes,
+    DWORD exactRecordSize,
+    const wchar_t* signerRegistryValue,
+    VerifiedSignedRecord& verified)
+{
+    verified = {};
+    if (exactRecordSize == 0 || recordBytes.size() != exactRecordSize ||
+        signatureBytes.empty() ||
+        signatureBytes.size() > kMaximumSignatureBytes ||
+        signerRegistryValue == nullptr || *signerRegistryValue == L'\0')
+        return ERROR_INVALID_PARAMETER;
+
+    verified.Bytes = recordBytes;
+    DWORD error = ERROR_SUCCESS;
+    error = HashBytes(verified.Bytes, verified.Digest);
+    if (error != ERROR_SUCCESS) return error;
+    error = VerifyDetachedSignature(
+        signatureBytes, verified.Bytes, verified.SignerCertificate);
+    if (error != ERROR_SUCCESS) return error;
+    error = HashBytes(verified.SignerCertificate, verified.SignerDigest);
+    if (error != ERROR_SUCCESS) return error;
+    std::array<unsigned char, OAC_POLICY_HASH_SIZE> pinnedSigner{};
+    error = ReadPinnedSigner(signerRegistryValue, pinnedSigner);
+    if (error != ERROR_SUCCESS) return error;
+    return verified.SignerDigest == pinnedSigner
+        ? ERROR_SUCCESS
+        : ERROR_ACCESS_DISABLED_BY_POLICY;
+}
+
 DWORD VerifySignedRecord(
     const std::wstring& recordPath,
     const std::wstring& signaturePath,
@@ -351,26 +382,20 @@ DWORD VerifySignedRecord(
     UniqueHandle signatureFile;
     error = OpenRegularFile(signaturePath, signatureFile);
     if (error != ERROR_SUCCESS) return error;
+    std::vector<unsigned char> recordBytes;
     error = ReadFileBytes(
-        recordFile.get(), exactRecordSize, exactRecordSize, verified.Bytes);
+        recordFile.get(), exactRecordSize, exactRecordSize, recordBytes);
     if (error != ERROR_SUCCESS) return error;
-    std::vector<unsigned char> signature;
+    std::vector<unsigned char> signatureBytes;
     error = ReadFileBytes(
-        signatureFile.get(), 0, kMaximumSignatureBytes, signature);
+        signatureFile.get(), 0, kMaximumSignatureBytes, signatureBytes);
     if (error != ERROR_SUCCESS) return error;
-    error = HashBytes(verified.Bytes, verified.Digest);
-    if (error != ERROR_SUCCESS) return error;
-    error = VerifyDetachedSignature(
-        signature, verified.Bytes, verified.SignerCertificate);
-    if (error != ERROR_SUCCESS) return error;
-    error = HashBytes(verified.SignerCertificate, verified.SignerDigest);
-    if (error != ERROR_SUCCESS) return error;
-    std::array<unsigned char, OAC_POLICY_HASH_SIZE> pinnedSigner{};
-    error = ReadPinnedSigner(signerRegistryValue, pinnedSigner);
-    if (error != ERROR_SUCCESS) return error;
-    return verified.SignerDigest == pinnedSigner
-        ? ERROR_SUCCESS
-        : ERROR_ACCESS_DISABLED_BY_POLICY;
+    return VerifySignedRecordBytes(
+        recordBytes,
+        signatureBytes,
+        exactRecordSize,
+        signerRegistryValue,
+        verified);
 }
 
 ULONGLONG CurrentUnixSeconds() noexcept

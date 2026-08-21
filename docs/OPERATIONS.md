@@ -1,8 +1,9 @@
 # Operations and incident runbooks
 
 These runbooks define the minimum control flow for a future OAC deployment. They are intentionally
-short and decision-oriented. The repository does not supply the production backend, updater,
-certificate infrastructure, monitoring service, or on-call organization needed to execute them.
+short and decision-oriented. The repository supplies a bounded single-node admission backend, but
+not its certificate infrastructure, managed database, updater, monitoring stack, backup service, or
+on-call organization.
 
 ## Release promotion
 
@@ -28,6 +29,45 @@ symbols archived, SBOM valid, and platform acceptance complete.
 **Abort condition:** any identity mismatch, unexplained binary change, signature or timestamp
 failure, support regression, unexpected data collection, nonzero relevant crash rate, or inability
 to restore the rollback package.
+
+## Backend deployment
+
+1. Build the framework-dependent .NET 8 backend and game-adapter package from the exact reviewed
+   source commit. Preserve their hashes with the endpoint release record.
+2. Provision distinct endpoint-controller and game-server client-authentication identities. Put
+   private keys in the platform secret/key store; configure only SHA-256 certificate pins in OAC.
+3. Install the HTTPS server identity through the managed Kestrel configuration provider. Configure
+   the endpoint's normal TLS trust and exact server pin independently.
+4. Place the signed policy, detached signature, movement rules, and backend data directory on
+   non-reparse, access-controlled storage. The policy and rules must name the same game and build.
+5. Run `dotnet OAC.Backend.dll validate`, verify a protected backup and restore, then start one
+   backend writer. Do not place two processes on the same data directory.
+6. Prove role separation: endpoint credentials may fetch policy/open/renew/upload but not submit
+   game events; game-server credentials may submit game events but not use endpoint routes.
+7. Admit traffic only after replay, restart, revocation, partial-write, and ambiguous-response tests
+   pass in the deployment environment. Monitor session, retired-receipt, game-state, and log bounds;
+   capacity exhaustion is an admission failure, not an invitation to delete live state.
+
+The included storage engine is intentionally single-node. A managed replacement may shard or
+replicate it only if durable append precedes acknowledgement, request/session correlation stays
+exact, replay state survives restart, and one credential/scope cannot open competing live sessions.
+
+## Backend credential rotation and revocation
+
+1. Add one reviewed rotation pin while retaining the active pin. Endpoint configuration lists the
+   preferred usable client identity first; the backend accepts at most two identities for each role.
+2. Deploy the new certificate and private key through the platform credential store. Verify its
+   validity, client-authentication usage, key strength, private-key access, and exact pin.
+3. Put the new endpoint identity first when both certificates are valid and immediate cutover is
+   intended. Restart the affected component and prove mutual TLS and role separation with it.
+4. Move all callers, then remove the old pin and key.
+5. For an admitted endpoint that must be stopped immediately, run
+   `dotnet OAC.Backend.dll revoke SESSION_ID_HEX` against the same protected data directory. Confirm
+   the next renewal is terminal and the endpoint contains its target tree.
+
+A client-certificate pin change is deployment configuration; it does not authorize a new signed
+policy. Policy publication still requires the offline policy signer and the existing replay,
+rollback, and emergency-revocation rules.
 
 ## Rollback
 

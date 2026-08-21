@@ -4,6 +4,9 @@
     <ClCompile Include="backend.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="backend_http.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="endpoint_preflight.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -48,6 +51,9 @@
     <ClCompile Include="..\shared\oac_backend.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\shared\oac_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\shared\oac_manifest.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -60,6 +66,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="backend.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="backend_http.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="endpoint_preflight.hpp">
@@ -93,6 +102,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_backend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\shared\oac_game.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\shared\oac_lease.h">

@@ -15,7 +15,7 @@ Implementation does not imply universal detection, prevention, or platform compa
 | Suspended launch | The service resolves and holds the executable under the caller identity, creates it suspended with the caller's primary token, confirms the exact process handle, and then resumes the first thread. |
 | Signed build authorization | Before arming the driver, the service requires a canonical detached-signed manifest, an explicitly provisioned signer pin, exact executable and Authenticode-signer identity, bounded compatibility/expiry, and monotonic per-game rollback state. The named VM/Verifier campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests. |
 | Signed policy | At service start, a canonical detached-signed policy must match the protected policy signer, component revisions, bounded validity period, and canonical rule set. Game/build scope is checked before launch. Per-game/channel state rejects replay and equivocation, permits only an explicitly signed rollback from the exact current digest, and makes emergency revocation terminal. The named Windows 11 campaign passed the signer, scope, expiry, rollback, authorized-rollback, and emergency-revocation cases. |
-| Backend session | The service opens a transport-independent authenticated session before claiming the driver. A digest of the session identity and nonces is bound into the production driver session. Signed policy bounds lease, grace, renewal, and evidence-acknowledgement intervals; nonce replay, lease loss, revocation, queue exhaustion, and acknowledgement timeout fail closed. The named VM/Verifier campaign passed replay rejection, acknowledgement-loss and lease-loss target-tree containment, and fresh-session recovery. The included transport is a protected, test-only mock; a production network transport and backend service are not included. |
+| Backend session | The service can use either the protected VM test double or a production WinHTTP transport. Production mode requires normal HTTPS validation, exact server-certificate pins, and a strong pinned client certificate from the machine store. The separate .NET backend enforces endpoint/game-server certificate roles, signed policy scope, nonce replay protection, exclusive active endpoint admission, bounded leases, revocation, durable evidence acknowledgement, and restart recovery. A digest of the session identity and nonces is bound into the driver session; lease loss, revocation, queue exhaustion, and acknowledgement timeout fail closed. |
 | Endpoint preflight | Before exposing launcher IPC, the service arms image logging and the driver-load gate, requests the exact required current-state scan, and requires explicit completion for kernel modules, process state, dangerous handles, kernel integrity, and platform state. Scan evidence is typed, correlated by a nonzero scan ID, delivered to the backend contract, and acknowledged before launch can be admitted. Incomplete work, evidence loss, a policy denial, or a gate trip fails closed. |
 | Loaded-driver trust | A frozen kernel-module snapshot is resolved in user mode. Every reported module must have a readable canonical path, a nonempty Authenticode SHA-256, and valid embedded or catalog trust, and must avoid the compiled exact-hash deny set and conservative deny/review families. The same generated policy and trust implementation are shared with the diagnostic client. |
 | Runtime module authorization | The signed game manifest carries up to 16 sorted module SHA-256 values and may explicitly permit trusted files beneath the Windows directory. Target image events are authorized by current path, content hash, and trust; the main executable is admitted by its manifest hash. Any other target module becomes a typed critical policy record. |
@@ -33,8 +33,8 @@ Implementation does not imply universal detection, prevention, or platform compa
 
 The current production path intentionally supports one target and no command-line arguments.
 Create-time job assignment, complete mapped-file identity binding, manifest-key rotation, a tuned
-game-specific module/JIT catalog, a deployable authenticated backend transport, durable remote
-storage, and target-session reuse remain planned work. The endpoint-trust boundary passed its exact
+game-specific module/JIT catalog, managed backend deployment, and target-session reuse remain
+planned work. The endpoint-trust boundary passed its exact
 commit-bound Windows 11 build 26100 and standard Driver Verifier campaign at `974d2c4`; that result
 does not extend the supported-platform or workload-compatibility matrix.
 
@@ -50,11 +50,14 @@ privileged endpoint channel.
 | Replay handling | Sequence, tick, and replay offset must increase. Replayed, reordered, foreign-scope, malformed, and corrupt-state input cannot advance detector state. Forward gaps remain typed findings. |
 | Movement invariant | A deterministic reference detector checks each authoritative horizontal and vertical displacement against configured tick-scaled speed and tolerance bounds, and separately checks reported velocity. Server corrections bypass only the position envelope. |
 | Risk integration | Typed behavior findings accumulate in bounded state. A separate endpoint-risk input contributes to a saturated combined score while remaining distinguishable in the result. Endpoint-only risk remains observational; Review or Reject requires server-side behavior risk. Decisions are Accept, Observe, Review, Reject, Replay, or Invalid. |
-| Test boundary | Driver-free C/C++ tests cover exact layouts, hostile records and rules, replay, identity, gaps, movement, velocity, correction, coordinate extremes, combined risk, and saturation. |
+| Authenticated adapter | `OAC.GameAdapter` serializes one admitted game session, creates a fresh nonce for each event, requires normal TLS plus an exact server-certificate pin, and advances its sequence only after a correlated durable response. An ambiguous response makes the session require fresh admission. |
+| Durable evaluation | `OAC.Backend` stores canonical requests, detector state, decisions, and a global durable sequence before replying. Startup replays and validates stored decisions; request replay, foreign scope, expired admission, and revoked credentials fail closed. |
+| Test boundary | C/C++ tests cover exact layouts and hostile records. .NET tests cover restart recovery, real loopback mutual TLS, certificate-role separation and rotation, request replay, expiry, revocation, partial evidence batches, and the game adapter. |
 
-The record's server-authority flag is provenance, not authentication. A deployment still needs an
-authenticated transport, durable state and replay storage, a real game adapter, signed per-build
-rules, additional gameplay detectors, and an adjudication workflow. See the
+The record's server-authority flag is provenance, not authentication; the mutual-TLS backend route
+provides that external identity boundary. A deployment still needs per-build movement rules,
+additional gameplay detectors, integration with its account/matchmaking system, and an
+adjudication workflow. See the
 [game integration guide](GAME_INTEGRATION.md) for the contract and example.
 
 ## Release boundary
@@ -132,8 +135,9 @@ evaluated by the service and marked with service/signature provenance; the signe
 the runtime allowlist rather than display names. Policy updates are signed and locally
 replay-protected. The backend session contract carries evaluated records with monotonic service
 sequences and advances retained-alert acknowledgement only after the backend acknowledges delivery.
-The test transport exercises this contract in process; authenticated remote policy delivery and
-durable server persistence remain later work.
+The deterministic transport exercises failure policy in process; network mode adds mutually
+authenticated delivery, signed remote-policy refresh, durable acknowledgement, replay state, and
+restart recovery through the separate backend.
 
 Diagnostic reports use a per-run identifier, sequence and timestamps, an unkeyed SHA-256 finding
 chain, artifact digests, atomic replacement, and a checksum sidecar. These detect accidental or

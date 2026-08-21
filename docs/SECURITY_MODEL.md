@@ -8,8 +8,9 @@ detector passed local and PR #19 hosted driver-free acceptance at
 unsigned release-candidate boundary. WP-15 endpoint admission, loaded-driver trust, runtime-module
 authorization, and typed target observations passed the exact signed-package, networkless Windows
 11 build 26100, and standard Driver Verifier campaign at
-`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. Production certification, keys, and distribution remain
-external.
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. WP-16 adds the production transport and a separate,
+single-node .NET backend with durable admission/evidence/game state. Managed deployment,
+production credentials, certification, and distribution remain external.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -50,8 +51,9 @@ trust boundaries, adversaries, and failure behavior.
 | Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests plus integrated signed-policy VM execution pass |
 | Game manifest | The service requires a canonical detached-signed manifest, explicitly provisioned signer pin, exact executable and Authenticode signer, bounded compatibility/expiry, and protected per-game high-water state before arming the driver | The named campaign accepted two authorized launches and rejected modified, wrong-build, expired, and rollback manifests; the driver-free suite covers the record and decision rules |
 | Signed policy | A canonical detached-signed record binds rules and mode to game/build/channel scope, component compatibility, expiry, persistent update state, explicit rollback authorization, and emergency revocation | Driver-free, signed-package, restricted-service, and Driver Verifier acceptance passed at the named commit |
-| Backend session | The service requires a correlated session before claiming the driver, binds a digest of the session and nonces into driver status, applies signed lease/renewal/acknowledgement bounds, and stops on replay, expiry, revocation, queue exhaustion, or acknowledgement timeout | Driver-free and Windows 11 VM/Verifier cases passed replay rejection, acknowledgement-loss and lease-loss target-tree containment, and fresh-session recovery; the included transport remains a protected test double rather than a production network service |
-| Game/server behavior | Portable canonical records bind authoritative movement to game, build, backend session, match, player pseudonym, replay, sequence, and server tick; a deterministic detector enforces replay ordering, movement and velocity bounds, and typed risk | Driver-free C/C++ coverage exercises hostile records and rules, replay, identity, gaps, exact bounds, server corrections, coordinate extremes, and combined behavior/endpoint risk; no production transport or game deployment is implied |
+| Backend session | The service requires a correlated session before claiming the driver, binds a digest of the session and nonces into driver status, applies signed lease/renewal/acknowledgement bounds, and stops on replay, expiry, revocation, queue exhaustion, or acknowledgement timeout. Network mode uses bounded WinHTTP mutual TLS, normal server validation plus an exact pin, and a protected endpoint client identity. | Driver-free and Windows 11 VM/Verifier cases passed the local failure policy. Managed tests exercise real loopback mutual TLS, role separation and rotation, durable acknowledgement, replay, expiry, revocation, restart, and partial-write recovery against the separate backend. |
+| Remote policy | Network mode fetches an exact detached-signed policy before session admission. The service authenticates signer and scope, applies existing rollback/emergency decisions, writes an inactive protected cache slot, flushes it, and only then advances high-water state. | Shared validators cover wire hostility; managed/backend tests cover exact policy delivery; local policy and update decisions retain their existing signed-package and VM coverage. An offline fallback is permitted only for connectivity/server availability errors and only while the selected signed policy remains valid. |
+| Game/server behavior | A role-pinned game server submits canonical movement records through the typed .NET adapter. The backend binds them to an admitted endpoint session, persists the event and detector state before replying, and enforces replay ordering, movement and velocity bounds, and typed risk. | C/C++ units cover hostile records/rules and exact detector semantics. Managed tests cover role separation, real mutual TLS, durable game decisions, restart replay rejection, response correlation, and ambiguous-transaction failure. No particular game engine or adjudication policy is implied. |
 | Release supply chain | A checked-in profile binds versions, compatibility revisions, SDK, and exact public/lab artifacts to source; the candidate carries hashes and an SPDX SBOM, embeds leaf-only PDB references, and separates private symbols | Local and hosted candidate validation can prove the unsigned boundary; only Microsoft certification, protected production signatures, final signed manifests, and platform admission can establish publication trust |
 | Privacy operations | Raw hardware values stay out of reports; typed evidence, pseudonymous game records, role separation, bounded retention, access/deletion, appeal, and incident requirements are documented | Source enforces the local HWID/report boundary; a production operator and backend are still required to implement and audit the operational policy |
 
@@ -161,6 +163,22 @@ administrator, kernel, firmware, or hypervisor trustworthy.
   queue is fixed-size, launch requires a currently healthy lease, and replay, lease loss,
   revocation, queue exhaustion, or acknowledgement timeout terminates the service and target job.
   The kernel performs no network or blocking backend work.
+- The network transport accepts only an HTTPS origin, disables redirects and proxy discovery, uses
+  bounded WinHTTP timeouts, retains normal TLS chain and host-name validation, and additionally pins
+  one active server certificate plus at most one rotation certificate. It selects one current,
+  strong, private-key-backed endpoint certificate from the protected machine store and never embeds
+  reusable credentials in source or configuration files.
+- Remote policy bytes are not authoritative merely because the transport delivered them. The
+  service revalidates the exact wire correlation, detached CMS signature, configured signer pin,
+  policy scope, expiry, component compatibility, rollback state, and emergency-revocation semantics.
+  It commits cache bytes before the protected high-water record so interruption cannot authenticate
+  a partial update.
+- The backend authenticates endpoint and game-server certificate roles independently, preserves a
+  bounded replay window and monotonic request sequences, flushes evidence and game decisions before
+  acknowledgement, validates sealed state and append logs on restart, and refuses a second live
+  admission for the same endpoint credential and scope. The included store is single-writer and
+  requires protected host storage; its SHA-256 seals detect corruption but do not replace operating-
+  system access control.
 - Driver producers emit observations with unevaluated policy state. The service polls both evidence
   channels and evaluates stable rule ID, event type, category, severity range, and required
   provenance through the authenticated policy's canonical rule set. Source confidence and
@@ -197,10 +215,9 @@ driver-free tests, so it does not extend the recorded Windows runtime claim.
 ## Planned controls
 
 - Manifest and policy signer rotation and revocation metadata, representative module/middleware and
-  approved-JIT tuning, stable mapped-file identity, create-time job assignment, remote policy
-  delivery, production authenticated network transport, durable evidence and replay storage, a
-  production game adapter, broader game-specific detectors, production certification/signing, and
-  backend operations.
+  approved-JIT tuning, stable mapped-file identity, create-time job assignment, durable local
+  evidence recovery, broader game-specific detectors, production certification/signing, and
+  managed backend operations.
 
 ## Evidence and enforcement
 

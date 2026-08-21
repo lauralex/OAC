@@ -69,6 +69,31 @@ $candidate = Join-Path $env:TEMP 'oac-candidate'
 
 The output directory must be outside the repository and must not already exist.
 
+## Backend deliverables
+
+The Windows endpoint candidate above remains a narrow native package. The separately deployable
+backend is built from [`OAC-backend`](../OAC-backend/) and published as two independent artifacts:
+
+- a framework-dependent .NET 8 `OAC.Backend` application; and
+- an `OAC.GameAdapter` NuGet package for authoritative game-server integration.
+
+```powershell
+dotnet restore .\OAC-backend\tests\OAC.Backend.Tests.csproj --locked-mode
+dotnet publish .\OAC-backend\OAC.Backend.csproj -c Release --no-restore `
+  -o $env:TEMP\oac-backend
+dotnet pack .\OAC-backend\game-adapter\OAC.GameAdapter.csproj -c Release `
+  --no-restore -o $env:TEMP\oac-game-adapter
+```
+
+The release profile binds the endpoint and backend wire compatibility, while backend server
+configuration, certificate pins, policy records, private keys, and durable state remain deployment
+inputs and must never enter either artifact. Public CI uploads these managed artifacts separately
+for review; they are not a managed production deployment or a substitute for promotion approval.
+The exact managed dependency is locked, and its separate license is recorded in
+[`OAC-backend/THIRD-PARTY-NOTICES.md`](../OAC-backend/THIRD-PARTY-NOTICES.md). A production promotion
+must add the managed artifacts and dependency inventory to the release SBOM and preserve their exact
+hashes alongside the endpoint candidate.
+
 ## Reproducible metadata
 
 The candidate records:
@@ -99,9 +124,11 @@ the generator inventories release files; it is not a binary license scanner.
 The [SPDX 2.3 specification](https://spdx.github.io/spdx-spec/v2.3/) and its
 [conformance rules](https://spdx.github.io/spdx-spec/v2.3/conformance/) are the format authority.
 
-OAC does not package third-party libraries. Windows system components and the Microsoft toolchain
-are build/runtime prerequisites rather than redistributed components, so they are captured in the
-build metadata and support boundary rather than listed as package files.
+The native endpoint candidate does not package third-party libraries. Windows system components and
+the Microsoft toolchain are build/runtime prerequisites rather than redistributed components, so
+they are captured in the build metadata and support boundary rather than listed as package files.
+The separate backend artifact carries its locked managed cryptography dependency and therefore
+requires its own dependency inventory during production promotion.
 
 ## Symbols
 

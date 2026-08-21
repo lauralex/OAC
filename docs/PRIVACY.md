@@ -2,9 +2,9 @@
 
 OAC is designed around data minimization: collect the evidence needed for a defined security
 decision, keep raw sensitive values out of ordinary reports, retain records for a bounded period,
-and make enforcement reviewable. The repository does not operate a production service, so this
-document defines the minimum policy a future operator must adopt; it is not a statement that a live
-OAC data service already exists.
+and make enforcement reviewable. The repository includes a deployable single-node reference
+backend, but it does not operate a hosted OAC service. This document defines the minimum policy a
+production operator must adopt; it is not a statement that a live data service already exists.
 
 > [!NOTE]
 > Production deployment needs jurisdiction-specific legal review, user notice, age and regional
@@ -58,7 +58,9 @@ Access is role-based and least-privileged:
 Encrypt data in transit and at rest, separate production and test stores, rotate service
 credentials, log every privileged read/export/delete, and alert on bulk access. Private symbols,
 dumps, signing records, and evidence exports belong in separate restricted stores. Test data must
-not be copied into production.
+not be copied into production. The included reference backend relies on operating-system access
+control and an exclusive single-writer store; a production deployment must add managed encryption,
+backup, retention, deletion, audit, and replica controls before accepting real player evidence.
 
 ## Access, deletion, and appeal
 

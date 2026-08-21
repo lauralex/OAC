@@ -72,13 +72,17 @@ static int OacBackendResponseHeaderValid(
     uint32_t expectedType,
     uint64_t requestSequence,
     const uint8_t expectedSessionId[OAC_BACKEND_SESSION_ID_SIZE],
-    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
+    int requireZeroSession)
 {
     return header != NULL && header->Revision == OAC_BACKEND_PROTOCOL_REVISION &&
         header->Size == expectedSize && header->MessageType == expectedType &&
         header->Flags == 0 && header->RequestSequence == requestSequence &&
         OacBackendResultValid(header->Result) && header->Reserved == 0 &&
-        (expectedSessionId != NULL
+        (requireZeroSession
+            ? OacBackendBytesAreZero(
+                header->SessionId, OAC_BACKEND_SESSION_ID_SIZE)
+            : expectedSessionId != NULL
             ? OacBackendBytesEqual(
                 header->SessionId,
                 expectedSessionId,
@@ -146,7 +150,8 @@ int OacBackendValidateOpenResponse(
             OAC_BACKEND_MESSAGE_OPEN_SESSION,
             request->Header.RequestSequence,
             NULL,
-            requestNonceSha256) &&
+            requestNonceSha256,
+            0) &&
         response->Header.Result == OAC_BACKEND_RESULT_ACCEPTED &&
         !OacBackendBytesAreZero(
             response->Header.SessionId, sizeof(response->Header.SessionId)) &&
@@ -197,7 +202,8 @@ int OacBackendValidateRenewResponse(
             OAC_BACKEND_MESSAGE_RENEW_LEASE,
             request->Header.RequestSequence,
             request->Header.SessionId,
-            requestNonceSha256) ||
+            requestNonceSha256,
+            0) ||
         response->Header.Result != OAC_BACKEND_RESULT_ACCEPTED ||
         response->LeaseSequence <= request->CurrentLeaseSequence ||
         response->Revoked > 1)
@@ -315,10 +321,145 @@ int OacBackendValidateUploadResponse(
             OAC_BACKEND_MESSAGE_UPLOAD_EVIDENCE,
             request->Header.RequestSequence,
             request->Header.SessionId,
-            requestNonceSha256) &&
+            requestNonceSha256,
+            0) &&
         response->Header.Result == OAC_BACKEND_RESULT_ACCEPTED &&
         (decision == OAC_BACKEND_ACK_ACCEPT_CURRENT ||
          decision == OAC_BACKEND_ACK_ACCEPT_PROGRESS);
+}
+
+int OacBackendValidatePolicyRequest(
+    const OAC_BACKEND_POLICY_REQUEST* request,
+    size_t length,
+    uint64_t nowUnixSeconds)
+{
+    const int digestIsZero = request != NULL && OacBackendBytesAreZero(
+        request->CurrentPolicySha256,
+        sizeof(request->CurrentPolicySha256));
+
+    return request != NULL && length == sizeof(*request) &&
+        OacBackendRequestHeaderValid(
+            &request->Header,
+            (uint32_t)sizeof(*request),
+            OAC_BACKEND_MESSAGE_FETCH_POLICY,
+            nowUnixSeconds,
+            0) &&
+        !OacBackendBytesAreZero(request->GameId, sizeof(request->GameId)) &&
+        !OacBackendBytesAreZero(request->BuildId, sizeof(request->BuildId)) &&
+        !OacBackendBytesAreZero(request->ChannelId, sizeof(request->ChannelId)) &&
+        ((request->CurrentPolicyVersion == 0 && digestIsZero) ||
+         (request->CurrentPolicyVersion != 0 && !digestIsZero)) &&
+        OacBackendBytesAreZero(request->Reserved, sizeof(request->Reserved));
+}
+
+int OacBackendValidatePolicyResponse(
+    const OAC_BACKEND_POLICY_REQUEST* request,
+    const OAC_BACKEND_POLICY_RESPONSE* response,
+    size_t length,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
+    uint64_t nowUnixSeconds,
+    uint32_t driverProtocol,
+    uint32_t serviceProtocol,
+    uint32_t launcherProtocol)
+{
+    if (request == NULL || response == NULL ||
+        requestNonceSha256 == NULL || length != sizeof(*response) ||
+        !OacBackendResponseHeaderValid(
+            &response->Header,
+            (uint32_t)sizeof(*response),
+            OAC_BACKEND_MESSAGE_FETCH_POLICY,
+            request->Header.RequestSequence,
+            NULL,
+            requestNonceSha256,
+            1) ||
+        response->Header.Result != OAC_BACKEND_RESULT_ACCEPTED ||
+        response->PolicySize != sizeof(response->Policy) ||
+        response->SignatureSize == 0 ||
+        response->SignatureSize > sizeof(response->Signature) ||
+        OacBackendBytesAreZero(
+            response->Signature, response->SignatureSize) ||
+        !OacBackendBytesAreZero(
+            response->Signature + response->SignatureSize,
+            sizeof(response->Signature) - response->SignatureSize) ||
+        OacSignedPolicyValidate(
+            &response->Policy,
+            sizeof(response->Policy),
+            nowUnixSeconds,
+            driverProtocol,
+            serviceProtocol,
+            launcherProtocol) != OAC_SIGNED_POLICY_VALID ||
+        !OacSignedPolicyScopeMatches(
+            &response->Policy, request->GameId, request->BuildId) ||
+        !OacBackendBytesEqual(
+            response->Policy.ChannelId,
+            request->ChannelId,
+            sizeof(request->ChannelId)))
+    {
+        return 0;
+    }
+    return 1;
+}
+
+int OacBackendValidateGameRequest(
+    const OAC_BACKEND_GAME_REQUEST* request,
+    size_t length,
+    uint64_t nowUnixSeconds)
+{
+    return request != NULL && length == sizeof(*request) &&
+        OacBackendRequestHeaderValid(
+            &request->Header,
+            (uint32_t)sizeof(*request),
+            OAC_BACKEND_MESSAGE_SUBMIT_GAME_EVENT,
+            nowUnixSeconds,
+            1) &&
+        OacGameValidateMovementEvent(
+            &request->Event, sizeof(request->Event)) == OAC_GAME_VALID &&
+        OacBackendBytesEqual(
+            request->Header.SessionId,
+            request->Event.Header.Scope.BackendSessionId,
+            OAC_BACKEND_SESSION_ID_SIZE) &&
+        request->Header.RequestSequence == request->Event.Header.Sequence &&
+        request->EndpointRisk <= OAC_GAME_RISK_MAX && request->Reserved == 0;
+}
+
+static int OacBackendGameResultValid(
+    const OAC_GAME_DETECTOR_RESULT* result,
+    const OAC_BACKEND_GAME_REQUEST* request)
+{
+    return result != NULL && request != NULL &&
+        result->SchemaVersion == OAC_GAME_SCHEMA &&
+        result->Size == sizeof(*result) &&
+        result->Decision <= OAC_GAME_DECISION_INVALID &&
+        result->Reason <= OAC_GAME_REASON_INVALID_ENDPOINT_RISK &&
+        (result->Findings & ~OAC_GAME_VALID_FINDINGS) == 0 &&
+        result->Reserved == 0 &&
+        result->Sequence == request->Event.Header.Sequence &&
+        result->ServerTick == request->Event.Header.ServerTick &&
+        result->EndpointRisk == request->EndpointRisk &&
+        result->BehaviorRisk <= OAC_GAME_RISK_MAX &&
+        result->CombinedRisk <= OAC_GAME_RISK_MAX &&
+        result->RiskDelta <= OAC_GAME_RISK_MAX;
+}
+
+int OacBackendValidateGameResponse(
+    const OAC_BACKEND_GAME_REQUEST* request,
+    const OAC_BACKEND_GAME_RESPONSE* response,
+    size_t length,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+{
+    return request != NULL && response != NULL &&
+        requestNonceSha256 != NULL && length == sizeof(*response) &&
+        OacBackendResponseHeaderValid(
+            &response->Header,
+            (uint32_t)sizeof(*response),
+            OAC_BACKEND_MESSAGE_SUBMIT_GAME_EVENT,
+            request->Header.RequestSequence,
+            request->Header.SessionId,
+            requestNonceSha256,
+            0) &&
+        response->Header.Result == OAC_BACKEND_RESULT_ACCEPTED &&
+        OacBackendGameResultValid(&response->Result, request) &&
+        response->DurableSequence != 0;
 }
 
 int OacBackendAcceptNonceDigest(

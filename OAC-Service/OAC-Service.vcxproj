@@ -36,6 +36,9 @@
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <ClangTidyAdditionalOptions>-D_CRT_USE_BUILTIN_OFFSETOF $(ClangTidyAdditionalOptions)</ClangTidyAdditionalOptions>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
@@ -55,11 +58,12 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
-      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Crypt32.lib;Userenv.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Crypt32.lib;Ncrypt.lib;Userenv.lib;Winhttp.lib;Wintrust.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="backend.cpp" />
+    <ClCompile Include="backend_http.cpp" />
     <ClCompile Include="endpoint_preflight.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="manifest.cpp" />
@@ -70,12 +74,14 @@
     <ClCompile Include="target_scanner.cpp" />
     <ClCompile Include="..\shared\oac_driver_trust.cpp" />
     <ClCompile Include="..\shared\oac_backend.c" />
+    <ClCompile Include="..\shared\oac_game.c" />
     <ClCompile Include="..\shared\oac_manifest.c" />
     <ClCompile Include="..\shared\oac_policy.c" />
     <ClCompile Include="..\shared\oac_signed_policy.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="backend.hpp" />
+    <ClInclude Include="backend_http.hpp" />
     <ClInclude Include="endpoint_preflight.hpp" />
     <ClInclude Include="manifest.hpp" />
     <ClInclude Include="runtime_module.hpp" />
@@ -87,6 +93,7 @@
     <ClInclude Include="..\shared\oac_driver_hash_policy.hpp" />
     <ClInclude Include="..\shared\oac_driver_trust.hpp" />
     <ClInclude Include="..\shared\oac_backend.h" />
+    <ClInclude Include="..\shared\oac_game.h" />
     <ClInclude Include="..\shared\oac_lease.h" />
     <ClInclude Include="..\shared\oac_manifest.h" />
     <ClInclude Include="..\shared\oac_policy.h" />

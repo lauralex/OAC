@@ -9,11 +9,12 @@ a general compatibility promise.
 | Area | Status | Boundary |
 |---|---|---|
 | Source build | Supported for contributors | Visual Studio 2022, v143, Windows SDK/WDK `10.0.26100.0`, x64 Debug and Release |
+| Backend source build | Supported for contributors and CI | .NET 8 Debug and Release with locked dependencies, analyzers enabled, and framework-dependent publication |
 | Driver-free tests | Supported for contributors and CI | Exact suite and revisions recorded in the current development evidence |
 | Disposable VM | Tested on one named configuration | Windows 11 Pro build 26100, Generation 2 Hyper-V, networkless, Secure Boot off, test signing on, standard Driver Verifier |
 | Public unsigned candidate | Implemented | Exact public/lab allowlists, deterministic metadata, SPDX SBOM, checksums, private-symbol separation |
 | Production Windows deployment | Not supported | Microsoft certification, production signatures, rollout infrastructure, compatibility matrix, and operating approvals are absent |
-| Game integration | Reference implementation | Portable event/detector contracts exist; no production engine adapter, backend, account system, or adjudication service is supplied |
+| Backend and game integration | Reference implementation | Mutual-TLS admission, durable single-node state, typed .NET game adapter, and one movement detector are supplied; managed deployment, engine binding, account policy, and adjudication are not |
 
 The named VM campaign demonstrates behavior only for its exact source commit, Windows build,
 package, and security configuration. It does not certify Windows 10, Windows Server, other Windows

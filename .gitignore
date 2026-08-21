@@ -13,6 +13,8 @@ ARM/
 ARM64/
 Debug/
 Release/
+bin/
+obj/
 /OAC-Client/OAC-Client/
 *.obj
 *.o

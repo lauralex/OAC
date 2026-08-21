@@ -9,6 +9,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <set>
 #include <string>
 #include <type_traits>
@@ -98,6 +99,13 @@ static_assert(sizeof(OAC_BACKEND_REQUEST_HEADER) == 88);
 static_assert(sizeof(OAC_BACKEND_OPEN_REQUEST) == 184);
 static_assert(sizeof(OAC_BACKEND_OPEN_RESPONSE) == 144);
 static_assert(sizeof(OAC_BACKEND_EVIDENCE_ITEM) == 584);
+static_assert(sizeof(OAC_BACKEND_POLICY_REQUEST) == 184);
+static_assert(sizeof(OAC_BACKEND_POLICY_RESPONSE) == 10760);
+static_assert(offsetof(OAC_BACKEND_POLICY_RESPONSE, Signature) == 2568);
+static_assert(sizeof(OAC_BACKEND_GAME_REQUEST) == 352);
+static_assert(offsetof(OAC_BACKEND_GAME_REQUEST, Event) == 88);
+static_assert(sizeof(OAC_BACKEND_GAME_RESPONSE) == 184);
+static_assert(offsetof(OAC_BACKEND_GAME_RESPONSE, DurableSequence) == 176);
 static_assert(std::is_standard_layout_v<OAC_GAME_MOVEMENT_EVENT>);
 static_assert(std::is_trivially_copyable_v<OAC_GAME_DETECTOR_STATE>);
 static_assert(sizeof(OAC_GAME_MOVEMENT_EVENT) == 256);
@@ -4940,7 +4948,8 @@ void InitializeBackendResponseHeader(
     uint32_t size,
     uint32_t messageType,
     const OAC_BACKEND_REQUEST_HEADER& request,
-    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
+    bool includeSession = true)
 {
     header = {};
     header.Revision = OAC_BACKEND_PROTOCOL_REVISION;
@@ -4948,10 +4957,23 @@ void InitializeBackendResponseHeader(
     header.MessageType = messageType;
     header.RequestSequence = request.RequestSequence;
     header.Result = OAC_BACKEND_RESULT_ACCEPTED;
-    std::fill(
-        std::begin(header.SessionId),
-        std::end(header.SessionId),
-        uint8_t{0x42});
+    if (includeSession)
+    {
+        const bool requestHasSession = std::any_of(
+            std::begin(request.SessionId),
+            std::end(request.SessionId),
+            [](uint8_t value) { return value != 0; });
+        if (requestHasSession)
+            std::copy(
+                std::begin(request.SessionId),
+                std::end(request.SessionId),
+                std::begin(header.SessionId));
+        else
+            std::fill(
+                std::begin(header.SessionId),
+                std::end(header.SessionId),
+                uint8_t{0x42});
+    }
     std::copy(
         requestNonceSha256,
         requestNonceSha256 + OAC_BACKEND_DIGEST_SIZE,
@@ -4978,6 +5000,113 @@ OAC_BACKEND_OPEN_RESPONSE ValidBackendOpenResponse(
     response.GraceMilliseconds = request.MaximumGraceMilliseconds;
     response.RenewalIntervalMilliseconds =
         request.RenewalIntervalMilliseconds;
+    return response;
+}
+
+OAC_BACKEND_POLICY_REQUEST ValidBackendPolicyRequest(
+    uint64_t now,
+    const OAC_SIGNED_POLICY& policy)
+{
+    OAC_BACKEND_POLICY_REQUEST request{};
+    InitializeBackendRequestHeader(
+        request.Header,
+        sizeof(request),
+        OAC_BACKEND_MESSAGE_FETCH_POLICY,
+        1,
+        now,
+        false);
+    std::copy(std::begin(policy.GameId), std::end(policy.GameId), request.GameId);
+    std::copy(
+        std::begin(policy.BuildId), std::end(policy.BuildId), request.BuildId);
+    std::copy(
+        std::begin(policy.ChannelId),
+        std::end(policy.ChannelId),
+        request.ChannelId);
+    return request;
+}
+
+void InitializeBackendPolicyResponse(
+    OAC_BACKEND_POLICY_RESPONSE& response,
+    const OAC_BACKEND_POLICY_REQUEST& request,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE],
+    const OAC_SIGNED_POLICY& policy)
+{
+    response = {};
+    InitializeBackendResponseHeader(
+        response.Header,
+        sizeof(response),
+        OAC_BACKEND_MESSAGE_FETCH_POLICY,
+        request.Header,
+        requestNonceSha256,
+        false);
+    response.PolicySize = sizeof(response.Policy);
+    response.SignatureSize = 2;
+    response.Policy = policy;
+    response.Signature[0] = 0x30;
+    response.Signature[1] = 0x00;
+}
+
+OAC_BACKEND_GAME_REQUEST ValidBackendGameRequest(uint64_t now)
+{
+    OAC_BACKEND_GAME_REQUEST request{};
+    InitializeBackendRequestHeader(
+        request.Header,
+        sizeof(request),
+        OAC_BACKEND_MESSAGE_SUBMIT_GAME_EVENT,
+        1,
+        now,
+        true);
+    const auto gameId = GameIdentity<OAC_GAME_ID_SIZE>(0x10);
+    const auto buildId = GameIdentity<OAC_GAME_ID_SIZE>(0x30);
+    const auto backendSessionId = GameIdentity<OAC_GAME_ID_SIZE>(0x42);
+    const auto matchId = GameIdentity<OAC_GAME_ID_SIZE>(0x70);
+    const auto player = GameIdentity<OAC_GAME_PLAYER_ID_SIZE>(0x90);
+    const auto replay = GameIdentity<OAC_GAME_REPLAY_DIGEST_SIZE>(0xB0);
+    OAC_GAME_SESSION_CONTEXT session{};
+    if (!OacGameInitializeSession(
+            &session,
+            gameId.data(),
+            buildId.data(),
+            backendSessionId.data(),
+            matchId.data(),
+            player.data(),
+            replay.data()))
+    {
+        return {};
+    }
+    const std::array<int64_t, 3> position{};
+    const std::array<int32_t, 3> velocity{};
+    request.Event = CreateMovementEvent(
+        session, 100, 1000, position, velocity);
+    std::copy(
+        backendSessionId.begin(),
+        backendSessionId.end(),
+        request.Header.SessionId);
+    request.EndpointRisk = 100;
+    return request;
+}
+
+OAC_BACKEND_GAME_RESPONSE ValidBackendGameResponse(
+    const OAC_BACKEND_GAME_REQUEST& request,
+    const uint8_t requestNonceSha256[OAC_BACKEND_DIGEST_SIZE])
+{
+    OAC_BACKEND_GAME_RESPONSE response{};
+    InitializeBackendResponseHeader(
+        response.Header,
+        sizeof(response),
+        OAC_BACKEND_MESSAGE_SUBMIT_GAME_EVENT,
+        request.Header,
+        requestNonceSha256);
+    response.Result.SchemaVersion = OAC_GAME_SCHEMA;
+    response.Result.Size = sizeof(response.Result);
+    response.Result.Decision = OAC_GAME_DECISION_ACCEPT;
+    response.Result.Reason = OAC_GAME_REASON_NONE;
+    response.Result.Sequence = request.Event.Header.Sequence;
+    response.Result.ServerTick = request.Event.Header.ServerTick;
+    response.Result.EndpointRisk = request.EndpointRisk;
+    response.Result.CombinedRisk = request.EndpointRisk;
+    response.Result.RiskDelta = request.EndpointRisk;
+    response.DurableSequence = 1;
     return response;
 }
 
@@ -5202,6 +5331,94 @@ void TestBackendRecords(TestLog& log, const OAC_SIGNED_POLICY& policy)
             sizeof(upload),
             requestDigest.data(),
             0) == 0);
+
+    auto policyRequest = ValidBackendPolicyRequest(now, policy);
+    log.Expect("backend policy request accepts an empty local cache",
+        OacBackendValidatePolicyRequest(
+            &policyRequest, sizeof(policyRequest), now) != 0);
+    auto invalidPolicyRequest = policyRequest;
+    invalidPolicyRequest.Header.SessionId[0] = 1;
+    log.Expect("backend policy request is pre-session",
+        OacBackendValidatePolicyRequest(
+            &invalidPolicyRequest, sizeof(invalidPolicyRequest), now) == 0);
+    invalidPolicyRequest = policyRequest;
+    invalidPolicyRequest.CurrentPolicyVersion = policy.PolicyVersion;
+    log.Expect("backend policy cache version requires its digest",
+        OacBackendValidatePolicyRequest(
+            &invalidPolicyRequest, sizeof(invalidPolicyRequest), now) == 0);
+    auto policyResponse = std::make_unique<OAC_BACKEND_POLICY_RESPONSE>();
+    InitializeBackendPolicyResponse(
+        *policyResponse, policyRequest, requestDigest.data(), policy);
+    log.Expect("backend policy response binds scope and detached signature",
+        OacBackendValidatePolicyResponse(
+            &policyRequest,
+            policyResponse.get(),
+            sizeof(*policyResponse),
+            requestDigest.data(),
+            now,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION) != 0);
+    policyResponse->Signature[policyResponse->SignatureSize] = 1;
+    log.Expect("backend policy response requires a zero signature tail",
+        OacBackendValidatePolicyResponse(
+            &policyRequest,
+            policyResponse.get(),
+            sizeof(*policyResponse),
+            requestDigest.data(),
+            now,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION) == 0);
+    policyResponse->Signature[policyResponse->SignatureSize] = 0;
+    policyResponse->Policy.ChannelId[0] ^= 1;
+    log.Expect("backend policy response cannot cross a release channel",
+        OacBackendValidatePolicyResponse(
+            &policyRequest,
+            policyResponse.get(),
+            sizeof(*policyResponse),
+            requestDigest.data(),
+            now,
+            OAC_V5_VERSION,
+            OAC_IPC_PROTOCOL_REVISION,
+            OAC_IPC_PROTOCOL_REVISION) == 0);
+
+    auto game = ValidBackendGameRequest(now);
+    log.Expect("backend game request accepts a canonical server event",
+        OacBackendValidateGameRequest(&game, sizeof(game), now) != 0);
+    auto invalidGame = game;
+    ++invalidGame.Header.RequestSequence;
+    log.Expect("backend game request correlates event and request sequences",
+        OacBackendValidateGameRequest(
+            &invalidGame, sizeof(invalidGame), now) == 0);
+    invalidGame = game;
+    invalidGame.Event.Header.Scope.BackendSessionId[0] ^= 1;
+    log.Expect("backend game request binds the admitted endpoint session",
+        OacBackendValidateGameRequest(
+            &invalidGame, sizeof(invalidGame), now) == 0);
+    auto gameResponse = ValidBackendGameResponse(game, requestDigest.data());
+    log.Expect("backend game response correlates a durable detector decision",
+        OacBackendValidateGameResponse(
+            &game,
+            &gameResponse,
+            sizeof(gameResponse),
+            requestDigest.data()) != 0);
+    auto invalidGameResponse = gameResponse;
+    invalidGameResponse.Result.Sequence++;
+    log.Expect("backend game response cannot answer a different event",
+        OacBackendValidateGameResponse(
+            &game,
+            &invalidGameResponse,
+            sizeof(invalidGameResponse),
+            requestDigest.data()) == 0);
+    invalidGameResponse = gameResponse;
+    invalidGameResponse.DurableSequence = 0;
+    log.Expect("backend game response requires durable storage",
+        OacBackendValidateGameResponse(
+            &game,
+            &invalidGameResponse,
+            sizeof(invalidGameResponse),
+            requestDigest.data()) == 0);
 }
 
 void TestBackendSession(TestLog& log)

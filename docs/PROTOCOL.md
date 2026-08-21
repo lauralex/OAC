@@ -7,7 +7,9 @@ the complete runtime suite most recently passed at implementation commit
 `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` on Windows 11 build 26100 under standard Driver
 Verifier, including endpoint admission, loaded-driver trust, signed-manifest and signed-policy
 authorization, backend failure/recovery, job/liveness, typed evidence, bounded service scheduling,
-and integrated policy evaluation.
+and integrated policy evaluation. The current backend wire additionally carries signed-policy and
+canonical game-decision operations for the separate production transport and .NET admission
+service.
 
 `shared/protocol/oac_v5.h` and `shared/protocol/oac_validate.h` are the production wire-format and
 validation sources of truth. `shared/oac_protocol.h` defines the separate diagnostic compatibility
@@ -128,7 +130,7 @@ an explicit module digest, or—when the manifest enables the class—a Windows-
 valid embedded or catalog trust is admitted. Everything else becomes a typed critical runtime-module
 record. The current check binds the observed path, current file content, and trust result; complete
 mapped-file identity, approved JIT regions, middleware classification, child-process policy,
-manifest-key rotation, and production backend admission remain separate work.
+and manifest-key rotation remain separate work.
 
 ### Signed policy record
 
@@ -151,12 +153,16 @@ so they do not by themselves change the driver wire revision.
 
 ### Backend session contract
 
-`shared/oac_backend.*` defines packed, transport-independent records for session open, lease
-renewal, evidence submission, and acknowledgement. Every request carries an exact message type,
+`shared/oac_backend.*` defines backend wire revision `0x00010002` with packed,
+transport-independent records for signed-policy fetch, session open, lease renewal, evidence
+submission, acknowledgement, and canonical game-event decisions. Every request carries an exact message type,
 strict size, monotonic request sequence, fresh 256-bit nonce, bounded wall-clock validity, and—after
 open—the exact 128-bit backend session identity. Responses correlate the request sequence, session,
 message type, and SHA-256 of the request nonce. The replay window is bounded and rejects a nonce
-digest already accepted in that backend session.
+digest already accepted in that backend session. Policy fetch is pre-session and binds the exact
+game, build, channel, current policy version, and current digest. Game submission binds the
+authoritative event's backend session and sequence to the outer request and returns the durable
+backend sequence with the typed detector result.
 
 Open returns a server nonce and bounded lease terms. The service hashes the backend session ID,
 request-nonce digest, and server nonce into one nonzero binding digest, carries that digest in the
@@ -171,11 +177,22 @@ acknowledged the corresponding record. Nonce replay, malformed correlation, leas
 revocation, queue exhaustion, and acknowledgement timeout are terminal service errors; closing the
 service-owned job then contains the target tree.
 
-`BackendTransport` is the production integration seam. The checked-in transport is a protected,
-in-process authenticated test double with deterministic normal, replay, withheld-acknowledgement,
-lease-loss, and revocation scenarios. It proves the lifecycle and failure policy without pretending
-to provide network authentication or durable storage. A deployable transport and backend service
-remain separate production work.
+`BackendTransport` is the service integration seam. Disposable-VM tests keep the protected,
+in-process deterministic transport for reproducible replay, withheld-acknowledgement, lease-loss,
+and revocation cases. Production mode uses `backend_http.*`: an HTTPS-only, no-proxy, no-redirect
+WinHTTP client with bounded timeouts, normal TLS validation, an additional exact server pin, and a
+current strong client-authentication certificate selected from the protected machine store. The
+separate .NET 8 service in `OAC-backend/` authenticates endpoint and game-server roles with disjoint
+certificate pins, durably stores session/replay/evidence/game state, and acknowledges only after
+flushing the associated record.
+
+Remote policy uses the same detached signed-policy record accepted locally. Delivery over mutual
+TLS is necessary but not sufficient: the endpoint revalidates the response correlation, CMS
+signature, configured policy signer, scope, component compatibility, expiry, replay, rollback, and
+emergency-revocation rules. An accepted update is written to an inactive protected cache slot and
+flushed before the high-water record changes. Only connectivity and server-availability failures
+may use the previously authenticated cache, and only while that policy remains within its signed
+validity period.
 
 ### Strict validation and correlation
 
@@ -285,9 +302,8 @@ service selects the authenticated policy's rule set and deployment mode. It pres
 observation's original confidence and source provenance, queues the record with its exact decision,
 and ends the service runtime for `RevokeSession`. Current endpoint-preflight and driver-trust rules
 use `DenyLaunch`; runtime target violations may request review or revoke the session according to
-the signed deployment mode. The included backend transport
-acknowledges this strict local contract; production network delivery and server persistence remain
-later work.
+the signed deployment mode. Both the deterministic test transport and production backend must
+acknowledge the exact service sequence before the service advances retained-alert acknowledgement.
 
 ### Launcher/service IPC
 
@@ -329,7 +345,7 @@ authenticated diagnostic session; it is not advertised as a production capabilit
 The driver-free C/C++ unit executable covers layouts, distinct IOCTLs, exact message-type matching,
 request/response validation, evidence and snapshot correlation, the session transition matrix,
 hostile binary and UTF-16 event payloads, and backend record, replay, lease, queue, and
-acknowledgement behavior. The current driver-free suite includes more than 700 checks; the driver-backed VM
+acknowledgement behavior. The current driver-free suite passes `739/739`; the driver-backed VM
 campaign remains a separate runtime gate for each coherent kernel/runtime milestone.
 
 The driver-backed suite contains production negotiation/claim/status/revoke malformed-input checks,

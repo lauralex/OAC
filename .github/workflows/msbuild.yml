@@ -34,6 +34,75 @@ jobs:
       shell: pwsh
       run: .\tools\Test-OACRepository.ps1
 
+  backend:
+    name: backend
+    runs-on: windows-2022
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
+      with:
+        dotnet-version: '8.0.x'
+        cache: true
+        cache-dependency-path: OAC-backend/**/packages.lock.json
+
+    - name: Restore locked dependencies
+      run: dotnet restore .\OAC-backend\tests\OAC.Backend.Tests.csproj --locked-mode
+
+    - name: Build and test backend
+      shell: pwsh
+      run: |
+        foreach ($configuration in @('Debug', 'Release')) {
+          dotnet build .\OAC-backend\tests\OAC.Backend.Tests.csproj `
+            --configuration $configuration --no-restore
+          if ($LASTEXITCODE -ne 0) {
+            throw "Backend $configuration build failed with exit code $LASTEXITCODE"
+          }
+          dotnet run --project .\OAC-backend\tests\OAC.Backend.Tests.csproj `
+            --configuration $configuration --no-build --no-restore
+          if ($LASTEXITCODE -ne 0) {
+            throw "Backend $configuration tests failed with exit code $LASTEXITCODE"
+          }
+        }
+
+    - name: Verify managed formatting
+      run: dotnet format .\OAC-backend\tests\OAC.Backend.Tests.csproj --verify-no-changes --no-restore
+
+    - name: Publish backend deliverables
+      shell: pwsh
+      run: |
+        dotnet publish .\OAC-backend\OAC.Backend.csproj `
+          --configuration Release --no-restore `
+          --output (Join-Path $env:RUNNER_TEMP 'oac-backend')
+        if ($LASTEXITCODE -ne 0) {
+          throw "Backend publish failed with exit code $LASTEXITCODE"
+        }
+        dotnet pack .\OAC-backend\game-adapter\OAC.GameAdapter.csproj `
+          --configuration Release --no-restore `
+          --output (Join-Path $env:RUNNER_TEMP 'oac-game-adapter')
+        if ($LASTEXITCODE -ne 0) {
+          throw "Game-adapter packaging failed with exit code $LASTEXITCODE"
+        }
+
+    - name: Upload backend application
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: oac-backend-framework-dependent
+        if-no-files-found: error
+        retention-days: 14
+        path: ${{ runner.temp }}/oac-backend
+
+    - name: Upload game adapter
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: oac-game-adapter
+        if-no-files-found: error
+        retention-days: 14
+        path: ${{ runner.temp }}/oac-game-adapter
+
   build_matrix:
     name: build-${{ matrix.configuration }}
     runs-on: windows-2022
@@ -106,7 +175,7 @@ jobs:
   build:
     name: build
     if: always()
-    needs: [repository, build_matrix]
+    needs: [repository, backend, build_matrix]
     runs-on: windows-2022
     timeout-minutes: 5
 
@@ -115,10 +184,14 @@ jobs:
       shell: pwsh
       env:
         REPOSITORY_RESULT: ${{ needs.repository.result }}
+        BACKEND_RESULT: ${{ needs.backend.result }}
         MATRIX_RESULT: ${{ needs.build_matrix.result }}
       run: |
         if ($env:REPOSITORY_RESULT -ne 'success') {
           throw "Repository validation result: $env:REPOSITORY_RESULT"
+        }
+        if ($env:BACKEND_RESULT -ne 'success') {
+          throw "Backend validation result: $env:BACKEND_RESULT"
         }
         if ($env:MATRIX_RESULT -ne 'success') {
           throw "Debug/Release build matrix result: $env:MATRIX_RESULT"

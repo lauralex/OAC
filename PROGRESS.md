@@ -1,6 +1,6 @@
 # OAC hardening progress
 
-**Status date:** 2026-08-20
+**Status date:** 2026-08-21
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -12,7 +12,9 @@ foundation. WP-13 adds a portable game/server event interface and one determinis
 detector. WP-14 adds a source-bound unsigned release candidate, deterministic metadata, SPDX SBOM,
 private-symbol separation, support/privacy policy, and operational promotion controls. WP-15 adds a
 fail-closed production endpoint admission gate, loaded-driver trust, signed runtime-module policy,
-and bounded typed target observations.
+and bounded typed target observations. WP-16 adds a native mutually authenticated network
+transport, a separate durable .NET admission backend, signed remote-policy refresh, and a typed
+game-server adapter.
 Endpoint-trust implementation commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact
 signed-package, networkless Windows 11 build 26100, and standard Driver Verifier campaign described
 below.
@@ -40,6 +42,7 @@ remaining production-hardening work.
 | WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
 | WP-14 Production release engineering | Implemented; local acceptance | Exact unsigned public/lab/private-symbol bundles, source and toolchain metadata, SPDX SBOM, hostile candidate validation, CI artifact separation, and reviewed signing, update, support, privacy, and operations contracts are present; production certification/signing and deployed operations remain external gates |
 | WP-15 Production endpoint trust | Implemented; VM tested | Exact production scan/configuration, explicit completeness, frozen loaded-driver inventory, trust/hash/family policy, runtime-module authorization, typed memory/thread/lifecycle observations, and fail-closed evidence handling passed the complete local and Windows 11/Driver Verifier acceptance gates at `974d2c4` |
+| WP-16 Production backend admission | Implemented; local acceptance | HTTPS mutual TLS, role-separated certificate rotation, signed remote-policy refresh and crash-safe cache selection, durable lease/replay/evidence/game state, backend restart recovery, and the typed game adapter pass the managed and shared-contract suites; hosted and final endpoint regression gates remain required before merge |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
 certification or production readiness.
@@ -107,12 +110,16 @@ The current source is organized around these implementation areas:
   deterministic high-water decisions.
 - `shared/oac_driver_trust.*` and `shared/oac_driver_hash_policy.hpp`: common file and loaded-driver
   trust evaluation, generated denied hashes, signer classification, and blocked-family decisions.
-- `shared/oac_backend.h` and `shared/oac_backend.c`: transport-independent session, renewal,
-  evidence, and acknowledgement records; strict correlation and time bounds; replay-window,
-  acknowledgement, and queue-state decisions.
-- `OAC-Service/backend.hpp` and `OAC-Service/backend.cpp`: the nonblocking transport interface,
-  fixed-capacity evidence queue, lease lifecycle, driver binding digest, and protected deterministic
-  test backend. A production network transport and remote persistence are intentionally not supplied.
+- `shared/oac_backend.h` and `shared/oac_backend.c`: transport-independent policy, session, renewal,
+  evidence, acknowledgement, and game-decision records; strict correlation and time bounds;
+  replay-window, acknowledgement, and queue-state decisions.
+- `OAC-Service/backend.*` and `OAC-Service/backend_http.*`: the nonblocking transport interface,
+  fixed-capacity evidence queue, lease lifecycle, driver binding digest, protected deterministic
+  test transport, and bounded WinHTTP mutual-TLS production transport.
+- `OAC-backend/`: a separate .NET 8 admission service with role-separated client certificates,
+  signed-policy delivery, sealed alternating state snapshots, durable evidence/game append records,
+  restart recovery, explicit revocation, real loopback mutual-TLS tests, and a typed game-server
+  adapter.
 - `shared/oac_game.h` and `shared/oac_game.c`: portable canonical game-event construction, strict
   server identity and replay validation, bounded movement policy, persistent detector state, and
   explainable behavior/endpoint risk decisions. They have no Windows, driver, transport, game-engine,
@@ -154,12 +161,12 @@ identity rather than parsing signatures.
 |---|---|
 | `Debug|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
 | `Release|x64` full solution rebuild, `/W4 /WX`, `/nodeReuse:false` | Passed; zero warnings and errors |
-| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `727/727` in each configuration, including endpoint-scan completeness and correlation, loaded-driver trust policy, runtime-module authorization, typed target observations, canonical game events, backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
+| Current Debug and Release `OAC-Protocol-Unit.exe` | Passed; `739/739` in each configuration, including endpoint-scan completeness and correlation, loaded-driver trust policy, runtime-module authorization, typed target observations, canonical game events, backend, policy, manifest, protocol, lifetime, evidence, and scheduler coverage |
 | Release driver PREfast with `DriverMinimumRules` | Passed; zero reported warnings and errors |
 | Solution-wide Release C/C++ analysis | Passed; zero reported warnings and errors |
-| Current Clang-Tidy | All nine `OAC-Client` and all fourteen `OAC-Service` translation units passed with warnings treated as errors |
+| Current Clang-Tidy | All sixteen `OAC-Service` build translation units passed with warnings treated as errors; the unchanged nine-translation-unit `OAC-Client` baseline remains current |
 | `InfVerif /w OAC/OAC.inf` and WDK `Inf2Cat` | Passed; zero warnings and errors |
-| `tools/Test-OACRepository.ps1` (ten PowerShell, twelve XML, five YAML, one Python) | Passed |
+| `tools/Test-OACRepository.ps1` (ten PowerShell, thirteen C#, thirteen XML, five YAML, one Python) | Passed |
 | Release profile and candidate reconstruction under Windows PowerShell 5.1 and PowerShell 7 | Passed; all five hostile mutations rejected in both engines |
 | Generated `sbom.spdx.json` against the official SPDX 2.3 Draft 7 JSON schema | Passed |
 | Markdown local-link resolution across the repository | Passed |
@@ -201,6 +208,21 @@ Debug/Release builds, `663/663` tests in each configuration, and repository vali
 changes no driver, service, installer, or privileged Windows runtime behavior. Rebuilding a
 disposable VM would add no meaningful evidence for this portable server-side slice, so the existing
 WP-01 through WP-12 VM/Verifier evidence remains unchanged and no new VM campaign was run.
+
+## Current backend-admission validation
+
+The backend project restores from committed lock files and builds with nullable analysis, current
+.NET analyzers, and warnings treated as errors. Its Debug and Release suites pass `26/26` and
+exercise exact policy delivery, nonce/request replay, lease expiry, revocation, active-session
+exclusion, durable evidence
+acknowledgement, partial-batch recovery, game-state replay, backend restart, role-separated client
+certificates, bounded certificate rotation, real loopback mutual TLS, typed game-adapter response
+correlation, and fail-closed ambiguous transactions. The native driver-free suite independently
+validates the shared policy/game wire layouts and hostile input.
+
+The reference backend deliberately uses one protected writer and bounded local files. It is useful
+for a controlled deployment and as an executable contract, but it does not claim managed database,
+replication, service discovery, automated backup, fleet credential enrollment, or operational SLOs.
 
 ## Current endpoint-trust validation
 
@@ -269,24 +291,25 @@ was also removed during the requested workspace cleanup.
 ## Current pending gates
 
 - Hosted Debug/Release build, unit, and repository-validation checks remain required for each merge.
-- A real online admission boundary still requires a production authenticated transport, backend
-  service, credential lifecycle, and durable evidence and replay storage behind the implemented
-  interfaces.
+- The production transport and single-node backend are implemented. A supported online service
+  still requires managed deployment, fleet credential enrollment, service discovery, monitoring,
+  backup/restore automation, capacity planning, and operational approval.
 - WP-12 scanner modularization has commit-bound runtime acceptance and PR #18 hosted acceptance.
   The refactor does not add or relax a scanner capability.
 - WP-13 game/server integration passed its local and PR #19 hosted acceptance. A real game still
-  needs an authenticated adapter, signed rules, representative workload tuning, and additional
-  gameplay detectors.
+  needs an engine binding, signed game-specific rules, representative workload tuning, and
+  additional gameplay detectors beyond the included authenticated adapter and movement invariant.
 - WP-14 source controls and operating contracts are implemented; hosted candidate generation and
   repository checks must pass before merge, while real certification/signing and operational
   approval remain deployment gates.
 - WP-15 passed the complete local build, unit, analysis, release-profile, hostile-candidate,
   signed-package, Windows 11, and standard Driver Verifier gates at `974d2c4`.
-- WP-16 production transport/backend persistence is next. Create-time job assignment, stable
-  mapped-file identity, manifest-key rotation, and representative module/JIT tuning remain later
-  milestones.
+- WP-16 implementation is in final local/hosted acceptance. WP-17 create-time job assignment,
+  stable mapped-file identity, durable local evidence recovery, and manifest-key rotation remains
+  the next engineering milestone; representative module/JIT tuning remains separate deployment
+  work.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation
-and revocation metadata, production backend deployment, protected signing/certification, tuned game
-and middleware policy, and an approved supported-platform rollout.
+and revocation metadata, managed backend deployment, protected signing/certification, tuned game and
+middleware policy, and an approved supported-platform rollout.

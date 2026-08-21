@@ -61,7 +61,7 @@
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
-      <AdditionalDependencies>Bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>Advapi32.lib;Bcrypt.lib;Crypt32.lib;Ncrypt.lib;Winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -69,6 +69,7 @@
     <ClCompile Include="OAC-Protocol-Unit.cpp" />
     <ClCompile Include="..\..\OAC-Client\client_options.cpp" />
     <ClCompile Include="..\..\OAC-Service\backend.cpp" />
+    <ClCompile Include="..\..\OAC-Service\backend_http.cpp" />
     <ClCompile Include="..\..\shared\oac_backend.c" />
     <ClCompile Include="..\..\shared\oac_game.c" />
     <ClCompile Include="..\..\shared\oac_manifest.c" />
@@ -90,6 +91,7 @@
     <ClInclude Include="..\..\shared\protocol\oac_test.h" />
     <ClInclude Include="..\..\OAC-Service\target_scanner.hpp" />
     <ClInclude Include="..\..\OAC-Service\backend.hpp" />
+    <ClInclude Include="..\..\OAC-Service\backend_http.hpp" />
     <ClInclude Include="..\..\OAC-Client\client_options.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

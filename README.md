@@ -24,13 +24,13 @@ mode, while the kernel retains only the responsibilities that genuinely require 
 |---|---|
 | **Kernel** | Narrow session authority, creation-time target binding, callbacks, bounded endpoint scans, snapshots, and retained alerts |
 | **Service** | Signed authorization, endpoint trust admission, backend lease, suspended launch, target-job ownership, policy, and evidence delivery |
-| **Game server** | Canonical authoritative events, replay-safe state, and explainable reference rules |
+| **Backend** | Mutual-TLS admission, signed-policy delivery, durable lease/evidence/replay state, and authoritative game decisions |
 | **Release** | Exact public/lab allowlists, deterministic metadata, SPDX SBOM, checksums, and private-symbol separation |
 
 > [!IMPORTANT]
 > OAC is an engineering reference, **not a production-ready anti-cheat release**. The repository
 > does not provide production driver signing, a supported hardware and Windows compatibility
-> matrix, authenticated backend admission, or a production game adapter and adjudication service.
+> matrix, a managed multi-region backend deployment, or game-specific adjudication policy.
 > Never install the disposable test package on a workstation or production system.
 
 ## How it works
@@ -41,7 +41,7 @@ flowchart LR
     Launcher -->|"identity-checked local IPC"| Service["Restricted OAC service"]
     Manifest["Signed game manifest"] -->|"exact build"| Service
     Policy["Signed policy"] -->|"scope and rules"| Service
-    Backend["Backend session contract"] -->|"lease"| Service
+    Backend["OAC backend"] -->|"mutual TLS, policy, lease"| Service
     Service -->|"typed evidence"| Backend
     Service -->|"one-use ticket"| Driver["Demand-start OAC driver"]
     Driver -->|"bounded preflight and frozen module inventory"| Service
@@ -50,7 +50,8 @@ flowchart LR
     Service -->|"assign before resume"| Job["Kill-on-close job"]
     Job --> Target
     Driver -->|"retained alerts and events"| Service
-    Game["Authoritative game server"] -->|"canonical movement events"| Detector["Reference behavior detector"]
+    Game["Authoritative game server"] -->|"OAC game adapter"| Backend
+    Backend -->|"canonical movement events"| Detector["Reference behavior detector"]
     Replay["Replay identity and offset"] --> Detector
     Backend -.->|"endpoint risk"| Detector
     Detector -->|"typed risk decision"| GamePolicy["Game policy and adjudication"]
@@ -106,10 +107,13 @@ The current source includes:
   instrumentation callbacks;
 - signed rule policy with deployment mode, build and channel scope, bounded validity, component
   compatibility, replay protection, explicit rollback authorization, and emergency revocation;
-- a transport-independent backend session with nonce replay rejection, bounded leases, monotonic
-  evidence acknowledgement, a fixed service queue, and a test-only authenticated mock transport;
-- a portable game/server interface with canonical movement events, replay-safe state, a bounded
-  movement and velocity invariant, and explainable risk decisions;
+- a production WinHTTP transport with normal TLS validation, exact server pins, a strong
+  client-certificate identity, bounded I/O, signed remote-policy delivery, and crash-safe local
+  policy caching;
+- a separate .NET 8 backend with role-separated mutual TLS, durable lease/replay/evidence state,
+  certificate rotation, revocation, and restart recovery;
+- a typed .NET game-server adapter and portable C event contract with canonical movement events,
+  replay-safe state, a bounded movement and velocity invariant, and explainable durable decisions;
 - creation-time target binding, exact-handle confirmation, pre-resume job assignment, and target
   process-tree containment;
 - retained alerts, operational events, loss accounting, and frozen kernel-module snapshots;
@@ -135,10 +139,10 @@ OAC does not claim universal detection, a driver-load veto, or protection agains
 DMA device, hypervisor, or compromised firmware. Work still required for a deployable product
 includes:
 
-- a production authenticated network transport, backend admission service, and durable remote
-  evidence storage—the repository currently provides the strict transport contract and test mock;
-- a production game-engine adapter, authenticated event ingestion, durable replay storage, and
-  game-specific detectors beyond the included reference movement invariant;
+- managed database and multi-region deployment of the included single-node backend, per-device
+  credential enrollment, service discovery, observability, backup automation, and operational SLOs;
+- a game-engine-specific integration and adjudication policy beyond the included typed server
+  adapter and reference movement invariant;
 - manifest signer rotation and revocation metadata;
 - a tuned module, middleware, overlay, child-process, and approved-JIT policy for a real game; the
   current manifest supports exact module hashes and an explicit trusted-Windows-module class;
@@ -155,6 +159,7 @@ target, not evidence that a feature already exists.
 |---|---|
 | [`OAC/`](OAC/) | C17 WDM driver: sessions, callbacks, integrity checks, module/process scans, and telemetry |
 | [`OAC-Service/`](OAC-Service/) | Restricted controller, signed authorization, launch ownership, and scheduling |
+| [`OAC-backend/`](OAC-backend/) | .NET admission server, durable state, remote policy, tests, and game adapter |
 | [`OAC-Launcher/`](OAC-Launcher/) | Standard-user status and launch client |
 | [`OAC-Client/`](OAC-Client/) | Elevated laboratory scanner and diagnostic reports |
 | [`shared/`](shared/) | Wire contracts, game/server records, policy rules, strict validators, and common Windows support |
@@ -182,7 +187,8 @@ kept separately in the [development records](docs/development/README.md).
 
 ## Building OAC
 
-You need Visual Studio 2022, the x64 C++ toolchain, and Windows SDK/WDK `10.0.26100.0`.
+You need Visual Studio 2022, the x64 C++ toolchain, Windows SDK/WDK `10.0.26100.0`,
+and the .NET 8 SDK.
 
 ```powershell
 msbuild .\OAC.sln /m /t:Rebuild `
@@ -190,6 +196,11 @@ msbuild .\OAC.sln /m /t:Rebuild `
   /p:PreferredToolArchitecture=x64 /p:Inf2CatUseLocalTime=true
 
 .\x64\Release\OAC-Protocol-Unit.exe
+
+dotnet restore .\OAC-backend\tests\OAC.Backend.Tests.csproj --locked-mode
+dotnet build .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Release --no-restore
+dotnet run --project .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Release `
+  --no-build --no-restore
 ```
 
 The build intentionally produces an unsigned driver. **Do not weaken a development workstation to
@@ -215,8 +226,8 @@ OAC-Launcher.exe --launch "C:\Games\Example\Game.exe"
 
 The launch request accepts one absolute local executable path and no arguments. It requires an
 authorized adjacent game manifest, a matching active policy, and a healthy backend lease. It is not
-a general-purpose launcher. The included backend is a deterministic test double, not a production
-admission service.
+a general-purpose launcher. Disposable-VM tests use the deterministic mock transport; production
+mode uses the mutually authenticated admission backend in [`OAC-backend/`](OAC-backend/).
 
 ## Validation
 
@@ -224,8 +235,9 @@ The current accepted implementation has passed clean Debug and Release builds, d
 regression tests, PREfast, solution-wide static analysis, package and signing checks, and a
 networkless Windows 11 build 26100 campaign under standard Driver Verifier. The release profile,
 candidate reconstruction, SPDX schema, and hostile artifact mutations have separate validation.
-Runtime claims are
-limited to the exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
+The managed backend additionally has Debug/Release restart, durability, replay, revocation,
+certificate-role, rotation, and real loopback mutual-TLS tests. Runtime claims are limited to the
+exact commit and environment recorded in the [test matrix](docs/TEST_MATRIX.md); they
 are not a general Windows, HVCI/VBS, hardware, or game-compatibility certification. The portable
 game/server contract is covered by the driver-free suite and does not extend that Windows runtime
 claim.

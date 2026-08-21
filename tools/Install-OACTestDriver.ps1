@@ -1125,6 +1125,64 @@ function Assert-ProtectedStateRoot(
     }
 }
 
+function Assert-ProtectedPolicyState([string]$Path) {
+    $root = Get-Item -LiteralPath $Path
+    if (@($root.GetValueNames()).Count -ne 0) {
+        throw 'The signed-policy state root contains unexpected values.'
+    }
+    foreach ($keyName in @($root.GetSubKeyNames())) {
+        if ($keyName -cnotmatch '^[0-9A-F]{32}-[0-9A-F]{32}$') {
+            throw "The signed-policy state has an invalid key: $keyName"
+        }
+        $keyPath = Join-Path $Path $keyName
+        $key = Get-Item -LiteralPath $keyPath
+        try {
+            if (@($key.GetSubKeyNames()).Count -ne 0) {
+                throw "The signed-policy state has unexpected content: $keyPath"
+            }
+            $valueNames = @($key.GetValueNames())
+            $allowed = @(
+                'HighWater',
+                'RemotePolicyA', 'RemotePolicySignatureA',
+                'RemotePolicyB', 'RemotePolicySignatureB')
+            if ($valueNames -cnotcontains 'HighWater' -or
+                @($valueNames | Where-Object { $allowed -cnotcontains $_ }).Count -ne 0) {
+                throw "The signed-policy state has unexpected values: $keyPath"
+            }
+            foreach ($valueName in $valueNames) {
+                if ($key.GetValueKind($valueName) -ne
+                        [Microsoft.Win32.RegistryValueKind]::Binary) {
+                    throw "The signed-policy state value has an invalid type: $valueName"
+                }
+            }
+            $highWater = [byte[]]$key.GetValue('HighWater')
+            if ($highWater.Length -ne 160) {
+                throw "The signed-policy high-water record is malformed: $keyPath"
+            }
+            foreach ($slot in @('A', 'B')) {
+                $recordName = "RemotePolicy$slot"
+                $signatureName = "RemotePolicySignature$slot"
+                $hasRecord = $valueNames -ccontains $recordName
+                $hasSignature = $valueNames -ccontains $signatureName
+                if ($hasRecord -ne $hasSignature) {
+                    throw "The signed-policy cache slot is incomplete: $keyPath"
+                }
+                if ($hasRecord) {
+                    $record = [byte[]]$key.GetValue($recordName)
+                    $signature = [byte[]]$key.GetValue($signatureName)
+                    if ($record.Length -ne 2480 -or
+                        $signature.Length -lt 1 -or $signature.Length -gt 8192) {
+                        throw "The signed-policy cache slot is malformed: $keyPath"
+                    }
+                }
+            }
+        } finally {
+            $key.Close()
+        }
+        Assert-ProtectedStateAcl $keyPath -Inherited
+    }
+}
+
 function Assert-TrustStateRegistry(
     [byte[]]$ExpectedManifestSignerSha256,
     [byte[]]$ExpectedPolicySignerSha256,
@@ -1204,8 +1262,7 @@ function Assert-TrustStateRegistry(
     Assert-ProtectedStateAcl $policyStatePath
     Assert-ProtectedStateRoot `
         $manifestStatePath '^[0-9A-F]{32}$' 96 'game-manifest'
-    Assert-ProtectedStateRoot `
-        $policyStatePath '^[0-9A-F]{32}-[0-9A-F]{32}$' 160 'signed-policy'
+    Assert-ProtectedPolicyState $policyStatePath
 }
 
 function Initialize-TrustStateRegistry(
