@@ -432,22 +432,44 @@ DWORD LoadPolicy(VerifiedPolicy& verified)
     }
     else
     {
-        int slot = -1;
-        error = FindCurrentCachedPolicy(scope.get(), state, verified, slot);
-        if (error != ERROR_SUCCESS) return ERROR_ACCESS_DISABLED_BY_POLICY;
-        if (std::memcmp(
-                verified.Record.GameId,
-                installed.Record.GameId,
-                sizeof(verified.Record.GameId)) != 0 ||
-            std::memcmp(
-                verified.Record.BuildId,
-                installed.Record.BuildId,
-                sizeof(verified.Record.BuildId)) != 0 ||
-            std::memcmp(
-                verified.Record.ChannelId,
-                installed.Record.ChannelId,
-                sizeof(verified.Record.ChannelId)) != 0)
-            return ERROR_ACCESS_DISABLED_BY_POLICY;
+        // A signed policy installed by deployment remains a valid update
+        // source, including an explicitly authorized rollback.
+        OAC_POLICY_CACHE_STATE next{};
+        const OAC_POLICY_UPDATE_DECISION decision = OacPolicyEvaluateUpdate(
+            &installed.Record,
+            installed.Digest.data(),
+            &state,
+            1,
+            &next);
+        if (decision == OAC_POLICY_UPDATE_ACCEPT_NEW ||
+            decision == OAC_POLICY_UPDATE_ACCEPT_ROLLBACK)
+        {
+            error = WritePolicyState(scope.get(), next);
+            if (error != ERROR_SUCCESS) return error;
+            verified = installed;
+        }
+        else
+        {
+            // A remote update can leave the installed seed behind. In that
+            // case, resume from the cached policy bound to the high-water mark.
+            int slot = -1;
+            error = FindCurrentCachedPolicy(scope.get(), state, verified, slot);
+            if (error != ERROR_SUCCESS)
+                return ERROR_ACCESS_DISABLED_BY_POLICY;
+            if (std::memcmp(
+                    verified.Record.GameId,
+                    installed.Record.GameId,
+                    sizeof(verified.Record.GameId)) != 0 ||
+                std::memcmp(
+                    verified.Record.BuildId,
+                    installed.Record.BuildId,
+                    sizeof(verified.Record.BuildId)) != 0 ||
+                std::memcmp(
+                    verified.Record.ChannelId,
+                    installed.Record.ChannelId,
+                    sizeof(verified.Record.ChannelId)) != 0)
+                return ERROR_ACCESS_DISABLED_BY_POLICY;
+        }
     }
     if ((verified.Record.Flags & OAC_SIGNED_POLICY_EMERGENCY_REVOKE) != 0)
     {
