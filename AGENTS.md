@@ -41,11 +41,14 @@
   adds one fail-closed, identity-correlated production scan, loaded-driver signature/hash/family
   policy, signed runtime-module authorization, and bounded typed target memory/thread/lifecycle
   observations. It passed the exact signed-package, networkless Windows 11 build 26100, and standard
-  Driver Verifier campaign with 41 formal results and zero crashes or dumps. The current source also
-  includes a native mutually authenticated HTTPS transport, signed remote-policy refresh with
-  bounded offline use and crash-safe caching, a separate .NET 8 admission service with durable
-  lease/replay/evidence/game state, and a typed .NET game-server adapter. The backend remains a
-  bounded single-node reference deployment rather than a managed production service.
+  Driver Verifier campaign with 41 formal results and zero crashes or dumps. The backend-admission
+  implementation at commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` adds a native mutually
+  authenticated HTTPS transport, signed remote-policy refresh with bounded offline use and
+  crash-safe caching, a separate .NET 8 admission service with durable lease/replay/evidence/game
+  state, and a typed .NET game-server adapter. Its managed suites and full endpoint-regression VM
+  campaign passed; the latter again accepted 41 formal results under standard Driver Verifier with
+  zero crashes or dumps. The backend remains a bounded single-node reference deployment rather
+  than a managed production service.
   Stable mapped-file identity, create-time job assignment, manifest-key rotation metadata,
   Microsoft certification, protected production signing, representative middleware/JIT tuning,
   managed multi-node backend operations, and an approved platform rollout are not implemented.

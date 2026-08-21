@@ -9,8 +9,9 @@ unsigned release-candidate boundary. WP-15 endpoint admission, loaded-driver tru
 authorization, and typed target observations passed the exact signed-package, networkless Windows
 11 build 26100, and standard Driver Verifier campaign at
 `974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. WP-16 adds the production transport and a separate,
-single-node .NET backend with durable admission/evidence/game state. Managed deployment,
-production credentials, certification, and distribution remain external.
+single-node .NET backend with durable admission/evidence/game state. Its managed suites and the
+complete endpoint regression passed at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`. Managed
+deployment, production credentials, certification, and distribution remain external.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -43,9 +44,9 @@ trust boundaries, adversaries, and failure behavior.
 | Service scheduler | Alert and liveness work remains on the health loop; one coalescing worker incrementally samples target memory regions and threads under fixed budgets | Driver-free budget, metric, and resume tests, Clang-Tidy, and the restricted-service campaign passed; the measured health-loop delay stayed within its bound |
 | User-mode handles | Object callbacks strip selected dangerous process/thread rights for a bound target | Baseline and Verifier protected-launch/scanner paths passed on the named campaign |
 | Driver-load evidence | Load callback plus monotonic post-start counters | Armed renamed-driver gate and persistent-latch checks passed on the named campaign |
-| Endpoint admission | The service requires one complete, identity-correlated production scan, evaluates the frozen loaded-driver inventory by signature, hash, and blocked family, and obtains backend acknowledgement before opening launcher IPC | The exact `974d2c4` package passed startup admission, loaded-driver evaluation, backend acknowledgement/failure recovery, and Driver Verifier on Windows 11 build 26100 |
-| Runtime modules | The signed game manifest contains a bounded runtime-module allowlist and an explicit trusted-Windows-module policy; the service evaluates current path, hash, and Windows trust for observed images | The authorized runtime path passed at `974d2c4`; hostile manifest/evaluator units pass, while mapped-file identity and representative middleware/JIT tuning remain pending |
-| Target observations | A bounded worker emits typed findings for executable private/mapped memory, embedded PE headers, direct-syscall stubs, thread start/RIP/stack/debug-register state, instrumentation callbacks, and lifecycle events | The `974d2c4` campaign completed 37 bounded slices and eight sweeps without failure; hostile helper/policy cases are driver-free and skipped coverage remains explicit |
+| Endpoint admission | The service requires one complete, identity-correlated production scan, evaluates the frozen loaded-driver inventory by signature, hash, and blocked family, and obtains backend acknowledgement before opening launcher IPC | The exact `085c8fe` package most recently passed startup admission, loaded-driver evaluation, backend acknowledgement/failure recovery, and Driver Verifier on Windows 11 build 26100 |
+| Runtime modules | The signed game manifest contains a bounded runtime-module allowlist and an explicit trusted-Windows-module policy; the service evaluates current path, hash, and Windows trust for observed images | The authorized runtime path most recently passed at `085c8fe`; hostile manifest/evaluator units pass, while mapped-file identity and representative middleware/JIT tuning remain pending |
+| Target observations | A bounded worker emits typed findings for executable private/mapped memory, embedded PE headers, direct-syscall stubs, thread start/RIP/stack/debug-register state, instrumentation callbacks, and lifecycle events | The `085c8fe` campaign completed 30 bounded slices and six sweeps without failure; hostile helper/policy cases are driver-free and skipped coverage remains explicit |
 | Typed evidence | Separate retained-alert and overwrite-event queues preserve source identity and explicit loss; frozen kernel-module snapshots use stable paging | Hostile, concurrency, overflow, acknowledgement, and snapshot cases passed in the named baseline and Driver Verifier campaign |
 | Local report | The diagnostic scanner uses a per-run unkeyed SHA-256 chain and artifact digests | Lab-only and not authenticated |
 | Local policy | The service applies an authenticated typed rule set and signed Observe, Enforce, or Strict mode; driver producers cannot assign policy outcomes, and display text is excluded from the evaluator | Driver-free catalog, mode, signer-state, hostile-input, and text-independence tests plus integrated signed-policy VM execution pass |
@@ -204,13 +205,14 @@ administrator, kernel, firmware, or hypervisor trustworthy.
 - Public candidates contain no private symbols, signing material, lab executables, reports, or raw
   evidence. Every included file is exact-name and hash allowlisted.
 
-WP-01 through WP-12 statements combine source behavior with one exact platform acceptance run. The
-current WP-15 driver-backed production, service installation, endpoint-admission, lifecycle, race,
+WP-01 through WP-12 statements combine source behavior with exact platform acceptance runs. The
+current WP-16 driver-backed production, service installation, endpoint-admission, lifecycle, race,
 job/liveness, typed-evidence, signed-policy, signed-manifest, backend-session, snapshot, and standard
-Driver Verifier campaign passed at `974d2c4` on Windows 11 build 26100 with zero crash events and
-minidumps. That result does not replace the broader supported-platform, effective-right,
-compatibility, or production-deployment matrix. WP-13 changes only portable shared code and
-driver-free tests, so it does not extend the recorded Windows runtime claim.
+Driver Verifier regression passed at `085c8fe` on Windows 11 build 26100 with zero crash events and
+minidumps. Managed tests separately cover the real mutual-TLS listener and durable backend restart;
+the VM uses the protected deterministic backend. These results do not replace the broader
+supported-platform, effective-right, compatibility, or production-deployment matrix. WP-13's
+portable contract remains covered by driver-free tests.
 
 ## Planned controls
 

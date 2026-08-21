@@ -304,7 +304,7 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
 
 ## ADR-020: Keep remote admission in a separate service
 
-- **Status:** Accepted; source implemented and locally tested
+- **Status:** Accepted; source and endpoint regression tested
 - **Date:** 2026-08-21
 - **Decision:** Keep the restricted Windows controller native and place remote admission in a
   separate .NET 8 service under `OAC-backend/`. Use one fixed binary contract over HTTPS. The
@@ -323,4 +323,6 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   operations; certificate issuance, secret custody, backups, observability, capacity planning,
   account policy, and adjudication remain operator responsibilities. The backend's framework-
   dependent artifact and typed game-adapter package are published separately from the native
-  endpoint candidate.
+  endpoint candidate. Implementation commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` passed the
+  managed mutual-TLS and durability suites plus the exact signed-package Windows 11 build 26100 and
+  standard Driver Verifier endpoint-regression campaign with zero crashes or dumps.

@@ -8,6 +8,8 @@ WP-14 adds the reviewed unsigned release boundary. WP-15 endpoint admission, loa
 runtime-module authorization, and target observation passed local gates plus the exact signed-package,
 networkless Windows 11 build 26100, and standard Driver Verifier campaign at
 `974d2c474ff9515c5f11ab313bf644bf7dcbe89a`.
+WP-16 backend admission passed its managed mutual-TLS/durability suites and the complete endpoint
+regression campaign at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -116,8 +118,8 @@ driver-gate coverage plus these production cases:
   sequence once, and returns the same terminal result on repetition.
 
 These tests exercise real file contexts, authorization, and rundown. Their current VM execution and
-standard Driver Verifier run passed at implementation commit
-`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`.
+standard Driver Verifier run most recently passed at implementation commit
+`085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`.
 Driver-free tests cover the launch wire contract, canonical
 path rejection, expiry boundary, creator/path decision matrix, cancellation, exact handle fields,
 and terminal state transitions. The VM production boundary exercises the real creation callback and
@@ -165,26 +167,27 @@ negative effective-service-right and reboot-persistence cases remain pending.
 
 | Environment or scenario | Evidence |
 |---|---|
-| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Tested at `974d2c4`; 41 exact formal results, overall pass, Secure Boot disabled |
-| Standard Driver Verifier on `OAC.sys` | Tested at `974d2c4`; three loads and unloads, reset and inactive at completion, zero crashes/dumps |
-| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Tested at `974d2c4`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
+| Windows 11 Pro 24H2 build 26100, networkless Hyper-V, test signing | Most recently tested at `085c8fe`; 41 exact formal results, overall pass, Secure Boot disabled |
+| Standard Driver Verifier on `OAC.sys` | Most recently tested at `085c8fe`; three loads and unloads, reset and inactive at completion, zero crashes/dumps |
+| Production service identity, device ACL, standard-user launcher, admin direct-open denial | Most recently tested at `085c8fe`; status four times, launch twice, and LocalSystem/limited/admin direct opens denied |
 | SCM owner/DACL effective rights and recovery persistence | Structural native-policy probe passed on build 26100; negative-right and reboot tests pending |
-| Production per-file cleanup/close and concurrent status teardown | Tested at `974d2c4` in baseline and Verifier protocol executions |
-| Live-target tombstone and later retirement | Tested at `974d2c4` in the driver-backed lifecycle suite |
-| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Tested twice at `974d2c4` |
-| Service-owned job, parent/child termination, crash recovery, graceful revoke | Tested at `974d2c4`; both process trees terminated and SCM recovery completed |
-| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Tested at `974d2c4`; four driver-backed executions passed |
-| Independent health loop and bounded target worker | Tested at `974d2c4`; 37 slices, eight sweeps, 406 ms maximum health delay, 107.878 ms maximum slice duration, 1.750 ms maximum suspension |
-| Typed policy rules and service evaluation | Current driver-free tests pass `727/727`; integrated signed-policy service execution passed at `974d2c4` |
-| Signed main-executable manifest authorization | Tested at `974d2c4`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
-| Signed policy selection and update state | Tested at `974d2c4`; signer, scope, expiry, rollback, authorized rollback, and emergency-revocation cases passed |
-| Backend session, lease, replay, and acknowledgement failure | Tested at `974d2c4`; replay was rejected, post-start withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
-| Production endpoint admission and scan completeness | Tested at `974d2c4`; the service admitted only after a complete correlated scan and backend acknowledgement |
-| Loaded-driver trust, hash policy, and denied family | The exact signed-package startup path and shared trust evaluation passed at `974d2c4`; broader driver-family and platform coverage remains planned |
-| Runtime-module manifest authorization | The authorized runtime path passed at `974d2c4`; hostile manifest/evaluator units pass and representative middleware/JIT tuning is planned |
-| Typed target memory, thread, instrumentation, and lifecycle observations | The bounded worker and lifecycle path passed at `974d2c4`; helper/schema/policy hostility is driver-free and skipped coverage remains explicit |
+| Production per-file cleanup/close and concurrent status teardown | Most recently tested at `085c8fe` in baseline and Verifier protocol executions |
+| Live-target tombstone and later retirement | Most recently tested at `085c8fe` in the driver-backed lifecycle suite |
+| Standard-user service launch, creation-time binding, confirmation, job assignment, and resume | Most recently tested twice at `085c8fe` |
+| Service-owned job, parent/child termination, crash recovery, graceful revoke | Most recently tested at `085c8fe`; both process trees terminated and SCM recovery completed |
+| Retained alerts, event gaps, overflow provenance, concurrent publication, paged snapshots | Most recently tested at `085c8fe`; four driver-backed executions passed |
+| Independent health loop and bounded target worker | Most recently tested at `085c8fe`; 30 slices, six sweeps, 422 ms maximum health delay, 106.140 ms maximum slice duration, 33.058 ms maximum suspension |
+| Typed policy rules and service evaluation | Current driver-free tests pass `739/739`; integrated signed-policy service execution most recently passed at `085c8fe` |
+| Signed main-executable manifest authorization | Most recently tested at `085c8fe`; two authorized launches passed and modified, wrong-build, expired, and rollback manifests were rejected |
+| Signed policy selection and update state | Most recently tested at `085c8fe`; signer, scope, expiry, rollback, authorized rollback, emergency revocation, and cached-state selection passed |
+| Backend session, lease, replay, and acknowledgement failure | Most recently tested at `085c8fe`; replay was rejected, post-start withheld acknowledgement and lease loss terminated the target tree, and both recovered through a fresh session |
+| Production backend transport and durable admission service | Native WinHTTP transport builds and passes static analysis; managed Debug/Release `26/26` and real loopback mutual-TLS, role, rotation, restart, replay, lease, evidence, and game-decision tests pass. Managed deployment remains external. |
+| Production endpoint admission and scan completeness | Most recently tested at `085c8fe`; the service admitted only after a complete correlated scan and backend acknowledgement |
+| Loaded-driver trust, hash policy, and denied family | The exact signed-package startup path and shared trust evaluation most recently passed at `085c8fe`; broader driver-family and platform coverage remains planned |
+| Runtime-module manifest authorization | The authorized runtime path most recently passed at `085c8fe`; hostile manifest/evaluator units pass and representative middleware/JIT tuning is planned |
+| Typed target memory, thread, instrumentation, and lifecycle observations | The bounded worker and lifecycle path most recently passed at `085c8fe`; helper/schema/policy hostility is driver-free and skipped coverage remains explicit |
 | Authoritative game movement, replay, and risk | Current driver-free tests pass canonical construction, hostile validation, replay rejection, sequence/tick gaps, movement/velocity bounds, server correction, coordinate extremes, and risk saturation; no production game workload is claimed |
-| Renamed, signed normal post-start driver image | Tested at `974d2c4`; armed callback and persistent latch both observed |
+| Renamed, signed normal post-start driver image | Most recently tested at `085c8fe`; armed callback and persistent latch both observed |
 | Manual-map/kdmapper probe | Not covered by the checked-in VM test |
 | HVCI/VBS enabled and disabled | Planned |
 | Secure Boot production signing path | Planned |
@@ -217,7 +220,7 @@ or game-compatibility evidence.
 | WP-13 game/server integration | Canonical authoritative schema, exact identity/replay scope, hostile validation, one game invariant, server detector, and combined behavior/endpoint risk | Local and PR #19 hosted Debug/Release `663/663`, full builds, analysis, and repository checks passed at `8eca174`; no VM rerun was required for this portable-only change |
 | WP-14 production release engineering | Signing/HLK plan, deterministic metadata, SPDX SBOM, symbol separation, update/rollback and key-rotation design, support, privacy, and runbooks | Source profile, exact unsigned candidate, schema and five hostile mutation checks pass locally; production certification/signing and deployed operations remain external promotion gates; hosted acceptance pending |
 | WP-15 production endpoint trust | Correlated complete scan, frozen module inventory, driver trust/hash/family policy, signed runtime-module scope, typed target memory/thread/lifecycle findings, explicit degraded state, backend acknowledgement | Debug/Release `727/727`, full solution analysis, PREfast, complete service/client Clang-Tidy, repository validation, release-candidate hostility, exact signed package, and Windows 11/Driver Verifier acceptance passed at `974d2c4` |
-| WP-16 production backend admission | Native mutual-TLS transport, exact certificate rotation, signed remote policy and crash-safe cache, durable lease/replay/evidence/game state, revocation/expiry/restart behavior, and typed game adapter | Managed Debug/Release `26/26`, real loopback mutual TLS, role separation, direct durable-restart tests, and shared C/C++ protocol tests pass locally; hosted and final endpoint regression evidence are recorded before merge |
+| WP-16 production backend admission | Native mutual-TLS transport, exact certificate rotation, signed remote policy and crash-safe cache, durable lease/replay/evidence/game state, revocation/expiry/restart behavior, and typed game adapter | Managed Debug/Release `26/26`, real loopback mutual TLS, role separation, direct durable-restart tests, shared C/C++ protocol tests, and the exact Windows 11/Driver Verifier endpoint regression passed at `085c8fe`; hosted checks remain before merge |
 
 WP-02 through WP-12 runtime acceptance is recorded only for the exact implementation commit and
 environment above. PR #18 supplies the corresponding hosted build and repository-validation
@@ -226,6 +229,9 @@ WP-13 does not modify or extend the Windows runtime claim. WP-14 changes build m
 packaging boundaries rather than privileged runtime behavior. WP-15 runtime evidence applies only
 to the exact `974d2c4` package and Windows 11 build 26100 campaign; it is not broader platform
 certification.
+WP-16 endpoint-regression evidence applies only to the exact `085c8fe` package and the same named
+Windows build; the mutual-TLS backend evidence is from the managed loopback suite, not a claim of a
+deployed production service.
 
 ## Exact host commands
 

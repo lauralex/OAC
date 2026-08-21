@@ -35,7 +35,8 @@ The current production path intentionally supports one target and no command-lin
 Create-time job assignment, complete mapped-file identity binding, manifest-key rotation, a tuned
 game-specific module/JIT catalog, managed backend deployment, and target-session reuse remain
 planned work. The endpoint-trust boundary passed its exact
-commit-bound Windows 11 build 26100 and standard Driver Verifier campaign at `974d2c4`; that result
+commit-bound Windows 11 build 26100 and standard Driver Verifier campaign most recently at
+`085c8fe`; that result
 does not extend the supported-platform or workload-compatibility matrix.
 
 ## Game and server integration

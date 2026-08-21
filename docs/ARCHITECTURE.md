@@ -9,8 +9,9 @@ runtime-module authorization, and typed target observations passed the exact sig
 networkless Windows 11 build 26100, and standard Driver Verifier campaign at
 `974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. WP-16 adds a separate .NET admission service,
 role-separated mutual TLS, a native WinHTTP endpoint transport, durable backend state, signed remote
-policy delivery, and a typed game-server adapter. Managed backend deployment, platform
-certification, and production signing remain external work.
+policy delivery, and a typed game-server adapter. Its managed suites and complete endpoint
+regression passed at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`. Managed backend deployment,
+platform certification, and production signing remain external work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -269,8 +270,8 @@ isolated tests use the deterministic in-process transport, while production mode
 mutual TLS and the separate durable backend. The retained-alert, event-gap, overflow,
 concurrent-publication, and snapshot-paging paths and the deterministic backend replay,
 acknowledgement-loss, lease-loss, and recovery boundaries passed the named baseline and Driver
-Verifier campaign. The managed suite separately exercises real loopback mutual TLS and durable
-backend restart behavior.
+Verifier campaign, most recently at `085c8fe`. The managed suite separately exercises real loopback
+mutual TLS and durable backend restart behavior.
 
 ## Release boundary
 

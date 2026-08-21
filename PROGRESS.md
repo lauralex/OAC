@@ -18,6 +18,8 @@ game-server adapter.
 Endpoint-trust implementation commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact
 signed-package, networkless Windows 11 build 26100, and standard Driver Verifier campaign described
 below.
+Backend-admission implementation commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` passed the
+managed backend suites and the complete endpoint-regression campaign described below.
 Windows-runtime implementation commit `67d3f616cdb13f1ac10877d067da1b54cca5e51c`
 passed the commit-bound disposable-VM and standard Driver Verifier campaign described below.
 Portable game-integration implementation commit `8eca1747680f7dc9ad084d1e1897f30bfec08d83`
@@ -42,7 +44,7 @@ remaining production-hardening work.
 | WP-13 Game/server integration | Implemented; tested | Canonical authoritative movement records, replay-safe state, bounded movement/velocity rules, combined behavior and endpoint risk, hostile driver-free tests, and a public integration guide passed local and PR #19 hosted acceptance |
 | WP-14 Production release engineering | Implemented; local acceptance | Exact unsigned public/lab/private-symbol bundles, source and toolchain metadata, SPDX SBOM, hostile candidate validation, CI artifact separation, and reviewed signing, update, support, privacy, and operations contracts are present; production certification/signing and deployed operations remain external gates |
 | WP-15 Production endpoint trust | Implemented; VM tested | Exact production scan/configuration, explicit completeness, frozen loaded-driver inventory, trust/hash/family policy, runtime-module authorization, typed memory/thread/lifecycle observations, and fail-closed evidence handling passed the complete local and Windows 11/Driver Verifier acceptance gates at `974d2c4` |
-| WP-16 Production backend admission | Implemented; local acceptance | HTTPS mutual TLS, role-separated certificate rotation, signed remote-policy refresh and crash-safe cache selection, durable lease/replay/evidence/game state, backend restart recovery, and the typed game adapter pass the managed and shared-contract suites; hosted and final endpoint regression gates remain required before merge |
+| WP-16 Production backend admission | Implemented; VM tested | HTTPS mutual TLS, role-separated certificate rotation, signed remote-policy refresh and crash-safe cache selection, durable lease/replay/evidence/game state, backend restart recovery, and the typed game adapter passed the managed and shared-contract suites; the exact endpoint package passed the full Windows 11 and Driver Verifier regression campaign at `085c8fe` |
 
 These tested states apply only to the named commit and Windows build; they are not general platform
 certification or production readiness.
@@ -224,7 +226,22 @@ The reference backend deliberately uses one protected writer and bounded local f
 for a controlled deployment and as an executable contract, but it does not claim managed database,
 replication, service discovery, automated backup, fleet credential enrollment, or operational SLOs.
 
-## Current endpoint-trust validation
+Implementation commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` also passed the exact signed
+Debug package, networkless Windows 11 Pro 10.0.26100 build 26100, and standard Driver Verifier
+campaign. The host accepted 41 exact formal results: five protocol executions and thirteen client,
+launcher, and preflight executions. Signed-policy signature, scope, expiry, replay, authorized
+rollback, and emergency-revocation cases passed; backend nonce replay, withheld acknowledgement,
+and lease loss each failed closed and recovered through a fresh session. The bounded worker
+completed 30 slices and six sweeps with no failed, cancelled, or skipped thread work. Driver
+Verifier recorded three OAC loads and three unloads, then reset and finished inactive. There were
+zero crash events and minidumps, both OAC services were stopped, and final containment passed.
+The validated results ZIP SHA-256 was
+`4C02D6E2A53BBE15D49D0E54E93F68970351EA6EC3D928C7BA0033D744434025`; the byte-identical external
+and archived final status SHA-256 was
+`AEED6543E28FF274FEBEAAE0473A89CE9484432D15EFAF67E8DD9E6C22FFFAFE`. The disposable VM, disks,
+package, seed, and evidence directory were removed after recording these hashes.
+
+## Previous endpoint-trust validation
 
 Implementation commit `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed on Microsoft Windows
 11 Pro 10.0.26100 build 26100 in a networkless Generation 2 Hyper-V VM with test signing enabled
@@ -304,10 +321,10 @@ was also removed during the requested workspace cleanup.
   approval remain deployment gates.
 - WP-15 passed the complete local build, unit, analysis, release-profile, hostile-candidate,
   signed-package, Windows 11, and standard Driver Verifier gates at `974d2c4`.
-- WP-16 implementation is in final local/hosted acceptance. WP-17 create-time job assignment,
-  stable mapped-file identity, durable local evidence recovery, and manifest-key rotation remains
-  the next engineering milestone; representative module/JIT tuning remains separate deployment
-  work.
+- WP-16 passed its local managed suites and exact endpoint-regression VM/Verifier campaign. Hosted
+  checks remain required before merge. WP-17 create-time job assignment, stable mapped-file
+  identity, durable local evidence recovery, and manifest-key rotation is the next engineering
+  milestone; representative module/JIT tuning remains separate deployment work.
 - The Windows 10/11/Server, HVCI/VBS, hardware, and game-compatibility matrix remains incomplete.
 
 No milestone is described as production-ready. The control plane still lacks manifest-key rotation

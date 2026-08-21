@@ -4,7 +4,7 @@
 
 **Foundation source:** Integrated after baseline `075ad2109f84cce90727f8ba65f87b807500e6b7`;
 the complete runtime suite most recently passed at implementation commit
-`974d2c474ff9515c5f11ab313bf644bf7dcbe89a` on Windows 11 build 26100 under standard Driver
+`085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` on Windows 11 build 26100 under standard Driver
 Verifier, including endpoint admission, loaded-driver trust, signed-manifest and signed-policy
 authorization, backend failure/recovery, job/liveness, typed evidence, bounded service scheduling,
 and integrated policy evaluation. The current backend wire additionally carries signed-policy and
@@ -363,8 +363,8 @@ Verifier phases.
 
 The endpoint-admission source adds malformed and authorization checks for the configuration and
 scan messages, status invariants, current-state evidence correlation, loaded-driver trust, runtime
-module policy, and target memory/thread observations. The exact `974d2c4` package passed those paths
-in the Windows 11 build 26100 and standard Driver Verifier campaign.
+module policy, and target memory/thread observations. The exact `085c8fe` package most recently
+passed those paths in the Windows 11 build 26100 and standard Driver Verifier campaign.
 
 Driver-free tests cover launch layouts, hostile paths and fields, expiry/cancel/replay decisions,
 response correlation, explicit revoke/liveness layouts, lease-state decisions, IPC validation, and
@@ -385,6 +385,6 @@ before refusing startup. The current VM harness additionally contains bounded ba
 withheld-acknowledgement, lease-loss, target-tree termination, and clean-recovery cases; all passed
 in the named campaign.
 The current campaign required bounded scheduler coverage, health latency, slice duration, and
-thread-resume metrics. It accepted 37 completed slices, eight completed sweeps, a 406 ms maximum
-health-loop delay, a 107.878 ms maximum slice duration, a 1.750 ms maximum thread suspension, and no
+thread-resume metrics. It accepted 30 completed slices, six completed sweeps, a 422 ms maximum
+health-loop delay, a 106.140 ms maximum slice duration, a 33.058 ms maximum thread suspension, and no
 failed or cancelled slice.
