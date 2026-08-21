@@ -1,23 +1,25 @@
 # Game and server integration
 
-OAC includes a small, portable C interface for connecting authoritative game telemetry to a
-server-side detector. The interface is intentionally independent of the Windows driver and local
-service: the game server owns gameplay truth, while endpoint evidence is one input to a broader
-risk decision.
+OAC separates authoritative gameplay telemetry from the Windows endpoint. The portable C contract
+defines the canonical event and detector semantics; the .NET game adapter submits those records to
+the separate admission backend. The game server owns gameplay truth, while endpoint evidence is
+one independently retained input to a broader risk decision.
 
 The implementation lives in [`shared/oac_game.h`](../shared/oac_game.h) and
 [`shared/oac_game.c`](../shared/oac_game.c). It provides canonical records, strict validation,
 replay-safe detector state, and one deterministic movement detector. It does **not** provide a
-network transport, game-engine plug-in, replay store, account system, or production adjudication
-service.
+network transport or game-engine plug-in. [`OAC-backend/game-adapter`](../OAC-backend/game-adapter/)
+provides the typed transport client, and [`OAC-backend`](../OAC-backend/) provides authenticated
+ingestion and durable state. Account policy, game-engine binding, and production adjudication remain
+the integrating platform's responsibility.
 
 ## Integration boundary
 
 ```mermaid
 flowchart LR
-    Game["Authoritative game server"] -->|"position, velocity, tick"| Adapter["OAC game interface"]
-    Adapter -->|"canonical movement event"| Transport["Authenticated ingestion"]
-    Transport --> Detector["Reference server detector"]
+    Game["Authoritative game server"] -->|"position, velocity, tick"| Adapter["OAC.GameAdapter"]
+    Adapter -->|"mutual TLS + canonical event"| Backend["OAC backend"]
+    Backend -->|"durable event"| Detector["Reference server detector"]
     Replay["Replay identity and offset"] --> Detector
     Endpoint["Endpoint risk"] -.->|"corroborating input"| Detector
     Detector -->|"accept · observe · review · reject"| Decision["Game policy and adjudication"]
@@ -26,6 +28,10 @@ flowchart LR
 Only an authenticated server-side component should set the server-authority flag. The flag records
 provenance inside the canonical event; it is not a signature and does not authenticate an
 untrusted transport by itself.
+
+The production adapter requires a current strong client-authentication certificate and the exact
+backend server-certificate pin. The backend uses a game-server role that is disjoint from endpoint
+controller certificates. One optional pin per side supports a bounded certificate rotation window.
 
 ## Canonical event
 
@@ -119,9 +125,15 @@ case OAC_GAME_DECISION_INVALID:
 }
 ```
 
-The example omits transport and storage deliberately. Production ingestion must authenticate the
-game server, preserve record bytes, enforce bounded queues, partition state by the complete
-identity tuple, and persist replay material before acknowledging it.
+The C example shows the portable semantics directly. A .NET game server normally creates a
+`GameAdmissionSession` and sends `AuthoritativeMovement` through `GameServerClient`. The adapter
+serializes each session, generates a fresh nonce, validates the exact correlated response, and
+advances the sequence only after receiving a durable backend decision. A lost or malformed response
+marks the session for fresh admission; it is never retried with an ambiguous sequence.
+
+The backend preserves the canonical request, detector state, result, and global durable sequence in
+a flushed append record before responding. Restart recovery replays and verifies those records, so
+a repeated request remains a replay after process restart.
 
 ## Validation and remaining work
 
@@ -132,8 +144,9 @@ This coverage is portable and does not require a kernel driver or disposable VM.
 
 Before deploying the interface for a real game, an operator still needs:
 
-- an authenticated production transport and durable, partitioned state store;
-- a game-engine adapter that emits only authoritative values;
+- protected deployment of the included backend or an equivalent managed datastore that preserves
+  its transaction and replay invariants;
+- a game-engine binding that emits only authoritative values through the typed adapter;
 - signed per-build movement and gameplay rules;
 - replay retention, privacy, deletion, and access controls;
 - game-specific false-positive tuning and shadow-mode evaluation;

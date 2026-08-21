@@ -6,6 +6,8 @@
 *.c text eol=lf
 *.h text eol=lf
 *.cpp text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
 *.inc text eol=lf
 *.md text eol=lf
 *.json text eol=lf

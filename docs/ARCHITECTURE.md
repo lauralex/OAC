@@ -7,8 +7,11 @@ hosted driver-free acceptance at `8eca1747680f7dc9ad084d1e1897f30bfec08d83`. WP-
 source-bound unsigned release boundary. WP-15's fail-closed endpoint admission, loaded-driver trust,
 runtime-module authorization, and typed target observations passed the exact signed-package,
 networkless Windows 11 build 26100, and standard Driver Verifier campaign at
-`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. Production game/backend deployment, certification, and
-signing remain external work.
+`974d2c474ff9515c5f11ab313bf644bf7dcbe89a`. WP-16 adds a separate .NET admission service,
+role-separated mutual TLS, a native WinHTTP endpoint transport, durable backend state, signed remote
+policy delivery, and a typed game-server adapter. Its managed suites and complete endpoint
+regression passed at `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f`. Managed backend deployment,
+platform certification, and production signing remain external work.
 
 **Frozen baseline:** `075ad2109f84cce90727f8ba65f87b807500e6b7`
 
@@ -19,7 +22,7 @@ flowchart TD
     L["Standard-user OAC-Launcher"] -->|"status and one launch request"| S["Restricted OACService"]
     M["Signed game manifest"] -->|"authorize exact build"| S
     P["Signed rule policy"] -->|"scope, mode, expiry, update"| S
-    B["Authenticated backend transport interface"] -->|"session lease"| S
+    B["OAC backend"] -->|"mutual TLS, signed policy, session lease"| S
     S -->|"evaluated evidence and acknowledgement"| B
     S -->|"one file-bound production session"| D["Demand-start OAC driver"]
     D -->|"bounded current-state scan and frozen modules"| S
@@ -34,7 +37,8 @@ flowchart TD
     J -->|"owns target tree"| T
     S -->|"bounded memory and thread observations"| T
 
-    G["Authoritative game server"] -->|"canonical movement event"| R["Reference behavior detector"]
+    G["Authoritative game server"] -->|"typed game adapter"| B
+    B -->|"canonical movement event"| R["Reference behavior detector"]
     Q["Replay identity and offset"] --> R
     B -.->|"endpoint risk"| R
     R -->|"typed decision"| A["Game policy and adjudication"]
@@ -56,6 +60,8 @@ suspended/attach flows only for explicit disposable-VM lab use.
 |---|---|---|
 | `OAC` driver | Device security, production file sessions, callbacks, retained alerts, operational events, production endpoint scans, paged snapshots, bounded kernel work, and diagnostic compatibility; scanner internals are separated into integrity, module, and process/handle responsibilities | Unsigned by default; demand-start only |
 | `OACService` | Verify its restricted identity, signed policy, signed game build, persistent update state, backend lease, and endpoint admission; own the production driver session and target job; evaluate and queue typed evidence; answer status; serialize one caller-token suspended launch; and schedule bounded target observation | LocalSystem own-process service with restricted service SID and an exact declared privilege list |
+| `OAC-backend` | Authenticate endpoint and game-server roles, deliver signed policy, durably persist lease/replay/evidence state, evaluate canonical game events, and return correlated acknowledgements | Separate .NET 8 service; exact client-certificate pins, HTTPS, and single-writer durable storage |
+| `OAC.GameAdapter` | Construct and submit canonical authoritative movement records, require exact response correlation, and stop after an ambiguous transaction | Typed .NET library for a trusted game-server process |
 | `OAC-Launcher` | Request hello/status or one executable launch without a driver handle and validate the running SCM pipe server | Standard interactive user |
 | `OAC-Client` | Laboratory system/target scanning, policy evaluation, HWID collection, and local reports | Elevated, `LabMode=1`, audit/test only |
 | `shared/protocol/` | Production protocol types, stable IDs, layouts, and strict validators | Kernel and user mode |
@@ -63,9 +69,10 @@ suspended/attach flows only for explicit disposable-VM lab use.
 | `shared/oac_signed_policy.*` | Canonical policy record, strict validation, scope, update decisions, and persistent high-water state | C-compatible service and driver-free test module; detached signature verification remains in user mode |
 | `shared/oac_manifest.*` | Canonical manifest and rollback records, strict validation, exact build identity, and monotonic high-water decisions | C-compatible service and driver-free test module; signature verification remains in user mode |
 | `shared/oac_driver_trust.*` | Stable file and loaded-driver trust classification, hash policy, and signer/family decisions shared by the service and diagnostic client | User mode; trust verification uses documented Windows interfaces |
-| `shared/oac_backend.*` | Canonical backend-session records, strict correlation and replay validation, acknowledgement decisions, and bounded failure states | Transport-independent C contract; no network library or reusable client secret |
+| `shared/oac_backend.*` | Canonical policy, session, renewal, evidence, acknowledgement, and game records with strict correlation, replay validation, and bounded failure states | Transport-independent C contract; no network library or reusable client secret |
 | `shared/oac_game.*` | Canonical authoritative movement records, replay-safe detector state, bounded rules, and explainable risk decisions | Portable C game/server contract; no network transport, game-engine dependency, or account identifier |
-| `OAC-Service/backend.*` | Fixed-capacity service queue, lease lifecycle, driver binding digest, transport interface, and deterministic test backend | The included implementation is a protected test double; production transport remains a deployment component |
+| `OAC-Service/backend.*` | Fixed-capacity service queue, lease lifecycle, driver binding digest, transport interface, and deterministic test backend | Nonblocking endpoint integration boundary |
+| `OAC-Service/backend_http.*` | Read protected endpoint credentials, select a current rotation identity, perform bounded WinHTTP mutual-TLS requests, pin the server certificate, and surface exact transport failures | Production transport; ordinary TLS chain and host-name validation remains enabled |
 | `OAC-Service/endpoint_preflight.*` | Correlate the production scan, require complete kernel coverage, evaluate the frozen driver inventory, and acknowledge admission evidence before IPC opens | Fail-closed startup gate; no kernel certificate parsing |
 | `OAC-Service/runtime_module.*` | Authorize observed target images against the signed manifest and current file trust | Bounded runtime policy; mapped-file identity binding and approved JIT profiles remain planned |
 | `OAC-Service/target_scanner.*` | Incrementally sample target memory and threads and emit typed, bounded observations | Documented user-mode APIs; skipped coverage and overflow remain explicit |
@@ -107,10 +114,12 @@ the position envelope. Typed behavior risk and separately supplied endpoint risk
 the result and combine through saturated, policy-selected thresholds. Endpoint-only risk remains
 observational; server-side behavior risk is required for Review or Reject.
 
-This implements the portable interface, event schema, replay state, and one server-side invariant
-required by WP-13. It is a reference integration boundary, not a deployed backend. Authentication,
-durable partitioned state, replay storage, game-engine adaptation, ruleset signing, additional
-gameplay detectors, and adjudication remain production responsibilities described in
+`OAC-backend` now authenticates a bounded game-server certificate set, validates the same canonical
+record, persists the event and detector state before acknowledging it, and returns one exact typed
+decision. `OAC.GameAdapter` provides the corresponding .NET client and stops a session after an
+ambiguous request instead of reusing its sequence. The included detector remains deliberately
+small: game-engine adaptation, signed movement-rule distribution, additional gameplay detectors,
+account policy, and adjudication remain integration responsibilities described in
 [`GAME_INTEGRATION.md`](GAME_INTEGRATION.md).
 
 ## Production service boundary
@@ -128,6 +137,9 @@ the exact reviewed service SID in both enabled groups and restricted SIDs. It ve
 canonical policy and detached signature through non-reparse handles, requires the protected signer
 pin, validates component compatibility and expiry, and flushes and rereads the scoped update state.
 Replay, same-sequence equivocation, unauthorized rollback, and emergency revocation are terminal.
+In network mode it then fetches the current signed policy through the authenticated transport,
+commits an accepted record through alternating protected cache slots and the existing high-water
+state, and permits bounded offline startup only while the last authenticated policy remains valid.
 It next establishes an authenticated backend session, derives a binding digest from the session
 and both nonces, and starts its bounded lease before opening the driver. It then
 negotiates the exact production revision and evidence bounds, claims a production session,
@@ -254,10 +266,12 @@ service-side authorization remains correlated with driver target state. The kern
 files nor parses certificates or manifests.
 Overwrite gaps remain explicit. The service now exposes evaluated records through the strict
 backend transport interface and advances acknowledgement only after correlated backend delivery;
-the included transport is an in-process authenticated test double rather than durable remote
-persistence. The retained-alert, event-gap, overflow, concurrent-publication, and snapshot-paging
-paths and the backend replay, acknowledgement-loss, lease-loss, and recovery boundaries passed the
-named baseline and Driver Verifier campaign.
+isolated tests use the deterministic in-process transport, while production mode uses bounded
+mutual TLS and the separate durable backend. The retained-alert, event-gap, overflow,
+concurrent-publication, and snapshot-paging paths and the deterministic backend replay,
+acknowledgement-loss, lease-loss, and recovery boundaries passed the named baseline and Driver
+Verifier campaign, most recently at `085c8fe`. The managed suite separately exercises real loopback
+mutual TLS and durable backend restart behavior.
 
 ## Release boundary
 
@@ -274,12 +288,12 @@ separate controlled environment described in [`RELEASE.md`](RELEASE.md).
 
 ## Planned sequence
 
-1. Replace the deterministic backend with authenticated transport, durable evidence/replay storage,
-   credential lifecycle, and a real game-engine adapter behind the existing contracts.
-2. Move target job assignment into process creation, bind authorization to stable file identity,
+1. Move target job assignment into process creation, bind authorization to stable file identity,
    add durable local evidence recovery, and introduce manifest-key rotation metadata.
-3. Tune runtime-module and middleware policy against representative workloads, then add
+2. Tune runtime-module and middleware policy against representative workloads, then add
    game-specific combat, economy, input, and protocol detectors.
+3. Replace the single-node reference backend with managed storage, service discovery, monitored
+   credential enrollment, backup automation, and capacity controls for a supported deployment.
 4. Separate production control from broad diagnostic scanning only when deployment and maintenance
    evidence justifies the additional driver boundary.
 

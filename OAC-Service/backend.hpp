@@ -43,6 +43,9 @@ class BackendTransport
 {
 public:
     virtual ~BackendTransport() = default;
+    virtual DWORD FetchPolicy(
+        const OAC_BACKEND_POLICY_REQUEST& request,
+        OAC_BACKEND_POLICY_RESPONSE& response) noexcept = 0;
     virtual DWORD Open(
         const OAC_BACKEND_OPEN_REQUEST& request,
         OAC_BACKEND_OPEN_RESPONSE& response) noexcept = 0;
@@ -53,9 +56,11 @@ public:
         const OAC_BACKEND_EVIDENCE_ITEM* items,
         std::size_t itemCount) noexcept = 0;
     virtual bool TakeRenewal(
-        OAC_BACKEND_RENEW_RESPONSE& response) noexcept = 0;
+        OAC_BACKEND_RENEW_RESPONSE& response,
+        DWORD& error) noexcept = 0;
     virtual bool TakeUpload(
-        OAC_BACKEND_UPLOAD_RESPONSE& response) noexcept = 0;
+        OAC_BACKEND_UPLOAD_RESPONSE& response,
+        DWORD& error) noexcept = 0;
     virtual void Close() noexcept = 0;
     [[nodiscard]] virtual bool Authenticated() const noexcept = 0;
     [[nodiscard]] virtual bool TestDouble() const noexcept = 0;
@@ -67,6 +72,9 @@ public:
     explicit MockBackendTransport(BackendScenario scenario) noexcept;
     ~MockBackendTransport() override;
 
+    DWORD FetchPolicy(
+        const OAC_BACKEND_POLICY_REQUEST& request,
+        OAC_BACKEND_POLICY_RESPONSE& response) noexcept override;
     DWORD Open(
         const OAC_BACKEND_OPEN_REQUEST& request,
         OAC_BACKEND_OPEN_RESPONSE& response) noexcept override;
@@ -77,9 +85,11 @@ public:
         const OAC_BACKEND_EVIDENCE_ITEM* items,
         std::size_t itemCount) noexcept override;
     bool TakeRenewal(
-        OAC_BACKEND_RENEW_RESPONSE& response) noexcept override;
+        OAC_BACKEND_RENEW_RESPONSE& response,
+        DWORD& error) noexcept override;
     bool TakeUpload(
-        OAC_BACKEND_UPLOAD_RESPONSE& response) noexcept override;
+        OAC_BACKEND_UPLOAD_RESPONSE& response,
+        DWORD& error) noexcept override;
     void Close() noexcept override;
     [[nodiscard]] bool Authenticated() const noexcept override { return open_; }
     [[nodiscard]] bool TestDouble() const noexcept override { return true; }
@@ -171,6 +181,17 @@ private:
     bool uploadOutstanding_ = false;
     bool started_ = false;
 };
+
+DWORD ComputeBackendSha256(
+    const void* bytes,
+    std::size_t size,
+    std::uint8_t digest[OAC_BACKEND_DIGEST_SIZE]) noexcept;
+DWORD InitializeBackendRequestHeader(
+    OAC_BACKEND_REQUEST_HEADER& header,
+    ULONG size,
+    ULONG type,
+    ULONGLONG sequence,
+    const std::uint8_t sessionId[OAC_BACKEND_SESSION_ID_SIZE]) noexcept;
 
 std::unique_ptr<BackendTransport> CreateConfiguredBackendTransport(
     DWORD& error) noexcept;

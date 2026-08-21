@@ -41,11 +41,18 @@
   adds one fail-closed, identity-correlated production scan, loaded-driver signature/hash/family
   policy, signed runtime-module authorization, and bounded typed target memory/thread/lifecycle
   observations. It passed the exact signed-package, networkless Windows 11 build 26100, and standard
-  Driver Verifier campaign with 41 formal results and zero crashes or dumps.
-  A production network transport, backend service, durable remote and replay storage, real game
-  adapter, stable mapped-file identity, create-time job assignment, manifest-key rotation, remote
-  policy delivery, Microsoft certification, protected production signing, representative
-  middleware/JIT tuning, and an approved platform rollout are not implemented.
+  Driver Verifier campaign with 41 formal results and zero crashes or dumps. The backend-admission
+  implementation at commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` adds a native mutually
+  authenticated HTTPS transport, signed remote-policy refresh with bounded offline use and
+  crash-safe caching, a separate .NET 8 admission service with durable lease/replay/evidence/game
+  state, and a typed .NET game-server adapter. Its managed suites and full endpoint-regression VM
+  campaign passed; the latter again accepted 41 formal results under standard Driver Verifier with
+  zero crashes or dumps. PR #22 also passed the hosted managed-backend, Debug, Release, aggregate
+  build, repository-validation, and secret-scanning checks. The backend remains a bounded
+  single-node reference deployment rather than a managed production service.
+  Stable mapped-file identity, create-time job assignment, manifest-key rotation metadata,
+  Microsoft certification, protected production signing, representative middleware/JIT tuning,
+  managed multi-node backend operations, and an approved platform rollout are not implemented.
 
 ## Repository map
 
@@ -54,6 +61,7 @@
 | `OAC/` | C17 WDM driver: device/IOCTL handling, protection callbacks, retained alerts, operational events, bounded snapshots/scans, and compatibility |
 | `OAC-Client/` | C++20 elevated lab scanner, diagnostic launch/attach flow, policy evaluation, HWID collection, and reports |
 | `OAC-Service/` | Restricted production controller; owns endpoint admission, backend and driver sessions, typed policy enforcement, evidence queue, target job, one serialized suspended-launch transaction, runtime-module authorization, and bounded target observation |
+| `OAC-backend/` | .NET 8 admission service, durable single-writer state, signed-policy delivery, authoritative game decisions, tests, and typed game-server adapter |
 | `OAC-Launcher/` | Standard-user status/launch client; validates the named-pipe server against the running service |
 | `shared/protocol/` | C-compatible production ABI and shared strict validators |
 | `shared/oac_protocol.h` | Diagnostic compatibility ABI |

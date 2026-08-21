@@ -240,6 +240,33 @@ foreach ($entry in $compatibility.GetEnumerator()) {
     }
 }
 
+$managedBackendSources = @(
+    'OAC-backend\WireProtocol.cs',
+    'OAC-backend\game-adapter\GameServerClient.cs'
+)
+foreach ($source in $managedBackendSources) {
+    $sourceText = Get-Content -LiteralPath (Join-Path $root $source) -Raw
+    $matches = @([regex]::Matches(
+            $sourceText,
+            '(?m)^\s*private\s+const\s+uint\s+BackendRevision\s*=\s*(?<value>0x[0-9A-Fa-f]+)\s*;\s*$|^\s*public\s+const\s+uint\s+Revision\s*=\s*(?<value>0x[0-9A-Fa-f]+)\s*;\s*$'))
+    if ($matches.Count -ne 1 -or
+        ('0x{0:X8}' -f [Convert]::ToUInt32(
+            $matches[0].Groups['value'].Value.Substring(2), 16)) -cne
+            [string]$compatibility.backend_protocol) {
+        throw "$source does not match the release-profile backend protocol."
+    }
+}
+
+$gameAdapterProject = Get-Content -LiteralPath `
+    (Join-Path $root 'OAC-backend\game-adapter\OAC.GameAdapter.csproj') -Raw
+$gameAdapterVersions = @([regex]::Matches(
+        $gameAdapterProject,
+        '<Version>(?<version>[0-9]+\.[0-9]+\.[0-9]+)</Version>'))
+if ($gameAdapterVersions.Count -ne 1 -or
+    $gameAdapterVersions[0].Groups['version'].Value -cne [string]$profile.release) {
+    throw 'The game-adapter package version does not match the release profile.'
+}
+
 $infText = Get-Content -LiteralPath (Join-Path $root 'OAC\OAC.inf') -Raw
 $driverVersionMatch = [regex]::Match(
     $infText,

@@ -301,3 +301,28 @@ not accepted here remain proposals in `docs/hardening-plan.md`.
   identity, and broad middleware/JIT compatibility requires workload tuning. Implementation commit
   `974d2c474ff9515c5f11ab313bf644bf7dcbe89a` passed the exact signed-package, networkless Windows 11
   build 26100, and standard Driver Verifier campaign with zero crashes or dumps.
+
+## ADR-020: Keep remote admission in a separate service
+
+- **Status:** Accepted; source and endpoint regression tested
+- **Date:** 2026-08-21
+- **Decision:** Keep the restricted Windows controller native and place remote admission in a
+  separate .NET 8 service under `OAC-backend/`. Use one fixed binary contract over HTTPS. The
+  endpoint transport retains normal TLS chain and host-name validation, adds an exact server pin,
+  and selects a current strong machine client certificate from an active/rotation allowlist. The
+  backend pins endpoint and game-server roles independently, serializes one bounded writer, flushes
+  evidence and game decisions before acknowledgement, and validates sealed snapshots and append
+  records on restart. Deliver remote policy as the existing detached-signed record; the endpoint
+  must revalidate signer, scope, expiry, component compatibility, rollback, and emergency state,
+  then write an inactive cache slot before advancing its protected high-water record. Keep the
+  deterministic in-process transport for reproducible isolated-VM failure tests.
+- **Consequence:** Network, durable storage, and game-server integration can evolve without moving
+  blocking work or managed runtime dependencies into the restricted endpoint service. A lost or
+  malformed game response forces fresh admission instead of an ambiguous replay. The checked-in
+  backend is a working, bounded single-node deployment, not a claim of managed multi-region
+  operations; certificate issuance, secret custody, backups, observability, capacity planning,
+  account policy, and adjudication remain operator responsibilities. The backend's framework-
+  dependent artifact and typed game-adapter package are published separately from the native
+  endpoint candidate. Implementation commit `085c8fe83fbfa4862fe425be9f1d7fae94e52c1f` passed the
+  managed mutual-TLS and durability suites plus the exact signed-package Windows 11 build 26100 and
+  standard Driver Verifier endpoint-regression campaign with zero crashes or dumps.

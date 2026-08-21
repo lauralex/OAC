@@ -10,7 +10,7 @@
     "production_protocol": "0x00050007",
     "diagnostic_protocol": "0x00040000",
     "launcher_ipc": "0x00010007",
-    "backend_protocol": "0x00010001",
+    "backend_protocol": "0x00010002",
     "manifest_schema": 2,
     "signed_policy_schema": 3,
     "game_event_schema": 1

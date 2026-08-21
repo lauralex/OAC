@@ -9,8 +9,9 @@ Read `AGENTS.md` for repository invariants, `docs/README.md` for the public tech
 
 ## Development setup
 
-You need Visual Studio 2022 with the Desktop C++ workload, Windows SDK/WDK `10.0.26100.0`, and the
-x64 toolchain. Build both supported configurations with the 64-bit MSBuild host:
+You need Visual Studio 2022 with the Desktop C++ workload, Windows SDK/WDK `10.0.26100.0`, the x64
+toolchain, and the .NET 8 SDK. Build both supported native configurations with the 64-bit MSBuild
+host, then build the managed backend from its committed package lock files:
 
 ```powershell
 & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\amd64\MSBuild.exe" `
@@ -23,6 +24,14 @@ x64 toolchain. Build both supported configurations with the 64-bit MSBuild host:
 
 & .\x64\Debug\OAC-Protocol-Unit.exe
 & .\x64\Release\OAC-Protocol-Unit.exe
+
+dotnet restore .\OAC-backend\tests\OAC.Backend.Tests.csproj --locked-mode
+dotnet build .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Debug --no-restore
+dotnet run --project .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Debug `
+  --no-build --no-restore
+dotnet build .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Release --no-restore
+dotnet run --project .\OAC-backend\tests\OAC.Backend.Tests.csproj -c Release `
+  --no-build --no-restore
 
 python -m pip install -r .\tools\requirements.txt
 .\tools\Test-OACRepository.ps1
@@ -53,6 +62,8 @@ Run the checks appropriate to the change:
 | C/C++ or project files | Clean x64 Debug and Release rebuilds plus both pure unit executables |
 | Driver, shared ABI, callbacks, or synchronization | PREfast, protocol tests, and Driver Verifier in a disposable VM |
 | Client scanners | Clang-Tidy and an elevated VM smoke scan |
+| Backend or game adapter | Locked restore, Debug and Release builds/tests, format verification, backend publish, and adapter package |
+| Backend wire contract or native transport | Managed gates, native builds/tests, service analysis, and one coherent endpoint regression campaign |
 | INF, signing, or packaging | `InfVerif /w`, catalog/signature checks, and manifest verification |
 | Release profile, artifacts, or symbols | Candidate creation/validation, five hostile mutations, SPDX schema validation, and public/private/lab allowlist review |
 | Driver policy | Pinned regeneration and manual generated-diff review |

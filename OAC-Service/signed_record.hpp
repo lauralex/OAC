@@ -25,6 +25,13 @@ DWORD VerifySignedRecord(
     const wchar_t* signerRegistryValue,
     VerifiedSignedRecord& verified);
 
+DWORD VerifySignedRecordBytes(
+    const std::vector<unsigned char>& recordBytes,
+    const std::vector<unsigned char>& signatureBytes,
+    DWORD exactRecordSize,
+    const wchar_t* signerRegistryValue,
+    VerifiedSignedRecord& verified);
+
 ULONGLONG CurrentUnixSeconds() noexcept;
 std::wstring HexIdentity(const unsigned char* bytes, size_t count);
 }

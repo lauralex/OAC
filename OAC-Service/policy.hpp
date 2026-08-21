@@ -9,6 +9,8 @@
 
 namespace oac
 {
+class BackendTransport;
+
 struct VerifiedPolicy
 {
     OAC_SIGNED_POLICY Record{};
@@ -16,6 +18,9 @@ struct VerifiedPolicy
 };
 
 DWORD LoadPolicy(VerifiedPolicy& verified);
+DWORD RefreshPolicy(
+    VerifiedPolicy& verified,
+    BackendTransport& transport) noexcept;
 bool PolicyScopeMatchesManifest(
     const VerifiedPolicy& policy,
     const OAC_GAME_MANIFEST& manifest) noexcept;

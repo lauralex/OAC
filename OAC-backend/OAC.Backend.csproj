@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>OAC.Backend</AssemblyName>
+    <RootNamespace>Oac.Backend</RootNamespace>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.1" />
+    <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="game-adapter\**\*.cs" />
+    <Content Include="appsettings.example.json"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="README.md" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="THIRD-PARTY-NOTICES.md"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

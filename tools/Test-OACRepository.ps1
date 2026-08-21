@@ -124,8 +124,9 @@ try {
         throw "Generated or sensitive artifacts are tracked: $($blocked -join ', ')"
     }
 
+    $csharpFiles = @($files | Where-Object { $_.EndsWith('.cs') })
     $textFiles = @($files | Where-Object {
-            $_ -match '(?i)\.(asm|c|cpp|h|hpp|inc|inf|md|ps1|py|sln|txt|xml|ya?ml|json|vcxproj|filters|props|targets)$'
+            $_ -match '(?i)\.(asm|c|cpp|cs|h|hpp|inc|inf|md|ps1|py|sln|txt|xml|ya?ml|json|csproj|vcxproj|filters|props|targets)$'
         })
     $trailingWhitespace = [Collections.Generic.List[string]]::new()
     foreach ($file in $textFiles) {
@@ -145,7 +146,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
 
     Write-Host "Repository validation passed: $($files.Count) files, " `
-        "$($powerShellFiles.Count) PowerShell, $($xmlFiles.Count) XML, " `
+        "$($powerShellFiles.Count) PowerShell, $($csharpFiles.Count) C#, " `
+        "$($xmlFiles.Count) XML, " `
         "$($yamlFiles.Count) YAML, $($pythonFiles.Count) Python."
 } finally {
     Pop-Location

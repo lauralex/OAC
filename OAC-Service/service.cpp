@@ -1660,6 +1660,11 @@ DWORD ServiceHost::Start(OAC_SERVICE_FAILURE_STAGE& failureStage) noexcept
         failureStage = OAC_SERVICE_STAGE_BACKEND;
         auto transport = oac::CreateConfiguredBackendTransport(error);
         if (transport == nullptr) return error;
+        if (!transport->TestDouble())
+        {
+            error = oac::RefreshPolicy(policy_, *transport);
+            if (error != ERROR_SUCCESS) return error;
+        }
         error = backend_.Start(policy_, std::move(transport));
         if (error != ERROR_SUCCESS) return error;
 
